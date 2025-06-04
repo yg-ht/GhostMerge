@@ -1,0 +1,7 @@
+# Example sensitive terms for testing
+confidential
+internal use only => internal reference
+acme-corp => [REDACTED COMPANY]
+password => [REDACTED]
+zero-day => 0-day
+secret sauce => proprietary technique

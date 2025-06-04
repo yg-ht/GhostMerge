@@ -1,0 +1,53 @@
+import typer
+from pathlib import Path
+from typing import Optional
+from utils import load_config, CONFIG
+from utils import log
+from utils import load_json, write_json
+from models import Finding
+
+app = typer.Typer()
+
+@app.command()
+def merge(
+    file_a: Path = typer.Option(..., "--file-a", "-a", exists=True, help="First input JSON file"),
+    file_b: Path = typer.Option(..., "--file-b", "-b", exists=True, help="Second input JSON file"),
+    out_a: Path = typer.Option(..., "--out-a", help="Output JSON for file A ID base"),
+    out_b: Path = typer.Option(..., "--out-b", help="Output JSON for file B ID base"),
+    config: Optional[Path] = typer.Option(None, "--config", help="Override config file path"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Run without writing output"),
+    debug: bool = typer.Option(False, "--debug", help="Enable verbose logging"),
+    interactive: bool = typer.Option(False, "--interactive", help="Enable interactive merge")
+):
+    """
+    Merge two GhostWriter finding library JSON files and output cleaned, ID-safe results.
+    """
+    # Load config
+    if config:
+        load_config(config)
+        log("DEBUG", f"Config loaded from: {config}", prefix="CLI")
+    else:
+        load_config()
+
+    if debug:
+        CONFIG["log_verbosity"] = "DEBUG"
+
+    log("INFO", "Starting merge operation", prefix="CLI")
+    log("DEBUG", f"Args: file_a={file_a}, file_b={file_b}, dry_run={dry_run}, interactive={interactive}", prefix="CLI")
+
+    findings_a = [Finding.from_dict(f) for f in load_json(file_a)]
+    findings_b = [Finding.from_dict(f) for f in load_json(file_b)]
+
+    # 🧠 Placeholder: invoke merge logic (to be built separately)
+    merged_a = findings_a  # to be updated
+    merged_b = findings_b  # to be updated
+
+    if not dry_run:
+        write_json(out_a, [f.to_dict() for f in merged_a])
+        write_json(out_b, [f.to_dict() for f in merged_b])
+        log("INFO", f"Written merged files to {out_a} and {out_b}", prefix="CLI")
+    else:
+        log("INFO", "Dry run: no files written", prefix="CLI")
+
+if __name__ == "__main__":
+    app()
