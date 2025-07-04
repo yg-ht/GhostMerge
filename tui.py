@@ -32,6 +32,7 @@ from rich.text import Text
 # ── Local project ───────────────────────────────────────────────────
 from models import Finding
 from merge import merge_individual_findings
+from sensitivity import check_finding_for_sensitivities, load_sensitive_terms
 from utils import log
 
 __all__ = ["interactive_merge"]
@@ -236,6 +237,33 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
             merged_record[field_name] = auto_suggested_value
         else:  # "e" – manual edit via external editor.
             merged_record[field_name] = _invoke_editor(str(auto_suggested_value))
+
+        # Sensitivity check inline per field
+        sensitive_terms = load_sensitive_terms()
+        temp_finding = Finding.from_dict({"id": record_from_side_a.id, field_name: merged_value})
+        sensitivity_hits = check_finding_for_sensitivities(temp_finding, sensitive_terms)
+
+        if sensitivity_hits.get(field_name):
+            for sensitive_term, suggestion in sensitivity_hits[field_name]:
+                prompt = f"[red]Sensitive term[/red] [yellow]{sensitive_term}[/yellow] in [bold]{field_name}[/bold]"
+                if suggestion:
+                    prompt += f" → [green]{suggestion}[/green]"
+                    prompt += ". Action: [bold]A[/]pply/[bold]E[/]dit/[bold]S[/]kip"
+                    action_choices = ["a", "e", "s"]
+                else:
+                    prompt += ". Action: [bold]E[/]dit/[bold]S[/]kip"
+                    action_choices = ["e", "s"]
+
+                action = Prompt.ask(
+                    prompt,
+                    choices=action_choices,
+                    show_choices=False
+                ).lower()
+
+                if action == "a" and suggestion:
+                    merged_value = merged_value.replace(sensitive_term, suggestion)
+                elif action == "e":
+                    merged_value = _invoke_editor(merged_value)
 
     # Step 2 – Show a final preview before writing. ---------------------------
     preview_table: Table = Table(

@@ -1,6 +1,19 @@
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
+from rich.prompt import Prompt
+from rich.console import Console
 from utils import log, load_config, CONFIG
+
+"""
+This class is here to enable sensible handling of unexpected types.
+"""
+class InvalidFieldValue(Exception):
+    def __init__(self, field, value, message, finding_id):
+        super().__init__(f"[Finding ID {finding_id}] Invalid '{field}': '{value}' – {message}")
+        self.field = field
+        self.value = value
+        self.message = message
+        self.finding_id = finding_id
 
 @dataclass
 class Finding:
@@ -40,9 +53,14 @@ class Finding:
                 tags = []
             log("DEBUG", f"Normalised tags: {tags}", prefix="MODEL")
 
-            # Ensure cvss_score is float or None
+            # Ensure cvss_score is float or None and raise exception accordingly
             raw_score = data.get("cvss_score")
-            score = float(raw_score) if raw_score not in (None, "", "None") else None
+            score = None
+            if raw_score not in (None, "", "None"):
+                try:
+                    score = float(raw_score)
+                except (ValueError, TypeError):
+                    raise InvalidFieldValue("cvss_score", raw_score, "Expected a numeric CVSS score (e.g. 7.5)", data.get("id"))
             log("DEBUG", f"Normalised CVSS score: {score}", prefix="MODEL")
 
             # Type checks
@@ -187,3 +205,29 @@ class Finding:
         log("DEBUG", f"Merged result: {merged_finding}", prefix="MODEL")
         return merged_finding
 
+    def prompt_user_to_fix_field(finding_dict: dict, error: InvalidFieldValue) -> int:
+        """Prompt user to correct an invalid field inline, with styled Prompt.ask and action tokens."""
+        field = error.field
+        value = error.value
+        finding_id = error.finding_id
+
+        prompt = f"[red]Invalid value[/red] [yellow]{value}[/yellow] in [bold]{field}[/bold] (ID: {finding_id})"
+        prompt += ". Action: [bold]F[/]ix/[bold]S[/]kip whole record/[bold]A[/]bort"
+        action = Prompt.ask(
+            prompt,
+            choices=["f", "s", "a"],
+            show_choices=False
+        ).lower()
+
+        if action == "f":
+            new_value = Prompt.ask(f"Enter corrected value for [bold]{field}[/bold]")
+            finding_dict[field] = new_value
+            return 0
+
+        elif action == "s":
+            log("WARN", f"User skipped finding ID {finding_id}", prefix="Model")
+            return 1
+
+        else:  # action == "a"
+            log("INFO", "User aborted the merge.", prefix="Model")
+            return 2

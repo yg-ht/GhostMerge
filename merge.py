@@ -68,7 +68,7 @@ def merge_individual_findings(finding_from_a: Finding, finding_from_b: Finding) 
         "severity", "cvss_score", "cvss_vector", "finding_type", "title", "description",
         "impact", "mitigation", "replication_steps", "host_detection_techniques",
         "network_detection_techniques", "references", "finding_guidance", "tags", "extra_fields"
-    ]
+    ] #### QQQ
 
     # Merge each field carefully, with logging and side-specific handling
     for field_name in finding_fields_to_merge:

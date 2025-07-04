@@ -46,9 +46,20 @@
 
 ### 🖥️ Interactive Merge Flow (TUI)
 - [ ] Render side-by-side diffs using `rich`
+- [ ] Render side-by-side preview before user agrees that fuzzy match is close enough
 - [ ] Prompt user per-field to select preferred value
 - [ ] Allow manual entry or fallback to `$EDITOR`
-- [ ] Support merged record preview before final write
+- [ ] Support merged record preview before final write 
+- [ ] Allow user to **reject a match entirely** (not just resolve fields)
+- [ ] Prompt user at match-level: "Accept this pairing?" before proceeding to field selection
+- [ ] When a match is rejected, **return both findings to unmatched pool**
+- [ ] Add logic to optionally **re-process orphans** after all initial matches are reviewed
+- [ ] Provide user-facing access to **unmatched A and B findings** after merge
+- [ ] Allow user to **manually pair unmatched findings** from side A to B (manual match)
+- [ ] Expose `match_score` to user before they decide to accept a match
+- [ ] Implement CLI `--threshold` override to adjust sensitivity of fuzzy matching
+- [ ] Track and log **rejected matches** for auditability and future analysis
+- [ ] Consider an optional **interactive orphan pairing loop** post initial merge
 
 ### 🛡️ Sensitive Content Checker
 - [x] Load sensitivity list from file
@@ -61,3 +72,4 @@
 - [ ] Write unit tests for `Finding.from_dict()`
 - [x] Add test fixture files for dummy A/B merges
 - [ ] Validate that all fields pass roundtrip merge → output → load
+
