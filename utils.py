@@ -10,23 +10,23 @@ from rich.console import Console
 from bs4 import BeautifulSoup
 
 # ── Config & Logging ────────────────────────────────────────────────
-CONFIG = {
-    "log_verbosity": "INFO",
-    "log_file_path": "ghostmerge.log"
-}
+CONFIG = {"log_verbosity": "DEBUG", "log_file_path": "ghostmerge.log"}
 LEVEL_ORDER = ["DEBUG", "INFO", "WARN", "ERROR"]
 console = Console()
 
-def load_config(config_path: str | Path = ".ghostmerge.json"):
+def load_config(config_path: str | Path = "ghostmerge_config.json"):
+    global CONFIG
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
-            for key, value in user_config.items():
-                CONFIG[key] = value
+            log('DEBUG', f'Loaded config from: {config_path}', prefix="IO")
+            CONFIG.update(user_config)
     except FileNotFoundError:
+        log('WARN', f'No config file found at: {config_path}', prefix="IO")
         pass  # silently fall back to defaults
     except Exception as e:
-        console.print(f"[bold red]Failed to load config from {config_path}: {e}[/bold red]")
+        log('ERROR', f"Failed to load config from {config_path}: {e}", prefix="IO")
+
 
 def log(level: str, msg: str, prefix: str = None, exception: Exception = None, verbosity: str = None, log_to_file: bool = True):
     level = level.upper()

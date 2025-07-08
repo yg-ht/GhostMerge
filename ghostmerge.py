@@ -1,9 +1,7 @@
 import typer
 from pathlib import Path
 from typing import Optional
-from utils import load_config, CONFIG
-from utils import log
-from utils import load_json, write_json
+from utils import load_config, CONFIG, log, load_json, write_json
 from models import Finding
 from tui import interactive_merge
 from matching import fuzzy_match_findings
@@ -18,7 +16,6 @@ def merge(
     out_a: Path = typer.Option(..., "--out-a", help="Output JSON for file A ID base"),
     out_b: Path = typer.Option(..., "--out-b", help="Output JSON for file B ID base"),
     config: Optional[Path] = typer.Option(None, "--config", help="Override config file path"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Run without writing output"),
     debug: bool = typer.Option(False, "--debug", help="Enable verbose logging")
 ):
     """
@@ -28,14 +25,14 @@ def merge(
     # Load config
     if config:
         load_config(config)
-        log("DEBUG", f"Config loaded from: {config}", prefix="CLI")
+        log("DEBUG", f"Loading user-specified config from: {config}", prefix="CLI")
     else:
         load_config()
 
     if debug:
         CONFIG["log_verbosity"] = "DEBUG"
 
-    log("DEBUG", f"Args: file_a={file_a}, file_b={file_b}, config={config}, dry_run={dry_run}, debug={debug}",
+    log("DEBUG", f"Args: file_a={file_a}, file_b={file_b}, config={config}, debug={debug}",
         prefix="CLI")
 
     log("INFO", "Starting merge operation", prefix="CLI")
@@ -43,11 +40,11 @@ def merge(
     findings_a = [Finding.from_dict(f) for f in load_json(file_a)]
     findings_b = [Finding.from_dict(f) for f in load_json(file_b)]
 
-    matches = fuzzy_match_findings(findings_a, findings_b)
+    matches, unmatched_a, unmatched_b = fuzzy_match_findings(findings_a, findings_b)
 
     merged_a, merged_b = [], []
-    for finding_a, finding_b in matches:
-        log("INFO", f"Processing finding ID: {finding_a.id} ↔ {finding_b.id}", prefix="CLI")
+    for idx, (finding_a, finding_b, score) in enumerate(matches):
+        log("INFO", f"Processing matched pair #{idx}: ID A={finding_a.id} ↔ ID B={finding_b.id} (score: {score:.2f})", prefix="CLI")
 
         # Separate merge decisions for each side
         result_a = interactive_merge(finding_a, finding_b)
@@ -56,12 +53,9 @@ def merge(
         merged_a.append(result_a)
         merged_b.append(result_b)
 
-    if not dry_run:
-        write_json(out_a, [f.to_dict() for f in merged_a])
-        write_json(out_b, [f.to_dict() for f in merged_b])
-        log("INFO", f"Written merged files to {out_a} and {out_b}", prefix="CLI")
-    else:
-        log("INFO", "Dry run: no files written", prefix="CLI")
+    write_json(out_a, [f.to_dict() for f in merged_a])
+    write_json(out_b, [f.to_dict() for f in merged_b])
+    log("INFO", f"Written merged files to {out_a} and {out_b}", prefix="CLI")
 
 if __name__ == "__main__":
     app()

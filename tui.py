@@ -134,10 +134,6 @@ def _invoke_editor(seed_text: str) -> str:
 
     return edited_text.strip()
 
-# ---------------------------------------------------------------------------
-# Public entry‑point
-# ---------------------------------------------------------------------------
-
 def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) -> Finding:
     """Run automatic merge then solicit human confirmation/overrides.
 
