@@ -2,7 +2,7 @@ import typer
 from pathlib import Path
 from typing import Optional
 from utils import load_config, CONFIG, log, load_json, write_json
-from models import Finding
+from model import Finding
 from tui import interactive_merge
 from matching import fuzzy_match_findings
 

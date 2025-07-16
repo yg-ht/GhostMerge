@@ -1,5 +1,5 @@
-from utils import log, normalise_tags
-from models import Finding
+from utils import CONFIG, log, normalise_tags
+from model import Finding
 
 # ── ID Tracking ─────────────────────────────────────────────────────
 class IDTracker:

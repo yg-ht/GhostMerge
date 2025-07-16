@@ -1,19 +1,5 @@
-'''tui.py – Interactive merge UI for GhostMerge
-================================================
-Terminal‑first reconciliation layer that sits atop
-``merge.merge_individual_findings()``.  The canonical merge logic executes
-first; the analyst then reviews any contentious fields in a colourised TUI and
-can accept, override, or hand‑edit the result.
-
-This revision expands terse variable names into self‑describing identifiers,
-adds granular inline commentary, and injects DEBUG‑level tracing so a run can
-be reconstructed from logs alone.  British English spellings are used
-throughout.
-'''
-
-from __future__ import annotations
-
 # ── Standard library ────────────────────────────────────────────────
+from __future__ import annotations
 import difflib
 import os
 import subprocess
@@ -30,10 +16,10 @@ from rich.table import Table
 from rich.text import Text
 
 # ── Local project ───────────────────────────────────────────────────
-from models import Finding
+from model import Finding
 from merge import merge_individual_findings
 from sensitivity import check_finding_for_sensitivities, load_sensitive_terms
-from utils import log
+from utils import CONFIG, log
 
 __all__ = ["interactive_merge"]
 
@@ -45,7 +31,7 @@ console: Console = Console()
 # Helper functions
 # ---------------------------------------------------------------------------
 
-def _render_diff(value_from_side_a: Any, value_from_side_b: Any) -> Columns:
+def render_diff_single_field(value_from_side_a: Any, value_from_side_b: Any) -> Columns:
     """Return two side‑by‑side *Panels* that highlight differences.
 
     Complex structures (``dict``/``list``) are serialised into pretty strings
@@ -54,7 +40,7 @@ def _render_diff(value_from_side_a: Any, value_from_side_b: Any) -> Columns:
 
     log(
         "DEBUG",
-        f"_render_diff(): A‑type={type(value_from_side_a)}, B‑type={type(value_from_side_b)}",
+        f"render_diff(): A‑type={type(value_from_side_a)}, B‑type={type(value_from_side_b)}",
         prefix="TUI",
     )
 
@@ -197,7 +183,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
 
         # ── Interactive resolution ──────────────────────────────────────────
         console.rule(f"[bold cyan]{field_name}")
-        console.print(_render_diff(value_from_record_a, value_from_record_b))
+        console.print(render_diff_single_field(value_from_record_a, value_from_record_b))
         console.print(
             "[grey italic]Option S uses the auto‑merged suggestion.[/grey italic]"
         )
@@ -235,31 +221,32 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
             merged_record[field_name] = _invoke_editor(str(auto_suggested_value))
 
         # Sensitivity check inline per field
-        sensitive_terms = load_sensitive_terms()
-        temp_finding = Finding.from_dict({"id": record_from_side_a.id, field_name: merged_value})
-        sensitivity_hits = check_finding_for_sensitivities(temp_finding, sensitive_terms)
+        if CONFIG['sensitivity_check_enabled']:
+            sensitive_terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"])
+            temp_finding = Finding.from_dict({"id": record_from_side_a.id, field_name: merged_value})
+            sensitivity_hits = check_finding_for_sensitivities(temp_finding, sensitive_terms)
 
-        if sensitivity_hits.get(field_name):
-            for sensitive_term, suggestion in sensitivity_hits[field_name]:
-                prompt = f"[red]Sensitive term[/red] [yellow]{sensitive_term}[/yellow] in [bold]{field_name}[/bold]"
-                if suggestion:
-                    prompt += f" → [green]{suggestion}[/green]"
-                    prompt += ". Action: [bold]A[/]pply/[bold]E[/]dit/[bold]S[/]kip"
-                    action_choices = ["a", "e", "s"]
-                else:
-                    prompt += ". Action: [bold]E[/]dit/[bold]S[/]kip"
-                    action_choices = ["e", "s"]
+            if sensitivity_hits.get(field_name):
+                for sensitive_term, suggestion in sensitivity_hits[field_name]:
+                    prompt = f"[red]Sensitive term[/red] [yellow]{sensitive_term}[/yellow] in [bold]{field_name}[/bold]"
+                    if suggestion:
+                        prompt += f" → [green]{suggestion}[/green]"
+                        prompt += ". Action: [bold]A[/]pply/[bold]E[/]dit/[bold]S[/]kip"
+                        action_choices = ["a", "e", "s"]
+                    else:
+                        prompt += ". Action: [bold]E[/]dit/[bold]S[/]kip"
+                        action_choices = ["e", "s"]
 
-                action = Prompt.ask(
-                    prompt,
-                    choices=action_choices,
-                    show_choices=False
-                ).lower()
+                    action = Prompt.ask(
+                        prompt,
+                        choices=action_choices,
+                        show_choices=False
+                    ).lower()
 
-                if action == "a" and suggestion:
-                    merged_value = merged_value.replace(sensitive_term, suggestion)
-                elif action == "e":
-                    merged_value = _invoke_editor(merged_value)
+                    if action == "a" and suggestion:
+                        merged_value = merged_value.replace(sensitive_term, suggestion)
+                    elif action == "e":
+                        merged_value = _invoke_editor(merged_value)
 
     # Step 2 – Show a final preview before writing. ---------------------------
     preview_table: Table = Table(
