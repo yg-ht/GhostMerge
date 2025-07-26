@@ -1,6 +1,4 @@
-from typing import Optional, Dict, List, Tuple
-from utils import CONFIG, log
-from model import Finding
+from common import (Dict, List, Tuple, Optional, log, Finding)
 
 def load_sensitive_terms(path: str) -> Dict[str, Optional[str]]:
     """Parses a file of sensitive terms and optional replacements."""

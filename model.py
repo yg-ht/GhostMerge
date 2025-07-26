@@ -1,9 +1,4 @@
-from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, get_origin, get_args, Union
-from rich.prompt import Prompt
-from rich.console import Console
-from utils import CONFIG, log
-import ast
+from common import (ast, dataclass, field, Prompt, Any, Dict, List, Optional, Union, get_origin, get_args, CONFIG, log)
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -57,7 +52,7 @@ class Finding:
                     coerced_data[field_name] = coerced
                 except Exception:
                     expected_str = get_clean_type_string(expected_type)
-                    log("WARN",
+                    log("DEBUG",
                         f"Field '{field_name}' expected {expected_str} but got type {type(raw_value).__name__}: \"{raw_value}\"",
                         prefix="MODEL")
                     correction = prompt_user_to_fix_field(field_name, expected_type, raw_value)

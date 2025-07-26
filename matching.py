@@ -1,7 +1,4 @@
-from rapidfuzz import fuzz
-from typing import List, Tuple
-from model import Finding
-from utils import CONFIG, log
+from common import (fuzz, List, Tuple, CONFIG, log, Finding)
 
 def score_finding_similarity(f1: Finding, f2: Finding) -> float:
     """

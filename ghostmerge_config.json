@@ -16,5 +16,6 @@
   "match_weight_title": 0.6,
   "match_weight_description": 0.3,
   "match_weight_finding_type": 0.1,
-  "allowed_severities": ["Informational", "Low", "Medium", "High", "Critical"]
+  "allowed_severities": ["Informational", "Low", "Medium", "High", "Critical"],
+  "tui_refresh_rate": 4.0,
 }

@@ -1,18 +1,8 @@
-import json
-import csv
-import signal
-import sys
-import traceback
-import datetime
-from pathlib import Path
-from typing import Any
-from rich.console import Console
-from bs4 import BeautifulSoup
+from common import (datetime, json, traceback, Path, log, TUI)
 
 # ── Config & Logging ────────────────────────────────────────────────
 CONFIG = {"config_loaded": False, "log_verbosity": "INFO", "log_file_path": "ghostmerge.log"}
 LEVEL_ORDER = ["DEBUG", "INFO", "WARN", "ERROR"]
-console = Console()
 
 def load_config(config_path: str | Path = "ghostmerge_config.json"):
     global CONFIG
@@ -28,7 +18,7 @@ def load_config(config_path: str | Path = "ghostmerge_config.json"):
         log('ERROR', f"Failed to load config from {config_path}: {e}", prefix="UTILS")
 
 
-def log(level: str, msg: str, prefix: str = None, exception: Exception = None, ):
+def log(level: str, msg: str, prefix: str = None, exception: Exception = None):
     # set defaults
     log_to_file = True
     log_file_path = 'ghostmerge.log'
@@ -47,7 +37,10 @@ def log(level: str, msg: str, prefix: str = None, exception: Exception = None, )
             log_to_file = CONFIG["log_file_enabled"]
             log_file_path = CONFIG["log_file_path"]
         except KeyError as e:
-            console.print(f'Error getting log file config variables: {e}', highlight=False)
+            if TUI:
+                TUI.update_messages(f'Error getting log file config variables: {e}')
+            else:
+                print(f'Error getting log file config variables: {e}')
 
     else:
         verbosity = verbosity_overall
@@ -66,11 +59,17 @@ def log(level: str, msg: str, prefix: str = None, exception: Exception = None, )
     full_prefix = f"[{prefix}] " if prefix else ""
     full_message = f"{tag} {full_prefix}{msg}"
 
-    console.print(full_message, highlight=False)
+    if TUI:
+        TUI.update_messages(full_message)
+    else:
+        print(full_message)
 
     if exception:
         exception_text = f"{type(exception).__name__}: {exception}\n{traceback.format_exc()}"
-        console.print(f"[red]{exception_text}[/red]", highlight=False)
+        if TUI:
+            TUI.update_messages(f"[red]{exception_text}[/red]")
+        else:
+            print(f"[red]{exception_text}[/red]")
     else:
         exception_text = None
 
@@ -105,8 +104,18 @@ def write_json(path: str | Path, data: list[dict]) -> None:
     except Exception as e:
         log("ERROR", f"Failed to write {path}", prefix="UTILS", exception=e)
         raise
+    
+'''
+def setup_signal_handlers():
+    def handle_exit(signum, frame):
+        log("WARN", "Received interrupt signal. Exiting gracefully...", prefix="UTILS")
+        sys.exit(1)
+    signal.signal(signal.SIGINT, handle_exit)
+    signal.signal(signal.SIGTERM, handle_exit)
+'''
 
 # ── Data Utilities ──────────────────────────────────────────────────
+'''
 def strip_html(html: str) -> str:
     try:
         text = BeautifulSoup(html, "html.parser").get_text(separator=" ", strip=True)
@@ -116,22 +125,38 @@ def strip_html(html: str) -> str:
         log("ERROR", "HTML stripping failed", prefix="UTILS", exception=e)
         raise
 
-def get_next_available_id(existing_ids: set[int]) -> int:
-    current = 1
-    while current in existing_ids:
-        current += 1
-    log("DEBUG", f"Next available ID: {current}", prefix="UTILS")
-    return current
+class IDTracker:
+    """
+    Tracks and assigns unique IDs across a dataset.
+    Ensures no collisions when new IDs are needed.
+    """
+    def __init__(self, prefix: str):
+        self.prefix = prefix
+        self.existing_ids = set()
+
+    def register_existing(self, existing_id: str):
+        self.existing_ids.add(existing_id)
+        log("DEBUG", f"Registered existing ID: {existing_id}", prefix="IDTracker")
+
+    def get_next_available_id(self) -> str:
+        current = 1
+        while True:
+            candidate = f"{self.prefix}{current:03d}"
+            if candidate not in self.existing_ids:
+                self.existing_ids.add(candidate)
+                log("DEBUG", f"Generated new ID: {candidate}", prefix="IDTracker")
+                return candidate
+            current += 1
+    
+    def get_next_available_id(existing_ids: set[int]) -> int:
+        current = 1
+        while current in existing_ids:
+            current += 1
+        log("DEBUG", f"Next available ID: {current}", prefix="UTILS")
+        return current
+'''
 
 def normalise_tags(tag_str: str) -> list[str]:
     tags = list({tag.strip().lower() for tag in tag_str.replace(',', ' ').split() if tag.strip()})
     log("DEBUG", f"Normalised tags: {tags}", prefix="UTILS")
     return tags
-
-# ── Signal Handling ─────────────────────────────────────────────────
-def setup_signal_handlers():
-    def handle_exit(signum, frame):
-        log("WARN", "Received interrupt signal. Exiting gracefully...", prefix="UTILS")
-        sys.exit(1)
-    signal.signal(signal.SIGINT, handle_exit)
-    signal.signal(signal.SIGTERM, handle_exit)

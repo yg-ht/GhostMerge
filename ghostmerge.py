@@ -1,16 +1,10 @@
-import typer
-from pathlib import Path
-from typing import Optional
-from utils import load_config, CONFIG, log, load_json, write_json
-from model import Finding
-from tui import interactive_merge
-from matching import fuzzy_match_findings
-
+from common import (Path, Optional, typer, CONFIG, load_config, log, load_json, write_json, Finding,
+                    fuzzy_match_findings, interactive_merge, TUI)
 
 app = typer.Typer()
 
 @app.command()
-def merge(
+def ghostmerge(
     file_in_a: Path = typer.Option(..., "--file-a", "-a", exists=True, help="Input JSON file A"),
     file_in_b: Path = typer.Option(..., "--file-b", "-b", exists=True, help="Input JSON file B"),
     file_out_a: Path = typer.Option(None, "--out-a", help="Output JSON file A"),
@@ -28,6 +22,8 @@ def merge(
         load_config(config)
     else:
         load_config()
+
+    TUI.start()
 
     if debug:
         CONFIG["log_verbosity"] = "DEBUG"
