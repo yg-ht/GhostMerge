@@ -184,9 +184,6 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
         # ── Interactive resolution ──────────────────────────────────────────
         console.rule(f"[bold cyan]{field_name}")
         console.print(render_diff_single_field(value_from_record_a, value_from_record_b))
-        console.print(
-            "[grey italic]Option S uses the auto‑merged suggestion.[/grey italic]"
-        )
 
         # Establish which option should be highlighted as the default.
         if auto_suggested_value == value_from_record_a:
@@ -198,7 +195,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
 
         analyst_choice: str = (
             Prompt.ask(
-                "Choose [bold]A[/]/[bold]B[/]/[bold]S[/]uggest/[bold]E[/]dit",
+                "Choose [bold]A[/]/[bold]B[/]/[bold]S[/]uggested/[bold]E[/]dit",
                 choices=["a", "b", "s", "e"],
                 default=default_choice,
                 show_choices=False,

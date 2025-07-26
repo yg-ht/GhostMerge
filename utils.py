@@ -23,22 +23,32 @@ def load_config(config_path: str | Path = "ghostmerge_config.json"):
             CONFIG.update(user_config)
             CONFIG["config_loaded"] = True
     except FileNotFoundError:
-        log('WARN', f'No config file found at: {config_path}', prefix="UTILS")
-        pass  # silently fall back to defaults
+        log('ERROR', f'No config file found at: {config_path}', prefix="UTILS")
     except Exception as e:
         log('ERROR', f"Failed to load config from {config_path}: {e}", prefix="UTILS")
 
 
-def log(level: str, msg: str, prefix: str = None, exception: Exception = None, log_to_file: bool = True):
-    level = level.upper()
+def log(level: str, msg: str, prefix: str = None, exception: Exception = None, ):
+    # set defaults
+    log_to_file = True
+    log_file_path = 'ghostmerge.log'
     verbosity_overall = LEVEL_ORDER.index(CONFIG["log_verbosity"].upper())
+
+    level = level.upper()
     if CONFIG["config_loaded"]:
         try:
-            verbosity_subject = LEVEL_ORDER.index(CONFIG["log_verbosity_" + prefix.lower()].upper())
+            verbosity_subject_key = CONFIG["log_verbosity_" + prefix.lower()]
+            verbosity_subject = LEVEL_ORDER.index(verbosity_subject_key)
         except KeyError:
             verbosity_subject = LEVEL_ORDER.index("DEBUG")
             prefix = f"VERBOSITY ERROR: {prefix} not found!"
         verbosity = min(verbosity_overall, verbosity_subject)
+        try:
+            log_to_file = CONFIG["log_file_enabled"]
+            log_file_path = CONFIG["log_file_path"]
+        except KeyError as e:
+            console.print(f'Error getting log file config variables: {e}', highlight=False)
+
     else:
         verbosity = verbosity_overall
 
@@ -71,7 +81,7 @@ def log(level: str, msg: str, prefix: str = None, exception: Exception = None, l
         if exception_text:
             file_msg += exception_text + "\n"
 
-        with Path(CONFIG["log_file_path"]).open("a", encoding="utf-8") as f:
+        with Path(log_file_path).open("a", encoding="utf-8") as f:
             f.write(file_msg)
 
 # ── IO Utilities ────────────────────────────────────────────────────
