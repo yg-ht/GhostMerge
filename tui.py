@@ -1,17 +1,22 @@
-from common import (difflib, os, subprocess, tempfile, threading, sleep, Console, RenderableType, Layout, Live, Panel,
-                    Confirm, Prompt, Text, Columns, Any, List, Optional, CONFIG, log, stringify_for_diff, TUI)
+# external module imports
+from imports import (difflib, os, subprocess, tempfile, threading, sleep, Console, RenderableType, Layout, Live, Panel,
+                     Confirm, Prompt, Text, Columns, Any, List, Optional)
+# get global state objects (CONFIG and TUI)
+from globals import get_config, set_tui
+CONFIG = get_config()
+
+# local module imports
+from utils import log
+from merge import stringify_for_diff
 
 __all__ = ["tui"]
 
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
-TUI: Optional["TUI"] = None
 
-class tui:
+class TUI:
     def __init__(self, refresh_rate: float = CONFIG['tui_refresh_rate']):
-        global TUI
-        TUI = self
         self.console = Console()
         self.layout = Layout(name="root")
 
@@ -27,6 +32,8 @@ class tui:
         self._refresh_rate = refresh_rate
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        # set the global variable
+        set_tui(self)
 
     def _render_loop(self):
         with Live(self.layout, refresh_per_second=self._refresh_rate, screen=True) as live:

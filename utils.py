@@ -1,11 +1,13 @@
-from common import (datetime, json, traceback, Path, log, TUI)
+# external module imports
+from imports import datetime, json, traceback, Path
+# get global state objects (CONFIG and TUI)
+from globals import get_config, get_tui
+CONFIG = get_config()
 
 # ── Config & Logging ────────────────────────────────────────────────
-CONFIG = {"config_loaded": False, "log_verbosity": "INFO", "log_file_path": "ghostmerge.log"}
 LEVEL_ORDER = ["DEBUG", "INFO", "WARN", "ERROR"]
 
 def load_config(config_path: str | Path = "ghostmerge_config.json"):
-    global CONFIG
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
@@ -20,6 +22,7 @@ def load_config(config_path: str | Path = "ghostmerge_config.json"):
 
 def log(level: str, msg: str, prefix: str = None, exception: Exception = None):
     # set defaults
+    TUI = get_tui()
     log_to_file = True
     log_file_path = 'ghostmerge.log'
     verbosity_overall = LEVEL_ORDER.index(CONFIG["log_verbosity"].upper())

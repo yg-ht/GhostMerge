@@ -1,4 +1,11 @@
-from common import (fuzz, List, Tuple, CONFIG, log, Finding)
+# external module imports
+from imports import (fuzz, List, Tuple)
+# get global state objects (CONFIG and TUI)
+from globals import get_config
+CONFIG = get_config()
+# local module imports
+from utils import log
+from model import Finding
 
 def score_finding_similarity(f1: Finding, f2: Finding) -> float:
     """

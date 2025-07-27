@@ -1,4 +1,10 @@
-from common import (ast, dataclass, field, Prompt, Any, Dict, List, Optional, Union, get_origin, get_args, CONFIG, log)
+# external module imports
+from imports import (ast, dataclass, field, Prompt, Any, Dict, List, Optional, Union, get_origin, get_args)
+# get global state objects (CONFIG and TUI)
+from globals import get_config
+CONFIG = get_config()
+# local module imports
+from utils import log
 
 """
 This class is here to enable sensible handling of unexpected types.

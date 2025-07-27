@@ -1,4 +1,11 @@
-from common import (Dict, List, Tuple, Optional, log, Finding)
+# external module imports
+from imports import (Dict, List, Tuple, Optional)
+# get global state objects (CONFIG and TUI)
+from globals import get_config
+CONFIG = get_config()
+# local module imports
+from utils import log
+from model import Finding
 
 def load_sensitive_terms(path: str) -> Dict[str, Optional[str]]:
     """Parses a file of sensitive terms and optional replacements."""

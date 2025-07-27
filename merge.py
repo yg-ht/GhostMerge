@@ -1,5 +1,12 @@
-from common import (dumps, Table, Any, Dict, List, CONFIG, log, normalise_tags, Finding,
-                    check_finding_for_sensitivities, load_sensitive_terms, TUI)
+# external module imports
+from imports import (dumps, Table, Any, Dict, List)
+# get global state objects (CONFIG and TUI)
+from globals import get_config, get_tui
+CONFIG = get_config()
+# local module imports
+from utils import log, normalise_tags
+from model import Finding
+from sensitivity import load_sensitive_terms, check_finding_for_sensitivities
 
 # ── Conflict Resolution ─────────────────────────────────────────────
 def resolve_conflict(value_from_a, value_from_b) -> str:
@@ -115,6 +122,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
     • **S** – accept the auto‑merge suggestion (default).
     • **E** – hand‑edit via ``$EDITOR`` seeded with the suggestion.
     """
+    TUI = get_tui()
 
     log(
         "INFO",

@@ -1,6 +1,17 @@
-from common import (Path, Optional, typer, CONFIG, load_config, log, load_json, write_json, Finding,
-                    fuzzy_match_findings, interactive_merge, TUI)
+# import via the common imports route
+from imports import (Path, Optional, typer)
+# initialise global objects
+from globals import get_config
+CONFIG = get_config()
+from tui import TUI
+TUI()
+# local module imports
+from utils import load_config, log, load_json, write_json
+from model import Finding
+from matching import fuzzy_match_findings
+from merge import interactive_merge
 
+# run the app
 app = typer.Typer()
 
 @app.command()
