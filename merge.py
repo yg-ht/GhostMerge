@@ -123,6 +123,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
     • **E** – hand‑edit via ``$EDITOR`` seeded with the suggestion.
     """
     TUI = get_tui()
+    log("ERROR", "TUI not initialised", prefix="MERGE")
 
     log(
         "INFO",
@@ -240,7 +241,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
 
     TUI.update_data(preview_table, title='Preview')
 
-    if TUI.render_user_confirm("Write this merged record?") == "n":
+    if TUI.render_user_choice("Write this merged record?", ["yes", "no"], title="Confirm action") == "n":
         log("WARN", "Merge aborted by user.", prefix="MERGE")
         raise SystemExit(1)
 

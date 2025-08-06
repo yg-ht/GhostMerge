@@ -1,5 +1,5 @@
 # external module imports
-from imports import datetime, json, traceback, Path
+from imports import datetime, json, traceback, Path, Panel, Text, Optional
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -22,7 +22,7 @@ def load_config(config_path: str | Path = "ghostmerge_config.json"):
 
 def log(level: str, msg: str, prefix: str = None, exception: Exception = None):
     # set defaults
-    TUI = get_tui()
+    TUI = None
     log_to_file = True
     log_file_path = 'ghostmerge.log'
     verbosity_overall = LEVEL_ORDER.index(CONFIG["log_verbosity"].upper())
@@ -62,9 +62,10 @@ def log(level: str, msg: str, prefix: str = None, exception: Exception = None):
     full_prefix = f"[{prefix}] " if prefix else ""
     full_message = f"{tag} {full_prefix}{msg}"
 
-    if TUI:
+    try:
+        TUI = get_tui()
         TUI.update_messages(full_message)
-    else:
+    except RuntimeError:
         print(full_message)
 
     if exception:
@@ -107,7 +108,31 @@ def write_json(path: str | Path, data: list[dict]) -> None:
     except Exception as e:
         log("ERROR", f"Failed to write {path}", prefix="UTILS", exception=e)
         raise
-    
+
+def get_user_input(self, choices: Optional[list[str] | str], default_choice: Optional[str]) -> str | bool:
+    """
+    Gather user input and check it is constrained to a set of single-character choices when specified.
+    Returns the selected character as lowercase.
+    """
+
+    if isinstance(choices, str):
+        choices = list(choices)
+
+    choices = [ch.lower() for ch in choices]
+
+    if default_choice:
+        default_choice = default_choice.lower()
+        if default_choice not in choices:
+            raise log("WARN",f"Default choice '{default_choice}' not in choices: {str(choices)}", prefix="UTILS")
+
+    while True:
+        user_input = input(">>> ").strip().lower()
+        if user_input == "" and default_choice:
+            return default_choice
+        if user_input in choices:
+            return user_input
+
+
 '''
 def setup_signal_handlers():
     def handle_exit(signum, frame):

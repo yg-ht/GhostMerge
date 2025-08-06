@@ -1,10 +1,10 @@
 # import via the common imports route
 from imports import (Path, Optional, typer)
 # initialise global objects
-from globals import get_config
+from globals import get_config, get_tui
 CONFIG = get_config()
 from tui import TUI
-TUI()
+tui = TUI()
 # local module imports
 from utils import load_config, log, load_json, write_json
 from model import Finding
@@ -34,7 +34,7 @@ def ghostmerge(
     else:
         load_config()
 
-    TUI.start()
+    get_tui().start()
 
     if debug:
         CONFIG["log_verbosity"] = "DEBUG"
@@ -48,6 +48,7 @@ def ghostmerge(
         prefix="CLI")
 
     log("INFO", "Starting merge operation", prefix="CLI")
+    log("INFO", "Test", prefix="CLI")
 
     findings_a = [Finding.from_dict(f) for f in load_json(file_in_a)]
     findings_b = [Finding.from_dict(f) for f in load_json(file_in_b)]

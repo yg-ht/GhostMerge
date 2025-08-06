@@ -1,12 +1,12 @@
 # external module imports
-from imports import (difflib, os, subprocess, tempfile, threading, sleep, Console, RenderableType, Layout, Live, Panel,
-                     Confirm, Prompt, Text, Columns, Any, List, Optional)
+from imports import (difflib, os, subprocess, tempfile, threading, sleep, Console, RenderableType,
+                     Layout, Live, Panel, Text, Columns, Any, List, Optional)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, set_tui
 CONFIG = get_config()
 
 # local module imports
-from utils import log
+from utils import log, get_user_input
 from merge import stringify_for_diff
 
 __all__ = ["tui"]
@@ -17,22 +17,28 @@ __all__ = ["tui"]
 
 class TUI:
     def __init__(self, refresh_rate: float = CONFIG['tui_refresh_rate']):
-        self.console = Console()
-        self.layout = Layout(name="root")
+        log('DEBUG', 'Entered __init__', 'TUI')
+        console = Console()
+        log('DEBUG', 'Started console', 'TUI')
 
         # Split the screen into logical sections
+        self.layout = Layout(name="root")
         self.layout.split(
-            Layout(name="messages", size=3),
-            Layout(name="data", ratio=2),
-            Layout(name="options", size=5)
+            Layout(name="data_viewer", ratio=2),
+            Layout(name="messages", size=10),
+            Layout(name="user_input", size=10)
         )
+        log('DEBUG', 'Split console layout', 'TUI')
 
         # Optional Live display (None until started)
         self.live: Optional[Live] = None
         self._refresh_rate = refresh_rate
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        log('DEBUG', 'Set instance fields', 'TUI')
+
         # set the global variable
+        log('DEBUG', 'Calling set_tui', 'TUI')
         set_tui(self)
 
     def _render_loop(self):
@@ -59,7 +65,7 @@ class TUI:
             title = f'Data: {title}'
         else:
             title = 'Data'
-        self.layout["data"].update(Panel(text, title=title, style=style))
+        self.layout["data_viewer"].update(Panel(text, title=title, style=style))
 
     def update_messages(self, text: RenderableType, style: str = "white", title: str = None):
         if title:
@@ -70,10 +76,10 @@ class TUI:
 
     def update_input(self, text: RenderableType, style: str = "white", title: str = None):
         if title:
-            title = f'User choices: {title}'
+            title = f'User input: {title}'
         else:
-            title = 'User choices'
-        self.layout["options"].update(Panel(text, title=title, style=style))
+            title = 'User input'
+        self.layout["user_input"].update(Panel(text, title=title, style=style))
 
     def invoke_editor(self, seed_text: str) -> str:
         """Launch ``$EDITOR`` (defaulting to *nano*) seeded with *seed_text*.
@@ -117,62 +123,26 @@ class TUI:
         title: Optional[str] = "Make a choice"
     ) -> str:
         """
-        Display a prompt and capture a user's choice using Rich Prompt.ask.
+        Display a prompt and capture a user's choice
         Returns the chosen value as lowercase.
         """
 
+        option_characters = [opt[:1] for opt in options]
+
+        # Temporarily pause Live rendering before asking user
         # Show the options in the UI
         option_text = "\n".join(f"[bold]{opt[:1].upper()}{opt[1:]}[/]" for opt in options)
-        self.update_input(f"{prompt}\n\n{option_text}", title=title)
+        TUI.update_input(f"{prompt}\n\n{option_text}", title=title)
 
-        # Temporarily pause Live rendering before asking user
         if self.live:
             self.live.stop()
 
-        try:
-            choice = Prompt.ask(
-                "",
-                choices=options,
-                default=default,
-                show_choices=False
-            ).lower()
-        finally:
-            if self.live:
-                self.live.start()
+        choice = get_user_input(prompt, choices=option_characters, default=default)
+
+        if self.live:
+            self.live.start()
 
         log("INFO", f"User decision required: {prompt}, result: {choice.upper()}")
-        return choice.lower()
-
-
-    def render_user_confirm(
-        self,
-        question: str,
-        default: Optional[str] = None,
-        title: Optional[str] = "Confirm choice"
-    ) -> bool:
-        """
-        Display a prompt and capture a user's choice using Rich Confirm.ask.
-        Returns the chosen value as lowercase.
-        """
-
-        # Show the question in the UI
-        self.update_input(f"{question}", title=title)
-
-        # Temporarily pause Live rendering before asking user
-        if self.live:
-            self.live.stop()
-
-        try:
-            choice = Confirm.ask(
-                "",
-                default=default,
-                show_choices=False
-            )
-        finally:
-            if self.live:
-                self.live.start()
-
-        log("INFO", f"User confirmation required: {question}, result: {choice.upper()}")
         return choice
 
 
