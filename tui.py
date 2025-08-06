@@ -173,7 +173,7 @@ class TUI:
         ):
             change_code, line_content = line[:2], line[2:]
             if change_code == "- ":  # Present only in A – mark red in A panel.
-                diff_for_side_a.append(line_content + "\n", style="bold red")
+                diff_for_side_a.append(line_content + "\n", style="bold blue")
             elif change_code == "+ ":  # Present only in B – mark green in B panel.
                 diff_for_side_b.append(line_content + "\n", style="bold green")
             else:  # Unchanged or intraline hint – copy to both panels.

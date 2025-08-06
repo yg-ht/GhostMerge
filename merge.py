@@ -241,7 +241,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
 
     TUI.update_data(preview_table, title='Preview')
 
-    if TUI.render_user_choice("Write this merged record?", ["yes", "no"], title="Confirm action") == "n":
+    if TUI.render_user_choice("Write this merged record?", ["yes", "no"], title="Confirm action") != "yes":
         log("WARN", "Merge aborted by user.", prefix="MERGE")
         raise SystemExit(1)
 

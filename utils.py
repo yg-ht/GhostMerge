@@ -1,4 +1,6 @@
 # external module imports
+import random
+from base64 import b64decode
 from imports import datetime, json, traceback, Path, Panel, Text, Optional
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
@@ -188,3 +190,70 @@ def normalise_tags(tag_str: str) -> list[str]:
     tags = list({tag.strip().lower() for tag in tag_str.replace(',', ' ').split() if tag.strip()})
     log("DEBUG", f"Normalised tags: {tags}", prefix="UTILS")
     return tags
+
+
+
+def return_ASCII_art():
+    images = []
+    images.append('ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKWkeKWkuKWk+KWk+KWkuKWkSAgICAgICAgICAgICAgICAgICA'
+                  'gICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4paT4paI4paI4paI4paI4paI4paI4paI4paI4paI4p'
+                  'aI4paT4paRICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilpLilojilojil'
+                  'ojilojilojilojilojilojilojilojilojilojilojilojilpMgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAg'
+                  'ICAgICAgICAgICAgICAgICDilpPilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilpMgICA'
+                  'gICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4paR4paI4paI4paI4paI4paI4paI4paI4p'
+                  'aI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paSICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgI'
+                  'CAgICAgICAgICAg4paT4paI4paI4paS4paT4paI4paI4paI4paI4paT4paS4paT4paI4paI4paI4paI4paI4paI4paI4paI4paR'
+                  'ICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilpPilojilpEgIOKWkuKWiOKWiOKWkyA'
+                  'gIOKWkuKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWkSAgICAgICAgICAgICAgICAgIAog4paR4paR4paR4paR4paR4paR4paR4p'
+                  'aR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paRICAgICDilpPilojilpIgICDilojilojil'
+                  'pMgICAg4paT4paI4paI4paI4paI4paI4paI4paI4paTICAgICAgICAgICAgICAgICAgCiDilpHilpHilpHilpHilpHilpHilpHi'
+                  'lpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEgICAgIOKWkeKWiOKWiOKWkSAg4paI4pa'
+                  'I4paI4paSICAg4paS4paI4paI4paI4paI4paI4paI4paI4paT4paT4paSICAgICAgICAgICAgICAgIAog4paR4paR4paR4paR4p'
+                  'aR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paRICAgICAg4paT4paI4paI4'
+                  'paI4paI4paI4paI4paI4paI4paI4paT4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paT4paT4paSICAgICAgICAg'
+                  'ICAgICAKIOKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeK'
+                  'WkeKWkSAgICAgIOKWkuKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiO'
+                  'KWiOKWk+KWk+KWk+KWk+KWkyAgICAgICAgICAgIAog4paR4paR4paR4paR4paS4paS4paR4paS4paR4paS4paR4paS4paR4paS4'
+                  'paS4paR4paS4paS4paR4paR4paR4paR4paR4paRICAgICAg4paS4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI'
+                  '4paI4paI4paI4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paSICAgICAgICAgIAog4paR4paR4paR4paR4pa'
+                  'S4paR4paR4paR4paR4paR4paS4paS4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paRICAgICDilpHilpLilojilo'
+                  'jilojilojilojilojilojilojilojilojilojilojilpPilpPilojilpPilpPilpPilpPilpPilpPilpPilpPilojilpPilpPil'
+                  'pPilpPilpMgICAgICAgICAKIOKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKW'
+                  'keKWkeKWkeKWkeKWkeKWkSAgICDilpLilpLilpLilpPilojilojilojilojilojilojilojilpPilpPilpPilpPilpPilpPilpP'
+                  'ilpPilpPilpPilpPilpPilpPilpPilojilojilojilpPilpPilpPilpPilpMgICAgICAgIAog4paR4paR4paR4paR4paS4paR4p'
+                  'aR4paS4paR4paS4paS4paR4paS4paS4paR4paS4paS4paS4paR4paR4paR4paR4paR4paRIOKWkeKWkuKWkuKWkuKWkuKWkuKWk'
+                  'uKWk+KWk+KWkuKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkuKWiOKWiOKWiOKW'
+                  'iOKWiOKWk+KWk+KWk+KWkSAgICAgICAKIOKWkeKWkeKWkeKWkeKWkuKWkuKWkeKWkuKWkeKWkuKWkeKWkuKWkuKWkuKWkeKWkeK'
+                  'WkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWk+KWk+KWkuKWkeKWkeKWkeKWkeKWkeKWke'
+                  'KWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWk+KWkiAgICAgICAKIOKWk'
+                  'eKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkuKW'
+                  'kuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWk+KWkuKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeK'
+                  'WkeKWkeKWkeKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWkiAgICAgICAKIOKWkeKWkeKWkeKWkeKWkuKWkeKWkeKWkeKWkeKWke'
+                  'KWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkuKWk+KWk+KWk+KWk+KWkuKWkeKWkeKWkeKWkeKWkuKWkuKWk'
+                  'uKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWk+KWiOKWiOKWiOKWiOKWiOKWiOKW'
+                  'iOKWk+KWkSAgICAgICAKIOKWkeKWkeKWkeKWkeKWk+KWkuKWkeKWkuKWkuKWkuKWkuKWkeKWkuKWkeKWkuKWkeKWkuKWkuKWkuK'
+                  'Wk+KWkuKWkeKWkeKWkeKWkuKWkuKWkuKWkuKWk+KWiOKWiOKWkiDilpLilpHilpHilpHilpHilpHilpLilpHilpHilpHilpLilp'
+                  'LilpHilpHilpHilpHilpLilpHilpLilojilojilojilojilojilojilojilojilpMgICAgICAgIAog4paR4paR4paR4paR4paR4'
+                  'paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paRICAgICAgIOKWkeKWk+KWiOKW'
+                  'k+KWk+KWkuKWkeKWkuKWkuKWkeKWkuKWkeKWkuKWkuKWkuKWkuKWkuKWkeKWkeKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOK'
+                  'WkyAgICAgICAgIAog4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4p'
+                  'aR4paR4paR4paRICAgICAgICAgIOKWkeKWkeKWkeKWkeKWkuKWkuKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWiOKWiOKWiOKWi'
+                  'OKWiOKWiOKWiOKWiOKWiOKWiOKWkuKWkSAgICAgICAgIAog4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR'
+                  '4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paRICAgICAgICAgIOKWkeKWkeKWkeKWkeKWkuKWkeKWkeKWkeKWkeKWkeK'
+                  'WkeKWkeKWkeKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWkuKWkeKWkeKWkeKWkSAgICAgICAgIAog4paR4paR4paR4paR4paR4p'
+                  'aR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paRICAgICAgICAgIOKWkeKWkeKWk'
+                  'eKWkeKWkuKWkeKWkuKWkeKWkuKWkuKWkuKWkeKWkeKWiOKWiOKWiOKWk+KWkuKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkSAgICAg'
+                  'ICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeK'
+                  'WkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkSAgICAgICAgIAogICAgICAgICAgICAgICAgICAgIC'
+                  'AgICAgICAgICAgICAgIOKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWk'
+                  'eKWkeKWkeKWkeKWkeKWkeKWkSAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKWkeKWkeKWkeKW'
+                  'keKWkuKWkeKWkuKWkuKWkuKWkuKWkuKWkuKWkeKWkuKWkuKWkuKWkeKWkuKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkSAgICAgICA'
+                  'gIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWke'
+                  'KWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkSAgICAgICAKICAgICAgICAgICAgICAgICAgI'
+                  'CAgICAgICAgICAgICAgICDilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHi'
+                  'lpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICD'
+                  'ilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilp'
+                  'HilpHilpHilpHilpEgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilpHilpHilpHilpHil'
+                  'pHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAg'
+                  'ICAgICAgICAgICAgICAgICAgICDilpHilpHilpHilpHilpHilpHilpHilpHilpEgICAgICAgICAgICAgIAo=')
+    return "\n" + b64decode(random.choice(images)).decode('utf-8')

@@ -6,7 +6,7 @@ CONFIG = get_config()
 from tui import TUI
 tui = TUI()
 # local module imports
-from utils import load_config, log, load_json, write_json
+from utils import load_config, log, load_json, write_json, return_ASCII_art
 from model import Finding
 from matching import fuzzy_match_findings
 from merge import interactive_merge
@@ -35,6 +35,8 @@ def ghostmerge(
         load_config()
 
     get_tui().start()
+
+    TUI.update_data(tui, return_ASCII_art(), 'white', 'Welcome to GhostMerge')
 
     if debug:
         CONFIG["log_verbosity"] = "DEBUG"
