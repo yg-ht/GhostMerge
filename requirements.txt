@@ -1,4 +1,7 @@
-bs4
-rapidfuzz
-rich
-typer
+bs4~=0.0.2
+rapidfuzz~=3.13.0
+rich~=14.0.0
+typer~=0.16.0
+
+readchar~=4.2.1
+beautifulsoup4~=4.13.4

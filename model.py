@@ -1,7 +1,7 @@
 # external module imports
-from imports import (ast, dataclass, field, Prompt, Any, Dict, List, Optional, Union, get_origin, get_args)
+from imports import (ast, dataclass, field, Any, Dict, List, Optional, Union, get_origin, get_args)
 # get global state objects (CONFIG and TUI)
-from globals import get_config
+from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
 from utils import log
@@ -177,6 +177,7 @@ class Finding:
 
 def prompt_user_to_fix_field(field_name: str, expected_type: Any, current_value: Any) -> tuple[int, Any]:
     """Prompt user to correct an invalid field inline"""
+    tui = get_tui()
 
     is_optional = False
     valid_choices = ["f", "s", "a"]
@@ -185,25 +186,21 @@ def prompt_user_to_fix_field(field_name: str, expected_type: Any, current_value:
 
     prompt = (f"[red]Invalid value[/red] [yellow]'{current_value}' ({get_clean_type_string(type(current_value))})[/yellow] in "
               f"[bold]{field_name}[/bold] and we need a [bold]{get_clean_type_string(expected_type)}[/bold] to fix it.\n")
-    prompt += "Action: [bold][F][/]ix / [bold][S][/]kip whole record / [bold][A][/]bort"
 
+    options = ['Fix', 'Skip whole record', 'Abort']
     # Detect Optional[T] (Union[..., NoneType])
     if origin is Union and type(None) in args:
         is_optional = True
-        valid_choices.append("r")
-        prompt += " / [bold][R][/]emove value"
+        options.append("Remove value")
 
-    action = Prompt.ask(
-        prompt,
-        choices=valid_choices,
-        show_choices=False
-    ).lower()
+    action = tui.render_user_choice(prompt, options, default=None,
+                                            title=f'Field-level resolution: {field_name}')
 
     if action == "r" and is_optional:
         log("DEBUG", f"User chose to remove value for {field_name}", prefix="MODEL")
         return [0, None]
     elif action == "f":
-        new_value = Prompt.ask(f"Enter corrected value for [bold]{field_name}[/bold]")
+        new_value = tui.render_user_choice(f"Enter corrected value for [bold]{field_name}[/bold]", multi_char=True)
         # this should result in it being recursive until a valid value is provided or skipped, or aborted
         try:
             casted = coerce_value(new_value, expected_type, field_name)

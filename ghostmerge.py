@@ -36,7 +36,13 @@ def ghostmerge(
 
     get_tui().start()
 
-    TUI.update_data(tui, return_ASCII_art(), 'white', 'Welcome to GhostMerge')
+    tui.update_data(return_ASCII_art(), 'white', 'Welcome to GhostMerge')
+    tui.update_input(" ____  _               _   __  __                      \n"                     
+                              "/ ___|| |__   ___  ___| |_|  \/  | ___ _ __ __ _  ___   \n" 
+                              "| | __| '_ \ / _ \/ __| __| |\/| |/ _ \ '__/ _` |/ _ \ \n"
+                              "| |_| | | | | (_) \__ \ |_| |  | |  __/ | | (_| |  __/ \n"
+                              "\_____|_| |_|\___/|___/\__|_|  |_|\___|_|  \__, |\___|  \n"
+                              "                                           |___/       \n", 'white' )
 
     if debug:
         CONFIG["log_verbosity"] = "DEBUG"
@@ -50,7 +56,6 @@ def ghostmerge(
         prefix="CLI")
 
     log("INFO", "Starting merge operation", prefix="CLI")
-    log("INFO", "Test", prefix="CLI")
 
     findings_a = [Finding.from_dict(f) for f in load_json(file_in_a)]
     findings_b = [Finding.from_dict(f) for f in load_json(file_in_b)]

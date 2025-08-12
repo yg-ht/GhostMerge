@@ -7,17 +7,20 @@ import datetime
 import difflib
 import json
 import os
+import random
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import traceback
+from base64 import b64decode
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import sleep
 
 # ── Third-party libraries ───────────────────────────────────────────
+from readchar import readchar
 from bs4 import BeautifulSoup
 from json import dumps
 from rapidfuzz import fuzz
@@ -30,7 +33,6 @@ from rich.console import Console, RenderableType
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 
@@ -60,6 +62,7 @@ from utils import load_config, log, load_json, write_json, normalise_tags
 __all__ = [
     # ── Standard library ──
     "ast",
+    "b64decode",
     "datetime",
     "difflib",
     "json",
@@ -71,6 +74,7 @@ __all__ = [
     "threading",
     "traceback",
     "Path",
+    "random",
     "sleep",
     "dumps",
     "dataclass",
@@ -81,6 +85,7 @@ __all__ = [
     "fuzz",
     "Console",
     "RenderableType",
+    "readchar",
     "Layout",
     "Live",
     "Panel",

@@ -116,14 +116,13 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
 
     The *canonical* merge result produced by ``merge_individual_findings`` is
     treated as the default for every field.  The analyst sees a diff and may
-    pick:
+    pick, such as:
     • **A** – keep the original value from side‑A.
     • **B** – keep the original value from side‑B.
     • **S** – accept the auto‑merge suggestion (default).
     • **E** – hand‑edit via ``$EDITOR`` seeded with the suggestion.
     """
-    TUI = get_tui()
-    log("ERROR", "TUI not initialised", prefix="MERGE")
+    tui = get_tui()
 
     log(
         "INFO",
@@ -175,7 +174,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
             continue
 
         # ── Interactive resolution ──────────────────────────────────────────
-        TUI.render_diff_single_field(value_from_record_a, value_from_record_b, title=f"Field name: {field_name}")
+        tui.render_diff_single_field(value_from_record_a, value_from_record_b, title=f"Field name: {field_name}")
 
         # Establish which option should be highlighted as the default.
         if auto_offered_value:
@@ -183,7 +182,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
         else:
             default_choice: str = "e"
 
-        analyst_choice = TUI.render_user_choice('Choose:', ['A', 'B', 'Offered', 'Edit', 'Skip field'], default_choice,
+        analyst_choice = tui.render_user_choice('Choose:', ['A', 'B', 'Offered', 'Edit', 'Skip field'], default_choice,
                                                 f'Field-level resolution: {field_name}')
 
         log(
@@ -203,7 +202,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
             log('WARN', 'User skipped field', 'MERGE')
             continue
         else:  # "e" – manual edit via external editor.
-            merged_record[field_name] = TUI.invoke_editor(str(auto_offered_value))
+            merged_record[field_name] = tui.invoke_editor(str(auto_offered_value))
 
         # Sensitivity check inline per field
         if CONFIG['sensitivity_check_enabled']:
@@ -220,12 +219,12 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
                     else:
                         action_choices = ['Edit', 'Skip field']
 
-                    action = TUI.render_user_choice(prompt, options=action_choices, title=f"Field-level resolution: {field_name}")
+                    action = tui.render_user_choice(prompt, options=action_choices, title=f"Field-level resolution: {field_name}")
 
                     if action == "a" and offered:
                         merged_value = merged_value.replace(sensitive_term, offered)
                     elif action == "e":
-                        merged_value = TUI.invoke_editor(merged_value)
+                        merged_value = tui.invoke_editor(merged_value)
                     elif action == "s":
                         log("WARN", "User skipped field.", prefix="MERGE")
                         continue
@@ -239,9 +238,9 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
     for field_name, final_value in merged_record.items():
         preview_table.add_row(field_name, str(final_value))
 
-    TUI.update_data(preview_table, title='Preview')
+    tui.update_data(preview_table, title='Preview')
 
-    if TUI.render_user_choice("Write this merged record?", ["yes", "no"], title="Confirm action") != "yes":
+    if tui.render_user_choice("Write this merged record?", ["yes", "no"], title="Confirm action") != "yes":
         log("WARN", "Merge aborted by user.", prefix="MERGE")
         raise SystemExit(1)
 

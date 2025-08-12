@@ -1,7 +1,5 @@
 # external module imports
-import random
-from base64 import b64decode
-from imports import datetime, json, traceback, Path, Panel, Text, Optional
+from imports import datetime, json, traceback, Path, Panel, Text, Optional, random, b64decode
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -22,7 +20,7 @@ def load_config(config_path: str | Path = "ghostmerge_config.json"):
         log('ERROR', f"Failed to load config from {config_path}: {e}", prefix="UTILS")
 
 
-def log(level: str, msg: str, prefix: str = None, exception: Exception = None):
+def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
     # set defaults
     TUI = None
     log_to_file = True
@@ -36,7 +34,11 @@ def log(level: str, msg: str, prefix: str = None, exception: Exception = None):
             verbosity_subject = LEVEL_ORDER.index(verbosity_subject_key)
         except KeyError:
             verbosity_subject = LEVEL_ORDER.index("DEBUG")
-            prefix = f"VERBOSITY ERROR: {prefix} not found!"
+            if prefix != '':
+                prefix = f"PREFIX not found: {prefix}!"
+            else:
+                prefix = f"PREFIX not set!"
+
         verbosity = min(verbosity_overall, verbosity_subject)
         try:
             log_to_file = CONFIG["log_file_enabled"]
@@ -110,29 +112,6 @@ def write_json(path: str | Path, data: list[dict]) -> None:
     except Exception as e:
         log("ERROR", f"Failed to write {path}", prefix="UTILS", exception=e)
         raise
-
-def get_user_input(self, choices: Optional[list[str] | str], default_choice: Optional[str]) -> str | bool:
-    """
-    Gather user input and check it is constrained to a set of single-character choices when specified.
-    Returns the selected character as lowercase.
-    """
-
-    if isinstance(choices, str):
-        choices = list(choices)
-
-    choices = [ch.lower() for ch in choices]
-
-    if default_choice:
-        default_choice = default_choice.lower()
-        if default_choice not in choices:
-            raise log("WARN",f"Default choice '{default_choice}' not in choices: {str(choices)}", prefix="UTILS")
-
-    while True:
-        user_input = input(">>> ").strip().lower()
-        if user_input == "" and default_choice:
-            return default_choice
-        if user_input in choices:
-            return user_input
 
 
 '''
@@ -256,4 +235,175 @@ def return_ASCII_art():
                   'HilpHilpHilpHilpEgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilpHilpHilpHilpHil'
                   'pHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAg'
                   'ICAgICAgICAgICAgICAgICAgICDilpHilpHilpHilpHilpHilpHilpHilpHilpEgICAgICAgICAgICAgIAo=')
+    images.append('ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4paR4paS4paT4paT4paI4paT4paT4paT4paSICAgICAgICA'
+                  'gICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilpLilojilojilojilojilojilojilo'
+                  'jilojilojilojilojilojilojilpPilpEgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI'
+                  'CAgIOKWk+KWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWkSAgICAgICAgICAg'
+                  'ICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilpHilojilojilojilojilojilojilojilojilojilojiloj'
+                  'ilojilojilojilojilojilojilojilojilojilojilpEgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgIC'
+                  'AgICAgIOKWkeKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWi'
+                  'OKWiOKWkSAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKWkeKWk+KWiOKWiOKWiOKWiOKWiOKW'
+                  'iOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWkyAgICAgICAgICAgICAgCiAgICA'
+                  'gICAgICAgICAgICAgICAgICAgICAgICAgIOKWkeKWiOKWiOKWiOKWiOKWkuKWkeKWkeKWiOKWiOKWiOKWiOKWkeKWkeKWkeKWku'
+                  'KWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWkSAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgI'
+                  'CAg4paT4paI4paI4paI4paR4paR4paR4paR4paI4paI4paI4paI4paR4paR4paR4paR4paR4paI4paI4paI4paI4paI4paI4paI'
+                  '4paI4paI4paSICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilojilojilojilojilpHilpHilpH'
+                  'ilpHilojilojilojilojilpHilpHilpHilpHilpHilojilojilojilojilojilojilojilojilojilpMgICAgICAgICAgICAgCi'
+                  'AgICAgICAgICAgICAgICAgICAgICAgICAgICAg4paR4paI4paI4paI4paI4paR4paR4paR4paI4paI4paI4paI4paI4paI4paS4'
+                  'paR4paR4paR4paI4paI4paI4paI4paI4paI4paI4paI4paT4paT4paRICAgICAgICAgICAgCiAgICAgIOKWkeKWkeKWkeKWkeKW'
+                  'keKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkSAgICAg4paI4paI4paI4paI4paI4paI4paI4paI4pa'
+                  'I4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paT4paSICAgICAgICAgICAgCiAgIC'
+                  'AgICDilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEgICAg4paS4paI4paI4'
+                  'paI4paI4paI4paI4paI4paR4paR4paR4paR4paS4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paT4paT'
+                  '4paRICAgICAgICAgICAKICAgICAgICDilpHilpHilpLilpHilpHilpLilpLilpHilpLilpLilpLilpHilpLilpLilpLilpHilpH'
+                  'ilpEgICAg4paR4paI4paI4paI4paI4paI4paI4paR4paR4paR4paR4paR4paR4paR4paI4paI4paI4paI4paI4paI4paI4paI4p'
+                  'aI4paI4paI4paI4paT4paT4paT4paRICAgICAgICAgIAogICAgICAgIOKWkeKWkeKWkuKWkeKWkeKWkuKWkuKWkeKWkuKWkeKWk'
+                  'eKWkeKWkeKWkuKWkeKWkeKWkeKWkSAgICDilpPilojilojilojilojilojilojilojilojilojilpPilpHilpHilpPilojiloji'
+                  'lojilojilojilojilojilojilojilojilpPilpPilpPilpPilpPilpLilpEgICAgICAgIAogICAgICAgIOKWkeKWkeKWkeKWkeK'
+                  'WkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkSAgICDilpHilojilojilojilojilojilojilojilo'
+                  'jilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilpPilpPilpPilpPilpPilpPilpPilpLilpEgI'
+                  'CAgICAKICAgICAgICDilpHilpHilpLilpLilpLilpHilpLilpHilpLilpHilpLilpHilpLilpHilpLilpHilpLilpHilpEgICAg'
+                  'IOKWkeKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWk+K'
+                  'Wk+KWk+KWk+KWk+KWk+KWk+KWkuKWkuKWkuKWkuKWkSAgICAKICAgICAgICDilpHilpHilpLilpLilpHilpHilpHilpLilpHilp'
+                  'HilpLilpLilpLilpHilpHilpLilpHilpHilpHilpEgICAgICDilpHilpPilojilojilojilojilojilojilojilojilojilojil'
+                  'ojilojilojilojilojilojilojilpPilpPilpPilpPilpPilpPilpPilpPilpLilpLilpLilpLilpLilpLilpLilpLilpEgICAK'
+                  'ICAgICAgICDilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEgICAgICA'
+                  'g4paT4paT4paT4paT4paT4paI4paI4paI4paI4paI4paI4paI4paI4paI4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4p'
+                  'aS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paRICAKICAgICAgICDilpHilpHilpHilpLilpHilpHilpLilpHilpHilpLil'
+                  'pLilpLilpLilpHilpLilpLilpLilpHilpHilpHilpEgICAgIOKWkeKWkuKWkuKWkuKWkuKWk+KWk+KWk+KWk+KWk+KWk+KWk+KW'
+                  'k+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkeKWkeK'
+                  'WkSAKICAgICAgICDilpHilpHilpLilpHilpLilpHilpLilpLilpLilpHilpLilpLilpHilpHilpLilpLilpHilpHilpHilpHilp'
+                  'HilpEgICDilpHilpHilpHilpLilpLilpLilpLilpLilpLilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpLil'
+                  'pLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpHilpEgCiAgICAgICAgICDilpHilpHilpHilpHilpHi'
+                  'lpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEg4paR4paR4paR4paR4paS4paS4paS4paS4pa'
+                  'T4paT4paT4paT4paT4paT4paT4paT4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paR4paR4paS4paS4paS4paR4p'
+                  'aR4paR4paR4paR4paRCiAgICAgIOKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWk'
+                  'eKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkuKWkuKWk+KWk+KWkuKWkuKWk+KWkuKWkuKWkuKW'
+                  'kuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkSAg4paR4paR4paR4paR4paR4paR4paR4paR4paRCiAgICAgICAg4paR4pa'
+                  'R4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4p'
+                  'aR4paR4paR4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paR4paRICAgI'
+                  'OKWkeKWkeKWkeKWkeKWkeKWkeKWkSAKICDilpPilojilojilojilojilojilojilpPilpPilpLilpLilpHilpHilpHilpHilpHi'
+                  'lpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpLilpLilpLilpLilpLilpLilpLilpL'
+                  'ilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpHilpHilpEgICAgICDilpHilpHilpHilpHilpHilpEgCuKWkeKWke'
+                  'KWkeKWkeKWkeKWkuKWiOKWiOKWiOKWiOKWk+KWk+KWk+KWkuKWkuKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWk'
+                  'eKWkeKWkeKWkeKWkeKWkeKWkeKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkeKWkeKWkuKW'
+                  'keKWkeKWkeKWkSAgICAgICAg4paR4paR4paR4paR4paRICAK4paR4paS4paR4paR4paR4paR4paT4paI4paI4paI4paI4paT4pa'
+                  'T4paT4paS4paS4paS4paS4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paS4paS4paS4paS4paS4p'
+                  'aS4paS4paS4paS4paS4paS4paS4paR4paS4paR4paR4paR4paR4paR4paRICAgICAgICAgIOKWkeKWkeKWkeKWkeKWkSAgIAogI'
+                  'CAgICDilpHilojilojilojilpPilpPilpPilpLilpLilpLilpLilpLilpLilpLilpHilpHilpHilpHilpHilpHilpHilpHilpHi'
+                  'lpHilpHilpLilpLilpLilpLilpLilpLilpLilpHilpHilpHilpHilpHilpHilpHilpEgICAgICAgICAgICAgICDilpHilpHilpH'
+                  'ilpEgICAgIAogICAgICDilpHilojilojilojilojilojilojilpPilpPilpPilpPilpLilpLilpLilpLilpLilpHilpHilpHilp'
+                  'HilpHilpHilpHilpHilpLilpLilpLilpLilpLilpEgICAgICAgICAgICAgICAgICAgICAgICDilpHilpHilpEgICAgICAgCiAgI'
+                  'CAgIOKWkeKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWk+KWk+KWk+KWk+KWk+KWkuKWkuKWkuKWkuKWkuKWkuKWkeKWkeKWkeKWkeKW'
+                  'kuKWkuKWkuKWkuKWkSAgICAgICAgICAgICAgICAgICAgICAgICAg4paRICAgICAgICAgCiAgICAgIOKWkeKWiOKWiOKWiOKWiOK'
+                  'Wk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkSAgICAgICAgIC'
+                  'AgICAgICAgICAgICAgICAgIOKWkSAgICAgICAgIAogICAgICDilpHilojilojilojilojilojilojilojilojilojilojilojil'
+                  'ojilpPilpPilpPilpPilpPilpPilpLilpLilpLilpLilpLilpLilpIgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAg'
+                  'ICAg4paR4paI4paI4paI4paI4paT4paT4paI4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paS4paS4paS4paS4paS4pa'
+                  'S4paT4paSICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAg4paR4paI4paI4paI4paI4paI4paI4p'
+                  'aI4paI4paI4paI4paI4paI4paI4paT4paI4paT4paT4paT4paT4paT4paT4paT4paT4paT4paSICAgICAgICAgICAgICAgICAgI'
+                  'CAgICAgICAgICAgICAgICAgICAKICAgICAg4paR4paT4paI4paI4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paS'
+                  '4paS4paS4paS4paS4paS4paT4paT4paT4paT4paSICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICA'
+                  'g4paR4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4p'
+                  'aT4paT4paRICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAg4paT4paT4paT4paT4paT4paT4paT4'
+                  'paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paT4paS4paR4paR4paR4paR4paRICAg'
+                  'ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgIOKWkeKWk+KWk+KWk+KWkuKWkuKWkuKWkuKWk+KWiOKWiOKWiOK'
+                  'WiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWkyAgICAgICAgICAgIC'
+                  'AgICAgICAgICAgICAgICAgIAogICAgICAgIOKWkeKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWi'
+                  'OKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWkyAgICAgICAgICAgICAgICAgICAgICAgICAg'
+                  'ICAgIAogICAgICAgICDilpHilpLilpLilpLilpLilpLilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpP'
+                  'ilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpIgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgIC'
+                  'Ag4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4'
+                  'paR4paRICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAK')
+    images.append('ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilpLilpPilpPilpPilojilojilojilpPilpPilpPilpIgICAgICA'
+                  'gICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4paS4paI4paI4paI4paI4p'
+                  'aI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paT4paSICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgI'
+                  'CAgICAgICAgICAgICAgICAgICDilpLilpPilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojiloji'
+                  'lojilpPilpIgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKWkuKWiOKWiOK'
+                  'WiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWkyAgICAgICAgICAgICAgIC'
+                  'AgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKWkuKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWi'
+                  'OKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWkyAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAg'
+                  'ICAgICAgICAgICAgICAgICDilpHilpPilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojiloj'
+                  'ilojilojilojilojilojilpPilpPilpIgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgIC'
+                  'DilpLilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojil'
+                  'pPilpPilpIgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICDilpPilojilojilpHilpHi'
+                  'lpPilojilojilojilojilojilpHilpHilpHilpHilojilojilojilojilojilojilojilojilojilpPilpPilpPilpEgICAgICA'
+                  'gICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgIOKWk+KWiOKWiOKWkeKWkeKWkeKWkuKWiOKWiOKWiO'
+                  'KWkuKWkeKWkeKWkeKWkeKWkeKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWk+KWk+KWk+KWkSAgICAgICAgICAgICAgICAgI'
+                  'CAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICDilpLilpPilojilpHilpHilpHilpHilojilojilojilojilpHilpHilpHi'
+                  'lpHilpHilpLilojilojilojilojilojilojilojilpPilpPilpPilpPilpLilpEgICAgICAgICAgICAgICAgICAgIAogICAgICA'
+                  'gICAgICAgICAgICAgICAgICAgICAg4paI4paI4paI4paR4paR4paR4paT4paI4paI4paI4paI4paR4paR4paR4paR4paR4paI4p'
+                  'aI4paI4paI4paI4paI4paI4paI4paT4paT4paT4paT4paS4paRICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgI'
+                  'CAgICAgICAgICAg4paR4paI4paI4paI4paS4paS4paI4paI4paI4paI4paI4paI4paT4paS4paS4paI4paI4paI4paI4paI4paI'
+                  '4paI4paI4paI4paI4paT4paT4paT4paT4paT4paR4paRICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICA'
+                  'gICAgICDilpPilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilo'
+                  'jilojilojilpPilpPilpPilpPilpPilpPilpLilpHilpEgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgI'
+                  'CAgIOKWkeKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKW'
+                  'iOKWiOKWiOKWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWkuKWkSAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICA'
+                  'g4paI4paI4paIICDilpLilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilo'
+                  'jilojilojilojilojilojilojilojilpPilpPilpPilpPilpPilpPilpPilpLilpHilpEgICAgICAgICAKICAgICAgICAgICAgI'
+                  'CAgICAgICAgICAg4paI4paI4paIICAgIOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKW'
+                  'iOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWk+KWk+KWk+KWk+KWkuKWkuKWkSAgICAgICAgCiA'
+                  'gICAgICAgICAgICAgICAgICAgICDilojilojilojilojiloggICDilpLilpPilojilojilojilojilojilojilojilojilojilo'
+                  'jilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilpPilpPilpPilpPilpPil'
+                  'pPilpLilpIgICAgICAgIAogICAgICAgICAgICAgICAgICAgICDilojilojilojilojiloggICDilpHilpPilpPilojilojiloji'
+                  'lojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojiloj'
+                  'ilojilojilpPilpPilpPilpPilpPilpLilpLilpEgICAgICAgCiAgICAgICAgICAgICAgICAgICAg4paI4paI4paI4paI4paIIC'
+                  'Ag4paT4paT4paT4paT4paT4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4'
+                  'paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paT4paT4paT4paT4paT4paS4paT4paSICAgICAgIAogICAgICAgICAgICAg'
+                  'ICAgICAg4paI4paI4paI4paI4paIICAg4paS4paT4paT4paT4paT4paT4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4pa'
+                  'I4paI4paI4paI4paI4paI4paI4paI4paI4paI4paT4paT4paI4paI4paI4paI4paI4paI4paI4paT4paT4paT4paT4paS4paT4p'
+                  'aT4paT4paRICAgICAgCiAgICAgICAgICAgICAgICAgIOKWiOKWiOKWiOKWiOKWiOKWkuKWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk'
+                  '+KWkuKWk+KWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWk+KWk+KWk+KWiOKW'
+                  'iOKWiOKWiOKWiOKWiOKWiOKWk+KWk+KWk+KWk+KWk+KWk+KWk+KWiOKWkyAgICAgIAogICAgICAgICAgICAgIOKWiOKWiOKWiOK'
+                  'WiOKWiOKWiOKWiOKWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWkuKWkuKWkuKWk+KWiOKWiOKWiOKWk+KWk+KWk+KWiO'
+                  'KWiOKWiOKWiOKWiOKWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWk+KWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWk+KWk+KWk+KWk'
+                  '+KWk+KWk+KWiOKWkyAgICAgIAogICAgICAgICAgICDilojilojilojilojilojilojilojilojilojilojilpPilpPilpPilpPi'
+                  'lpPilpPilpPilpLilpLilpLilpLilpLilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpP'
+                  'ilpPilpPilpPilojilojilojilojilojilojilojilojilpPilpPilpPilpPilpLilpPilojilojilojilpMgICAgIAogICAgIC'
+                  'AgICAgICDilojilojilojilojilojilojilojilojilojilojilojilpPilpPilpPilpPilpPilpLilpLilpLilpLilpLilpLil'
+                  'pLilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilpPilojilojilojilojilojiloji'
+                  'lojilojilojilpPilpPilpPilpPilpPilpPilojilojilojilpMgICAgIAogICAgICAgICAgICDilojilojilojilojilojiloj'
+                  'ilojilojilojilojilojilpPilpPilpPilpPilpLilpLilpLilpLilpIgICDilpLilpLilpPilpPilpPilpPilpPilpLilpPilp'
+                  'PilpPilpPilpPilpPilpPilpPilojilojilojilojilojilojilojilojilojilojilpPilpPilpPilpPilpPilpPilojilojil'
+                  'ojilojilpMgICAgIAogICAgICAgICDilpHilpLilpLilpLilpPilojilojilojilojilojilojilojilpPilpLilpLilpLilpLi'
+                  'lpLilpIgICAgICAg4paS4paS4paS4paS4paS4paS4paS4paS4paS4paS4paT4paT4paI4paI4paI4paI4paI4paI4paI4paI4pa'
+                  'I4paI4paI4paI4paT4paT4paT4paT4paT4paT4paT4paI4paI4paI4paI4paI4paTICAgICAKICAgICDilpLilpLilpLilpLilp'
+                  'LilpLilpLilpLilojilojilpPilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpIgI'
+                  'OKWkuKWkuKWkuKWkuKWk+KWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWk+KW'
+                  'k+KWk+KWk+KWk+KWk+KWiOKWiOKWiOKWk+KWk+KWk+KWkyAgICAgCiDilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpL'
+                  'ilpLilpPilpPilpPilpLilpLilpPilpLilpLilpPilpLilpPilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilp'
+                  'LilpPilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilpPilpPilpPilpPil'
+                  'pPilpPilpPilpPilpPilpPilpPilpPilojilojilojiloggICAgCuKWkeKWkeKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKW'
+                  'kuKWkuKWk+KWk+KWk+KWkuKWkuKWk+KWkuKWkuKWk+KWk+KWk+KWkuKWk+KWiOKWk+KWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuK'
+                  'WiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWk+KWk+KWk+KWk+KWk+'
+                  'KWk+KWiOKWk+KWk+KWk+KWk+KWk+KWiOKWiOKWiOKWiOKWiOKWiCAgIAogICAg4paR4paR4paS4paS4paS4paS4paS4paS4paS4'
+                  'paS4paS4paT4paS4paS4paT4paT4paT4paT4paT4paT4paS4paT4paT4paS4paS4paT4paT4paS4paS4paS4paS4paI4paI4paI'
+                  '4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paT4paT4paT4paT4paI4paI4paI4paT4pa'
+                  'T4paT4paT4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paIIAogICAgICAg4paR4paR4paR4paS4paS4paS4paS4paS4p'
+                  'aS4paS4paT4paT4paT4paS4paS4paT4paT4paT4paT4paS4paS4paS4paS4paS4paS4paS4paS4paS4paI4paI4paI4paI4paI4'
+                  'paI4paI4paI4paI4paI4paI4paI4paI4paI4paT4paT4paT4paT4paT4paT4paT4paT4paT4paI4paT4paT4paT4paT4paI4paI'
+                  '4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paICiAgICAgICAgICAgIOKWkeKWkeKWkuKWkuKWkuKWkuKWkuKWkuK'
+                  'WkuKWk+KWk+KWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkeKWkeKWkuKWkyAgIOKWiOKWiOKWiOKWiOKWiOKWiO'
+                  'KWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWi'
+                  'OKWiOKWiOKWiOKWiOKWkwogICAgICAgICAgICAgICDilpHilpHilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLilpLi'
+                  'lpLilpLilpLilpEgICAgICAgICAg4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4pa'
+                  'I4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paI4paTCiAgICAgICAgICAgICAgICAgIOKWkeKWke'
+                  'KWkeKWkuKWkuKWkuKWkuKWkuKWkuKWkuKWkeKWkSAgICAgICAgICAgICAgICDilojilojilojilojilpPilojilojilojilojil'
+                  'ojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilpMKICAgICAgICAg'
+                  'ICAgICAgICAgICAgICDilpHilpHilpHilpEgICAgICAgICAgICAgICAgICAgICAgICAgICDilpLilpPilpPilpPilojilojiloj'
+                  'ilojilojilojilojilojilojilojilojilojilojilojilojilojilojilojilpMKICAgICAgICAgICAgICAgICAgICAgICAgIC'
+                  'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilpLilpPilojilojilojilojilojilojilojilojilojilojilojil'
+                  'ojilojilojilojilpMKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg'
+                  'IOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWkyAKICAgICAgICAgICAgICAgICAgICAgICAgICA'
+                  'gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilojilojilojilojilojilojilojilojilojilojilojilojilp'
+                  'IgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4paS4paI4paI4'
+                  'paI4paI4paI4paI4paI4paI4paI4paI4paSICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg'
+                  'ICAgICAgICAgICAgICAgIOKWkeKWk+KWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWk+KWkuKWkSAgICAgCiAgICAgICAgICAgICA'
+                  'gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilpHilpLilojilojilojilojilojilojilpPilp'
+                  'LilpEgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4paS4'
+                  'paT4paI4paT4paI4paT4paSICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg'
+                  'ICAgICAgICAgICAgICAg4paT4paT4paT4paT4paRICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICA'
+                  'gICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilpPilpLilpIgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgIC'
+                  'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4paR4paRICAgICAgICAgICAgICAK')
     return "\n" + b64decode(random.choice(images)).decode('utf-8')
