@@ -21,7 +21,6 @@ def ghostmerge(
     file_out_a: Path = typer.Option(None, "--out-a", help="Output JSON file A"),
     file_out_b: Path = typer.Option(None, "--out-b", help="Output JSON file B"),
     config: Optional[Path] = typer.Option(None, "--config", help="Override config file path"),
-    debug: bool = typer.Option(False, "--debug", help="Enable verbose logging")
 ):
     """
     Merge two GhostWriter finding library JSON files and output cleaned, ID-safe results.
@@ -37,22 +36,20 @@ def ghostmerge(
     get_tui().start()
 
     tui.update_data(return_ASCII_art(), 'white', 'Welcome to GhostMerge')
-    tui.update_input(" ____  _               _   __  __                      \n"                     
-                              "/ ___|| |__   ___  ___| |_|  \/  | ___ _ __ __ _  ___   \n" 
-                              "| | __| '_ \ / _ \/ __| __| |\/| |/ _ \ '__/ _` |/ _ \ \n"
-                              "| |_| | | | | (_) \__ \ |_| |  | |  __/ | | (_| |  __/ \n"
-                              "\_____|_| |_|\___/|___/\__|_|  |_|\___|_|  \__, |\___|  \n"
-                              "                                           |___/       \n", 'white' )
-
-    if debug:
-        CONFIG["log_verbosity"] = "DEBUG"
+    log("INFO", "\n"
+                          "[bold] ____  _               _   __  __                      [/bold]\n"                     
+                          "[bold]/ ___|| |__   ___  ___| |_|  \/  | ___ _ __ __ _  ___  [/bold]\n" 
+                          "[bold]| | __| '_ \ / _ \/ __| __| |\/| |/ _ \ '__/ _` |/ _ \ [/bold]\n"
+                          "[bold]| |_| | | | | (_) \__ \ |_| |  | |  __/ | | (_| |  __/ [/bold]\n"
+                          "[bold]\_____|_| |_|\___/|___/\__|_|  |_|\___|_|  \__, |\___| [/bold]\n"
+                          "[bold]                                           |___/       [/bold]starting...\n",
+        prefix='CLI' )
 
     log("DEBUG", f"Args: file_in_a={file_in_a},\n"
                  f"     file_in_b={file_in_b},\n"
                  f"     file_out_a={file_out_b},\n"
                  f"     file_out_b={file_out_b},\n"
-                 f"     config={config},\n"
-                 f"     debug={debug}",
+                 f"     config={config}",
         prefix="CLI")
 
     log("INFO", "Starting merge operation", prefix="CLI")

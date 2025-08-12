@@ -157,7 +157,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
 
         log(
             "DEBUG",
-            f"Field '{field_name}': A={value_from_record_a!r} | B={value_from_record_b!r} | O={auto_offered_value!r}",
+            f"Field '{field_name}': Left={value_from_record_a!r} | Right={value_from_record_b!r} | Auto={auto_offered_value!r}",
             prefix="MERGE",
         )
 

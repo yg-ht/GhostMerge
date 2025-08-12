@@ -1,5 +1,5 @@
 # external module imports
-from imports import datetime, json, traceback, Path, Panel, Text, Optional, random, b64decode
+from imports import datetime, json, traceback, os, Path, Panel, Text, Optional, random, b64decode
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -11,7 +11,8 @@ def load_config(config_path: str | Path = "ghostmerge_config.json"):
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
-            log('DEBUG', f'Loaded config from: {config_path}', prefix="UTILS")
+            log('INFO', f'Loaded config from: {config_path}', prefix="UTILS")
+            log('DEBUG', f'Config is now: {json.dumps(user_config, indent=2)}', prefix="UTILS")
             CONFIG.update(user_config)
             CONFIG["config_loaded"] = True
     except FileNotFoundError:
@@ -19,27 +20,75 @@ def load_config(config_path: str | Path = "ghostmerge_config.json"):
     except Exception as e:
         log('ERROR', f"Failed to load config from {config_path}: {e}", prefix="UTILS")
 
+def is_path_writable(path: str) -> bool:
+    """Return True if the given file path is writable (or can be created)."""
+    if isinstance(path, str):
+        path_as_Path = Path(path)
+    elif isinstance(path, Path):
+        path_as_Path = path
+        path = str(Path)
+    else:
+        # path isn't a path
+        return False
+
+    try:
+        if path_as_Path.exists() and path_as_Path.is_file():
+            # File exists... check write permission
+            return os.access(path, os.W_OK)
+        else:
+            # File doesn't exist... check parent directory permissions
+            parent_dir = path_as_Path.parent
+            return os.access(parent_dir, os.W_OK)
+    except OSError:
+        return False
 
 def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
     # set defaults
     TUI = None
     log_to_file = True
     log_file_path = 'ghostmerge.log'
-    verbosity_overall = LEVEL_ORDER.index(CONFIG["log_verbosity"].upper())
-
+    verbosity_decision_log_enabled = False
+    verbosity_default = LEVEL_ORDER.index(CONFIG["log_verbosity"].upper())
+    verbosity_subject_key = None
     level = level.upper()
+    level_map = {
+        "DEBUG": "[dim cyan][DEBUG][/dim cyan]",
+        "INFO": "[bold green][INFO][/bold green]",
+        "WARN": "[bold yellow][WARN][/bold yellow]",
+        "ERROR": "[bold red][ERROR][/bold red]",
+    }
+
+    try:
+        TUI = get_tui()
+    except RuntimeError as e:
+        if (e != "TUI is not initialised") and (prefix != "TUI"):
+            print(f"!!!!!! ERROR !!!!!!    Its all gone wrong:\n"
+                  f"LEVEL: {level}\n"
+                  f"MESSAGE: {msg}\n"
+                  f"PREFIX: {prefix}\n"
+                  f"PASSED EXCEPTION: {exception}\n"
+                  f"log() FUNCTION EXCEPTION: {e}")
+            exit(2)
+
     if CONFIG["config_loaded"]:
         try:
             verbosity_subject_key = CONFIG["log_verbosity_" + prefix.lower()]
-            verbosity_subject = LEVEL_ORDER.index(verbosity_subject_key)
+            verbosity = LEVEL_ORDER.index(verbosity_subject_key)
+            verbosity_decision_log_enabled = CONFIG["verbosity_decision_log_enabled"]
         except KeyError:
-            verbosity_subject = LEVEL_ORDER.index("DEBUG")
+            # If the prefix given isn't in the config, default to the overall verbosity level
+            try:
+                verbosity_subject_key = CONFIG["log_verbosity"]
+                verbosity = LEVEL_ORDER.index(verbosity_subject_key)
+            except KeyError:
+                # if the overall verbosity level is not in the config, default to DEBUG as something is wrong
+                verbosity_subject_key = "DEBUG"
+                verbosity = LEVEL_ORDER.index("DEBUG")
             if prefix != '':
                 prefix = f"PREFIX not found: {prefix}!"
             else:
-                prefix = f"PREFIX not set!"
+                prefix = f"NO PREFIX!"
 
-        verbosity = min(verbosity_overall, verbosity_subject)
         try:
             log_to_file = CONFIG["log_file_enabled"]
             log_file_path = CONFIG["log_file_path"]
@@ -48,48 +97,57 @@ def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
                 TUI.update_messages(f'Error getting log file config variables: {e}')
             else:
                 print(f'Error getting log file config variables: {e}')
-
     else:
-        verbosity = verbosity_overall
+        # no config yet
+        verbosity = verbosity_default
 
-    if LEVEL_ORDER.index(level) <= verbosity:
+    if verbosity_decision_log_enabled:
+        verbosity_decision_msg = (f'\n'
+                                  f'Verbosity decision based on:\n'
+                                  f'verbosity_overall = {CONFIG["log_verbosity"].upper()} = {verbosity_default}\n'
+                                  f'verbosity_subject = {verbosity_subject_key} = {verbosity}\n'
+                                  f'message level = {level} = {LEVEL_ORDER.index(level)}\n'
+                                  f'decision verbosity = {LEVEL_ORDER[verbosity]} = {verbosity}\n')
+        with Path(log_file_path).open("a", encoding="utf-8") as f:
+            f.write(verbosity_decision_msg)
+
+    if LEVEL_ORDER.index(level) < verbosity:
+        # if the message level is lower than the required level, just return
         return
 
-    level_map = {
-        "DEBUG": "[dim cyan][DEBUG][/dim cyan]",
-        "INFO": "[bold green][INFO][/bold green]",
-        "WARN": "[bold yellow][WARN][/bold yellow]",
-        "ERROR": "[bold red][ERROR][/bold red]",
-    }
-
-    tag = level_map.get(level, "[white][LOG][/white]")
-    full_prefix = f"[{prefix}] " if prefix else ""
-    full_message = f"{tag} {full_prefix}{msg}"
-
-    try:
-        TUI = get_tui()
-        TUI.update_messages(full_message)
-    except RuntimeError:
-        print(full_message)
-
+    # format the exception text for presentation
     if exception:
         exception_text = f"{type(exception).__name__}: {exception}\n{traceback.format_exc()}"
-        if TUI:
+    else:
+        exception_text = None
+
+    # do log to file early on in case there are issues
+    if log_to_file and is_path_writable(log_file_path):
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        plain_prefix = f"{prefix:<11} " if prefix else ""
+        plain_msg = f"{Text.from_markup(str(msg)).plain}"
+        file_msg = f"{timestamp} | {level:<5} | {plain_prefix}{plain_msg}\n"
+        if exception_text:
+            file_msg += exception_text + "\n"
+        with Path(log_file_path).open("a", encoding="utf-8") as f:
+            f.write(file_msg)
+
+    # prep the log presentation for TUI
+    tag = level_map.get(level, "[white][LOG][/white]")
+    full_prefix = f"[{prefix.center(11)}] " if prefix else ""
+    full_message = f"{tag} {full_prefix}{Text.from_markup(str(msg))}"
+    # push message to the TUI
+
+    # if the log includes an exception dump it to terminal
+    if TUI:
+        TUI.update_messages(full_message)
+        if exception:
             TUI.update_messages(f"[red]{exception_text}[/red]")
         else:
             print(f"[red]{exception_text}[/red]")
     else:
-        exception_text = None
+        print(f"{full_message}")
 
-    if log_to_file:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        plain_prefix = f"[{prefix}] " if prefix else ""
-        file_msg = f"{timestamp} | {level:<5} | {plain_prefix}{msg}\n"
-        if exception_text:
-            file_msg += exception_text + "\n"
-
-        with Path(log_file_path).open("a", encoding="utf-8") as f:
-            f.write(file_msg)
 
 # ── IO Utilities ────────────────────────────────────────────────────
 def load_json(path: str | Path) -> list[dict]:
