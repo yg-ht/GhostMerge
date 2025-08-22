@@ -37,39 +37,42 @@
 
 ## ⏳ In Progress / Next Up
 
-### 🧠 Merge Engine
+### 🧠 Automatic Merge Engine and supporting functions
+- [ ] Refactor such that we use "left" and "right" instead of A and B (in progress)
 - [ ] Build merge orchestration logic:
-  - [ ] Handle unique-to-A/B detection
+  - [ ] Handle unique-to-left/right detection
   - [ ] Detect and route conflicting records
   - [ ] Maintain original IDs in output
   - [ ] Allow auto-merging of low-risk fields (e.g. tags, references)
-
+  - [ ] Start with very high fuzzy matches and iterate down
+  
 ### 🖥️ Interactive Merge Flow (TUI)
-- [ ] Render side-by-side diffs using `rich`
+- [ ] Render side-by-side diffs
 - [ ] Render side-by-side preview before user agrees that fuzzy match is close enough
 - [ ] Prompt user per-field to select preferred value
-- [ ] Allow manual entry or fallback to `$EDITOR`
-- [ ] Support merged record preview before final write 
+  - [ ] Keep left and right as they are
+  - [ ] Use left
+  - [ ] Use right
+  - [ ] Auto suggested option
+  - [ ] Remove value (where appropriate)
+  - [ ] Skip whole record
+  - [ ] Manual edit
+  - [ ] Full editor, not just in-line
+- [ ] Expose `match_score` to user before they decide to accept a match
 - [ ] Allow user to **reject a match entirely** (not just resolve fields)
 - [ ] Prompt user at match-level: "Accept this pairing?" before proceeding to field selection
 - [ ] When a match is rejected, **return both findings to unmatched pool**
+- [ ] Track and log **rejected matches** for debug use
 - [ ] Add logic to optionally **re-process orphans** after all initial matches are reviewed
 - [ ] Provide user-facing access to **unmatched A and B findings** after merge
 - [ ] Allow user to **manually pair unmatched findings** from side A to B (manual match)
-- [ ] Expose `match_score` to user before they decide to accept a match
-- [ ] Implement CLI `--threshold` override to adjust sensitivity of fuzzy matching
-- [ ] Track and log **rejected matches** for auditability and future analysis
-- [ ] Consider an optional **interactive orphan pairing loop** post initial merge
+- [ ] Implement config file `threshold` override to adjust sensitivity of fuzzy matching
+- [ ] Deal with orphans - those that aren't matched somehow?
+- [ ] Support merged record preview before final write 
 
 ### 🛡️ Sensitive Content Checker
 - [x] Load sensitivity list from file
 - [x] Scan selected fields (e.g. impact, description)
 - [x] Suggest redaction or replacement
 - [ ] Allow override per field/output file
-- [ ] Redact from A, but retain in B (or vice versa)
-
-### 🧪 Tests & Validation
-- [ ] Write unit tests for `Finding.from_dict()`
-- [x] Add test fixture files for dummy A/B merges
-- [ ] Validate that all fields pass roundtrip merge → output → load
-
+- [ ] Redact from left, but retain in right (or vice versa)
