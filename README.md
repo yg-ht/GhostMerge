@@ -24,7 +24,7 @@ A command-line tool for merging and deduplicating GhostWriter finding libraries 
 
 ### 🧪 Test Fixtures
 
-- **`test_data_a.json`** and **`test_data_b.json`**
+- **`test_data_left.json`** and **`test_data_right.json`**
   - Simulated datasets (18 entries each) covering:
     - Unique and shared entries
     - Conflicts in fields like title and type
@@ -50,12 +50,12 @@ A command-line tool for merging and deduplicating GhostWriter finding libraries 
 
 Basic invocation:
 ```bash
-python ghostmerge.py merge test_data_a.json test_data_b.json
+python ghostmerge.py merge test_data_left.json test_data_right.json
 ```
 
 With automated merging and no sensitive term checks:
 ```bash
-python ghostmerge.py merge test_data_a.json test_data_b.json --automated --no-sensitivities-check
+python ghostmerge.py merge test_data_left.json test_data_right.json --automated --no-sensitivities-check
 ```
 
 ---
