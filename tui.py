@@ -243,7 +243,7 @@ class TUI:
 
         return result
 
-    def render_diff_single_field(self, value_from_side_a: Any, value_from_side_b: Any,
+    def render_diff_single_field(self, value_from_side_left: Any, value_from_side_right: Any,
                                  title: Optional[str] = "Field-level diff") -> Columns:
         """Return two side‑by‑side *Panels* that highlight differences.
 
@@ -253,36 +253,36 @@ class TUI:
 
         log(
             "DEBUG",
-            f"Field types: A={type(value_from_side_a)}, B={type(value_from_side_b)}",
+            f"Field types: Left={type(value_from_side_left)}, Right={type(value_from_side_right)}",
             prefix="TUI",
         )
 
         # Serialise non‑scalar data for human‑readable diff output.
-        stringified_a = stringify_for_diff(value_from_side_a)
-        stringified_b = stringify_for_diff(value_from_side_b)
+        stringified_left = stringify_for_diff(value_from_side_left)
+        stringified_right = stringify_for_diff(value_from_side_right)
 
         # Build Rich *Text* fragments with colour annotations.
-        diff_for_side_a: Text = Text()
-        diff_for_side_b: Text = Text()
+        diff_for_side_left: Text = Text()
+        diff_for_side_right: Text = Text()
 
         for line in difflib.ndiff(
-            stringified_a.splitlines(), stringified_b.splitlines()
+            stringified_left.splitlines(), stringified_right.splitlines()
         ):
             change_code, line_content = line[:2], line[2:]
             if change_code == "- ":  # Present only in A – mark red in A panel.
-                diff_for_side_a.append(line_content + "\n", style="bold blue")
+                diff_for_side_left.append(line_content + "\n", style="bold blue")
             elif change_code == "+ ":  # Present only in B – mark green in B panel.
-                diff_for_side_b.append(line_content + "\n", style="bold green")
+                diff_for_side_right.append(line_content + "\n", style="bold green")
             else:  # Unchanged or intraline hint – copy to both panels.
-                diff_for_side_a.append(line_content + "\n")
-                diff_for_side_b.append(line_content + "\n")
+                diff_for_side_left.append(line_content + "\n")
+                diff_for_side_right.append(line_content + "\n")
 
         log("DEBUG", "render_diff_single_field construction complete", prefix="TUI")
 
         field_diff = Columns(
             [
-                Panel(diff_for_side_a or Text("<empty>"), title="A", padding=(0, 1)),
-                Panel(diff_for_side_b or Text("<empty>"), title="B", padding=(0, 1)),
+                Panel(diff_for_side_left or Text("<empty>"), title="L", padding=(0, 1)),
+                Panel(diff_for_side_right or Text("<empty>"), title="R", padding=(0, 1)),
             ],
             equal=True,
             expand=True,

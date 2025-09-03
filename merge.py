@@ -9,28 +9,28 @@ from model import Finding
 from sensitivity import load_sensitive_terms, check_finding_for_sensitivities
 
 # ── Conflict Resolution ─────────────────────────────────────────────
-def resolve_conflict(value_from_a, value_from_b) -> str:
+def resolve_conflict(value_from_left, value_from_right) -> str:
     """
     Resolves a conflict between two versions of a field.
     Preference is given to non-empty values, and if both are present,
     selects the one with more tokens, or the longer value if tied.
     """
-    if value_from_a and not value_from_b:
-        return value_from_a
-    if value_from_b and not value_from_a:
-        return value_from_b
-    if not value_from_a and not value_from_b:
+    if value_from_left and not value_from_right:
+        return value_from_left
+    if value_from_right and not value_from_left:
+        return value_from_right
+    if not value_from_left and not value_from_right:
         return ""
 
-    len_a, len_b = len(str(value_from_a)), len(str(value_from_b))
-    tok_a, tok_b = len(str(value_from_a).split()), len(str(value_from_b).split())
+    len_left, len_right = len(str(value_from_left)), len(str(value_from_right))
+    tok_left, tok_right = len(str(value_from_left).split()), len(str(value_from_right).split())
 
-    if tok_a > tok_b:
-        return value_from_a
-    elif tok_b > tok_a:
-        return value_from_b
+    if tok_left > tok_right:
+        return value_from_left
+    elif tok_right > tok_left:
+        return value_from_right
     else:
-        return value_from_a if len_a >= len_b else value_from_b
+        return value_from_left if len_left >= len_right else value_from_right
 
 
 def stringify_for_diff(value: Any) -> str:
@@ -41,16 +41,16 @@ def stringify_for_diff(value: Any) -> str:
     return str(value or "")
 
 # ── Finding Merge ───────────────────────────────────────────────────
-def merge_individual_findings(finding_from_a: Finding, finding_from_b: Finding) -> dict:
+def merge_individual_findings(finding_from_left: Finding, finding_from_right: Finding) -> dict:
     """
     Performs a detailed, field-by-field merge of two Finding objects.
     Tracks the source and embeds the provenance and change detection results
     directly into the output records for dataset A and B.
     Returns a dict with keys 'a' and 'b' representing the respective outputs.
     """
-    log("INFO", f"Merging findings A:{finding_from_a.id} <-> B:{finding_from_b.id}", prefix="MERGE")
+    log("INFO", f"Merging findings Left:{finding_from_left.id} <-> Right:{finding_from_right.id}", prefix="MERGE")
 
-    merged_fields = {"a": {}, "b": {}}
+    merged_fields = {"left": {}, "right": {}}
 
     # Define all fields that must be considered for merging
     finding_fields_to_merge = [
@@ -61,39 +61,39 @@ def merge_individual_findings(finding_from_a: Finding, finding_from_b: Finding) 
 
     # Merge each field carefully, with logging and side-specific handling
     for field_name in finding_fields_to_merge:
-        value_from_a = getattr(finding_from_a, field_name, None)
-        value_from_b = getattr(finding_from_b, field_name, None)
+        value_from_left = getattr(finding_from_left, field_name, None)
+        value_from_right = getattr(finding_from_right, field_name, None)
 
         if field_name == "tags":
-            normalised_tags_a = normalise_tags(" ".join(value_from_a or []))
-            normalised_tags_b = normalise_tags(" ".join(value_from_b or []))
-            merged_tags = list(set(normalised_tags_a + normalised_tags_b))
-            merged_fields["a"][field_name] = merged_tags
-            merged_fields["b"][field_name] = merged_tags
-            log("DEBUG", f"Tags merged: A={normalised_tags_a}, B={normalised_tags_b}, Result={merged_tags}", prefix="MERGE")
+            normalised_tags_left = normalise_tags(" ".join(value_from_left or []))
+            normalised_tags_right = normalise_tags(" ".join(value_from_right or []))
+            merged_tags = list(set(normalised_tags_left + normalised_tags_right))
+            merged_fields["left"][field_name] = merged_tags
+            merged_fields["right"][field_name] = merged_tags
+            log("DEBUG", f"Tags merged: A={normalised_tags_left}, B={normalised_tags_right}, Result={merged_tags}", prefix="MERGE")
 
         elif field_name == "extra_fields":
             resolved_extra_fields = {}
-            combined_keys = set((value_from_a or {}).keys()) | set((value_from_b or {}).keys())
+            combined_keys = set((value_from_left or {}).keys()) | set((value_from_right or {}).keys())
             for key in combined_keys:
-                resolved_value = resolve_conflict((value_from_a or {}).get(key), (value_from_b or {}).get(key))
+                resolved_value = resolve_conflict((value_from_left or {}).get(key), (value_from_right or {}).get(key))
                 resolved_extra_fields[key] = resolved_value
-                log("DEBUG", f"Resolved extra field '{key}' → A:{(value_from_a or {}).get(key)} | B:{(value_from_b or {}).get(key)} → '{resolved_value}'", prefix="MERGE")
-            merged_fields["a"][field_name] = resolved_extra_fields
-            merged_fields["b"][field_name] = resolved_extra_fields
+                log("DEBUG", f"Resolved extra field '{key}' → Left:{(value_from_left or {}).get(key)} | Right:{(value_from_right or {}).get(key)} → '{resolved_value}'", prefix="MERGE")
+            merged_fields["left"][field_name] = resolved_extra_fields
+            merged_fields["right"][field_name] = resolved_extra_fields
 
         else:
-            resolved_value = resolve_conflict(value_from_a, value_from_b)
-            merged_fields["a"][field_name] = resolved_value
-            merged_fields["b"][field_name] = resolved_value
-            log("DEBUG", f"Resolved field '{field_name}' → A:{value_from_a} | B:{value_from_b} → '{resolved_value}'", prefix="MERGE")
+            resolved_value = resolve_conflict(value_from_left, value_from_right)
+            merged_fields["left"][field_name] = resolved_value
+            merged_fields["right"][field_name] = resolved_value
+            log("DEBUG", f"Resolved field '{field_name}' → Left:{value_from_left} | Right:{value_from_right} → '{resolved_value}'", prefix="MERGE")
 
     # Assign IDs and embed provenance and change status
-    merged_fields["a"].update({"id": finding_from_a.id, "source_id_a": finding_from_a.id, "source_id_b": finding_from_b.id, "reason": "unchanged"})
-    merged_fields["b"].update({"id": finding_from_b.id, "source_id_a": finding_from_a.id, "source_id_b": finding_from_b.id, "reason": "unchanged"})
+    merged_fields["left"].update({"id": finding_from_left.id, "source_id_left": finding_from_left.id, "source_id_right": finding_from_right.id, "reason": "unchanged"})
+    merged_fields["right"].update({"id": finding_from_right.id, "source_id_left": finding_from_left.id, "source_id_right": finding_from_right.id, "reason": "unchanged"})
 
     # Change detection: if any field in merged != original, mark as updated
-    for dataset_key, original_finding in [("a", finding_from_a), ("b", finding_from_b)]:
+    for dataset_key, original_finding in [("left", finding_from_left), ("right", finding_from_right)]:
         for field_name in finding_fields_to_merge:
             original_value = getattr(original_finding, field_name, None)
             if field_name == "tags":
@@ -107,11 +107,11 @@ def merge_individual_findings(finding_from_a: Finding, finding_from_b: Finding) 
             else:
                 log("DEBUG", f"No change in field '{field_name}' for side '{dataset_key}'", prefix="MERGE")
 
-    log("INFO", f"Completed merge of A:{finding_from_a.id} and B:{finding_from_b.id}", prefix="MERGE")
+    log("INFO", f"Completed merge of Left:{finding_from_left.id} and Right:{finding_from_right.id}", prefix="MERGE")
     return merged_fields
 
 # ── Main merge logic ───────────────────────────────────────────────────
-def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) -> Finding:
+def interactive_merge(record_from_side_left: Finding, record_from_side_right: Finding) -> Finding:
     """Run automatic merge then solicit human confirmation/overrides.
 
     The *canonical* merge result produced by ``merge_individual_findings`` is
@@ -126,20 +126,20 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
 
     log(
         "INFO",
-        f"interactive_merge(): {record_from_side_a.id} ↔ {record_from_side_b.id}",
+        f"interactive_merge(): {record_from_side_left.id} ↔ {record_from_side_right.id}",
         prefix="MERGE",
     )
 
     # Step 1 – Run the definitive merge algorithm to generate the offered suggestion.
     auto_merged_fields: Dict[str, Any] = merge_individual_findings(
-        record_from_side_a, record_from_side_b
-    )["a"]
+        record_from_side_left, record_from_side_right
+    )["left"]
 
     # Metadata fields that are not user‑editable.
     _NON_INTERACTIVE_FIELDS: List[str] = [
         "id",
-        "source_id_a",
-        "source_id_b",
+        "source_id_left",
+        "source_id_right",
         "reason",
     ]
 
@@ -151,19 +151,19 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
             merged_record[field_name] = auto_merged_fields[field_name]
             continue
 
-        value_from_record_a: Any = getattr(record_from_side_a, field_name, None)
-        value_from_record_b: Any = getattr(record_from_side_b, field_name, None)
+        value_from_record_left: Any = getattr(record_from_side_left, field_name, None)
+        value_from_record_right: Any = getattr(record_from_side_right, field_name, None)
         auto_offered_value: Any = auto_merged_fields[field_name]
 
         log(
             "DEBUG",
-            f"Field '{field_name}': Left={value_from_record_a!r} | Right={value_from_record_b!r} | Auto={auto_offered_value!r}",
+            f"Field '{field_name}': Left={value_from_record_left!r} | Right={value_from_record_right!r} | Auto={auto_offered_value!r}",
             prefix="MERGE",
         )
 
         # Fast‑path when both sides agree and match the offered suggestion.
         if (
-            value_from_record_a == value_from_record_b == auto_offered_value
+            value_from_record_left == value_from_record_right == auto_offered_value
         ):
             merged_record[field_name] = auto_offered_value
             log(
@@ -174,7 +174,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
             continue
 
         # ── Interactive resolution ──────────────────────────────────────────
-        tui.render_diff_single_field(value_from_record_a, value_from_record_b, title=f"Field name: {field_name}")
+        tui.render_diff_single_field(value_from_record_left, value_from_record_right, title=f"Field name: {field_name}")
 
         # Establish which option should be highlighted as the default.
         if auto_offered_value:
@@ -182,7 +182,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
         else:
             default_choice: str = "e"
 
-        analyst_choice = tui.render_user_choice('Choose:', ['A', 'B', 'Offered', 'Edit', 'Skip field'], default_choice,
+        analyst_choice = tui.render_user_choice('Choose:', ['Left', 'Right', 'Offered', 'Edit', 'Skip field'], default_choice,
                                                 f'Field-level resolution: {field_name}')
 
         log(
@@ -192,10 +192,10 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
         )
 
         # Commit the chosen value into the merged record.
-        if analyst_choice == "a":
-            merged_record[field_name] = value_from_record_a
-        elif analyst_choice == "b":
-            merged_record[field_name] = value_from_record_b
+        if analyst_choice == "l":
+            merged_record[field_name] = value_from_record_left
+        elif analyst_choice == "r":
+            merged_record[field_name] = value_from_record_right
         elif analyst_choice == "o":
             merged_record[field_name] = auto_offered_value
         elif analyst_choice == "s":
@@ -207,7 +207,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
         # Sensitivity check inline per field
         if CONFIG['sensitivity_check_enabled']:
             sensitive_terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"])
-            temp_finding = Finding.from_dict({"id": record_from_side_a.id, field_name: merged_value})
+            temp_finding = Finding.from_dict({"id": record_from_side_left.id, field_name: merged_value})
             sensitivity_hits = check_finding_for_sensitivities(temp_finding, sensitive_terms)
 
             if sensitivity_hits.get(field_name):
@@ -221,7 +221,7 @@ def interactive_merge(record_from_side_a: Finding, record_from_side_b: Finding) 
 
                     action = tui.render_user_choice(prompt, options=action_choices, title=f"Field-level resolution: {field_name}")
 
-                    if action == "a" and offered:
+                    if action == "l" and offered:
                         merged_value = merged_value.replace(sensitive_term, offered)
                     elif action == "e":
                         merged_value = tui.invoke_editor(merged_value)

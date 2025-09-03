@@ -16,10 +16,10 @@ app = typer.Typer()
 
 @app.command()
 def ghostmerge(
-    file_in_a: Path = typer.Option(..., "--file-a", "-a", exists=True, help="Input JSON file A"),
-    file_in_b: Path = typer.Option(..., "--file-b", "-b", exists=True, help="Input JSON file B"),
-    file_out_a: Path = typer.Option(None, "--out-a", help="Output JSON file A"),
-    file_out_b: Path = typer.Option(None, "--out-b", help="Output JSON file B"),
+    file_in_left: Path = typer.Option(..., "--file-left", "-left", exists=True, help="Input JSON file Left"),
+    file_in_right: Path = typer.Option(..., "--file-right", "-right", exists=True, help="Input JSON file Right"),
+    file_out_left: Path = typer.Option(None, "--out-a", help="Output JSON file Left"),
+    file_out_right: Path = typer.Option(None, "--out-b", help="Output JSON file Right"),
     config: Optional[Path] = typer.Option(None, "--config", help="Override config file path"),
 ):
     """
@@ -45,40 +45,40 @@ def ghostmerge(
                           "[bold]                                           |___/       [/bold]starting...\n",
         prefix='CLI' )
 
-    log("DEBUG", f"Args: file_in_a={file_in_a},\n"
-                 f"     file_in_b={file_in_b},\n"
-                 f"     file_out_a={file_out_b},\n"
-                 f"     file_out_b={file_out_b},\n"
+    log("DEBUG", f"Args: file_in_left={file_in_left},\n"
+                 f"     file_in_right={file_in_right},\n"
+                 f"     file_out_left={file_out_right},\n"
+                 f"     file_out_right={file_out_right},\n"
                  f"     config={config}",
         prefix="CLI")
 
     log("INFO", "Starting merge operation", prefix="CLI")
 
-    findings_a = [Finding.from_dict(f) for f in load_json(file_in_a)]
-    findings_b = [Finding.from_dict(f) for f in load_json(file_in_b)]
+    findings_left = [Finding.from_dict(f) for f in load_json(file_in_left)]
+    findings_right = [Finding.from_dict(f) for f in load_json(file_in_right)]
 
-    if file_out_a is None:
-        file_out_a = str(file_in_a) + CONFIG['default_output_filename_append']
+    if file_out_left is None:
+        file_out_left = str(file_in_left) + CONFIG['default_output_filename_append']
 
-    if file_out_b is None:
-        file_out_b = str(file_in_a) + CONFIG['default_output_filename_append']
+    if file_out_right is None:
+        file_out_right = str(file_in_left) + CONFIG['default_output_filename_append']
 
-    matches, unmatched_a, unmatched_b = fuzzy_match_findings(findings_a, findings_b)
+    matches, unmatched_left, unmatched_right = fuzzy_match_findings(findings_left, findings_right)
 
-    merged_a, merged_b = [], []
-    for idx, (finding_a, finding_b, score) in enumerate(matches):
-        log("INFO", f"Processing matched pair #{idx}: ID A={finding_a.id} ↔ ID B={finding_b.id} (score: {score:.2f})", prefix="CLI")
+    merged_left, merged_right = [], []
+    for idx, (finding_left, finding_right, score) in enumerate(matches):
+        log("INFO", f"Processing matched pair #{idx}: ID A={finding_left.id} ↔ ID B={finding_right.id} (score: {score:.2f})", prefix="CLI")
 
         # Separate merge decisions for each side
-        result_a = interactive_merge(finding_a, finding_b)
-        result_b = interactive_merge(finding_b, finding_a)
+        result_left = interactive_merge(finding_left, finding_right)
+        result_right = interactive_merge(finding_right, finding_left)
 
-        merged_a.append(result_a)
-        merged_b.append(result_b)
+        merged_left.append(result_left)
+        merged_right.append(result_right)
 
-    write_json(file_out_a, [f.to_dict() for f in merged_a])
-    write_json(file_out_b, [f.to_dict() for f in merged_b])
-    log("INFO", f"Written merged files to {file_out_a} and {file_out_b}", prefix="CLI")
+    write_json(file_out_left, [f.to_dict() for f in merged_left])
+    write_json(file_out_right, [f.to_dict() for f in merged_right])
+    log("INFO", f"Written merged files to {file_out_left} and {file_out_right}", prefix="CLI")
 
 if __name__ == "__main__":
     app()
