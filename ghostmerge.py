@@ -6,7 +6,7 @@ CONFIG = get_config()
 from tui import TUI
 tui = TUI()
 # local module imports
-from utils import load_config, log, load_json, write_json, return_ASCII_art
+from utils import load_config, log, load_json, write_json, return_ASCII_art, setup_signal_handlers
 from model import Finding
 from matching import fuzzy_match_findings
 from merge import interactive_merge
@@ -18,8 +18,8 @@ app = typer.Typer()
 def ghostmerge(
     file_in_left: Path = typer.Option(..., "--file-left", "-left", exists=True, help="Input JSON file Left"),
     file_in_right: Path = typer.Option(..., "--file-right", "-right", exists=True, help="Input JSON file Right"),
-    file_out_left: Path = typer.Option(None, "--out-a", help="Output JSON file Left"),
-    file_out_right: Path = typer.Option(None, "--out-b", help="Output JSON file Right"),
+    file_out_left: Path = typer.Option(None, "--out-left", help="Output JSON file Left"),
+    file_out_right: Path = typer.Option(None, "--out-right", help="Output JSON file Right"),
     config: Optional[Path] = typer.Option(None, "--config", help="Override config file path"),
 ):
     """

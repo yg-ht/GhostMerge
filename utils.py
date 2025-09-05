@@ -1,5 +1,5 @@
 # external module imports
-from imports import datetime, json, traceback, os, Path, Panel, Text, Optional, random, b64decode
+from imports import datetime, json, traceback, os, Path, Panel, Text, Optional, random, b64decode, sys, signal
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -171,19 +171,15 @@ def write_json(path: str | Path, data: list[dict]) -> None:
         log("ERROR", f"Failed to write {path}", prefix="UTILS", exception=e)
         raise
 
-
-'''
 def setup_signal_handlers():
     def handle_exit(signum, frame):
-        log("WARN", "Received interrupt signal. Exiting gracefully...", prefix="UTILS")
+        log("WARN", "User interrupt received. Exiting gracefully...", prefix="UTILS")
         sys.exit(1)
     signal.signal(signal.SIGINT, handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
-'''
 
 # ── Data Utilities ──────────────────────────────────────────────────
-'''
-def strip_html(html: str) -> str:
+'''def strip_html(html: str) -> str:
     try:
         text = BeautifulSoup(html, "html.parser").get_text(separator=" ", strip=True)
         log("DEBUG", "HTML stripped successfully", prefix="UTILS")
@@ -191,8 +187,9 @@ def strip_html(html: str) -> str:
     except Exception as e:
         log("ERROR", "HTML stripping failed", prefix="UTILS", exception=e)
         raise
+'''
 
-class IDTracker:
+'''class IDTracker:
     """
     Tracks and assigns unique IDs across a dataset.
     Ensures no collisions when new IDs are needed.
@@ -228,7 +225,12 @@ def normalise_tags(tag_str: str) -> list[str]:
     log("DEBUG", f"Normalised tags: {tags}", prefix="UTILS")
     return tags
 
-
+def is_blank(v):
+    return (
+            v is None
+            or (isinstance(v, str) and v.strip() == "")
+            or (isinstance(v, (list, dict)) and len(v) == 0)
+    )
 
 def return_ASCII_art():
     images = []

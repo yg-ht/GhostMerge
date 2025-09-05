@@ -4,7 +4,7 @@ from imports import (ast, dataclass, field, Any, Dict, List, Optional, Union, ge
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log
+from utils import log, is_blank
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -46,10 +46,6 @@ class Finding:
             for field_name, field_def in cls.__dataclass_fields__.items():
                 expected_type = field_def.type
                 raw_value = data.get(field_name, None)
-
-                if raw_value is None or (isinstance(raw_value, str) and raw_value.strip() == ""):
-                    coerced_data[field_name] = None
-                    continue
 
                 try:
                     coerced = coerce_value(raw_value, expected_type, field_name)
@@ -109,72 +105,6 @@ class Finding:
             "extra_fields": self.extra_fields,
         }
 
-''' # potentially unused code
-    def diff(self, other: 'Finding') -> Dict[str, tuple[Any, Any]]:
-        """
-        Returns a dictionary of field names whose values differ between this and another Finding.
-        Each key maps to a tuple: (self_value, other_value)
-        """
-        log("DEBUG", f"Diffing finding ID {self.id} against ID {other.id}", prefix="MODEL")
-        differences = {}
-        for field_name in self.__dataclass_fields__:
-            val_self = getattr(self, field_name)
-            val_other = getattr(other, field_name)
-            log("DEBUG", f"Checking field '{field_name}': self='{val_self}' vs other='{val_other}'", prefix="MODEL")
-            if val_self != val_other:
-                differences[field_name] = (val_self, val_other)
-        log("DEBUG", f"Differences found: {differences}", prefix="MODEL")
-        return differences
-
-    def merge_with(self, other: 'Finding', prefer: str = 'larger') -> 'Finding':
-        """
-        Merges this Finding with another, field by field. Preference is given based on:
-        - 'filled' (prefer non-empty)
-        - 'tokens' (prefer more words)
-        - 'larger' (prefer longer strings)
-        """
-        log("DEBUG", f"Merging finding ID {self.id} with ID {other.id}", prefix="MODEL")
-
-        merged_data = {}
-        for field_name in self.__dataclass_fields__:
-            val_a = getattr(self, field_name)
-            val_b = getattr(other, field_name)
-            log("DEBUG", f"Evaluating merge for field '{field_name}': val_a='{val_a}' val_b='{val_b}'", prefix="MODEL")
-
-            if val_a == val_b:
-                merged_data[field_name] = val_a  # identical, safe to use either
-                log("DEBUG", f"Values identical. Using '{val_a}'", prefix="MODEL")
-            elif not val_a:
-                merged_data[field_name] = val_b  # prefer non-empty value
-                log("DEBUG", f"val_a empty. Using val_b='{val_b}'", prefix="MODEL")
-            elif not val_b:
-                merged_data[field_name] = val_a  # prefer non-empty value
-                log("DEBUG", f"val_b empty. Using val_a='{val_a}'", prefix="MODEL")
-            elif isinstance(val_a, str) and isinstance(val_b, str):
-                # For strings, use length or token-count preference
-                if prefer == 'tokens':
-                    merged = val_a if len(val_a.split()) > len(val_b.split()) else val_b
-                else:
-                    merged = val_a if len(val_a) > len(val_b) else val_b
-                merged_data[field_name] = merged
-                log("DEBUG", f"Merged string based on preference '{prefer}': '{merged}'", prefix="MODEL")
-            elif isinstance(val_a, list) and isinstance(val_b, list):
-                merged_data[field_name] = list(set(val_a + val_b))
-                log("DEBUG", f"Merged list: {merged_data[field_name]}", prefix="MODEL")
-            elif isinstance(val_a, dict) and isinstance(val_b, dict):
-                merged = val_a.copy()
-                merged.update(val_b)
-                merged_data[field_name] = merged
-                log("DEBUG", f"Merged dict: {merged_data[field_name]}", prefix="MODEL")
-            else:
-                merged_data[field_name] = val_a  # fallback: pick original
-                log("DEBUG", f"Fallback merge strategy. Using val_a='{val_a}'", prefix="MODEL")
-
-        merged_finding = Finding(**merged_data)
-        log("DEBUG", f"Merged result: {merged_finding}", prefix="MODEL")
-        return merged_finding
-'''
-
 def prompt_user_to_fix_field(field_name: str, expected_type: Any, current_value: Any) -> tuple[int, Any]:
     """Prompt user to correct an invalid field inline"""
     tui = get_tui()
@@ -230,6 +160,9 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
     # Special: tags
     if field_name == "tags":
         log("DEBUG", f"Special handling for 'tags' field with value: {repr(value)}", prefix="MODEL")
+        if is_blank(value):
+            log("WARN", f"Blank tags found, coercing to empty List", prefix="MODEL")
+            return []
         if isinstance(value, str):
             result = [x.strip().lower() for x in value.replace(",", " ").split()]
             log("DEBUG", f"Parsed tags from string: {result}", prefix="MODEL")

@@ -4,7 +4,7 @@ from imports import (dumps, Table, Any, Dict, List)
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, normalise_tags
+from utils import log, normalise_tags, is_blank
 from model import Finding
 from sensitivity import load_sensitive_terms, check_finding_for_sensitivities
 
@@ -15,12 +15,12 @@ def resolve_conflict(value_from_left, value_from_right) -> str:
     Preference is given to non-empty values, and if both are present,
     selects the one with more tokens, or the longer value if tied.
     """
-    if value_from_left and not value_from_right:
-        return value_from_left
-    if value_from_right and not value_from_left:
+    if is_blank(value_from_left) and is_blank(value_from_right):
+        return None
+    if is_blank(value_from_left):
         return value_from_right
-    if not value_from_left and not value_from_right:
-        return ""
+    if is_blank(value_from_right):
+        return value_from_left
 
     len_left, len_right = len(str(value_from_left)), len(str(value_from_right))
     tok_left, tok_right = len(str(value_from_left).split()), len(str(value_from_right).split())
@@ -207,7 +207,7 @@ def interactive_merge(record_from_side_left: Finding, record_from_side_right: Fi
         # Sensitivity check inline per field
         if CONFIG['sensitivity_check_enabled']:
             sensitive_terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"])
-            temp_finding = Finding.from_dict({"id": record_from_side_left.id, field_name: merged_value})
+            temp_finding = Finding.from_dict({"id": record_from_side_left.id, field_name: merged_record[field_name]})
             sensitivity_hits = check_finding_for_sensitivities(temp_finding, sensitive_terms)
 
             if sensitivity_hits.get(field_name):
@@ -222,9 +222,9 @@ def interactive_merge(record_from_side_left: Finding, record_from_side_right: Fi
                     action = tui.render_user_choice(prompt, options=action_choices, title=f"Field-level resolution: {field_name}")
 
                     if action == "l" and offered:
-                        merged_value = merged_value.replace(sensitive_term, offered)
+                        merged_record[field_name] = merged_record[field_name].replace(sensitive_term, offered)
                     elif action == "e":
-                        merged_value = tui.invoke_editor(merged_value)
+                        merged_record[field_name] = tui.invoke_editor(merged_record[field_name])
                     elif action == "s":
                         log("WARN", "User skipped field.", prefix="MERGE")
                         continue
@@ -246,3 +246,70 @@ def interactive_merge(record_from_side_left: Finding, record_from_side_right: Fi
 
     log("INFO", "Merge finalised.", prefix="MERGE")
     return Finding.from_dict(merged_record)
+
+
+''' # potentially unused code
+    def diff(self, other: 'Finding') -> Dict[str, tuple[Any, Any]]:
+        """
+        Returns a dictionary of field names whose values differ between this and another Finding.
+        Each key maps to a tuple: (self_value, other_value)
+        """
+        log("DEBUG", f"Diffing finding ID {self.id} against ID {other.id}", prefix="MODEL")
+        differences = {}
+        for field_name in self.__dataclass_fields__:
+            val_self = getattr(self, field_name)
+            val_other = getattr(other, field_name)
+            log("DEBUG", f"Checking field '{field_name}': self='{val_self}' vs other='{val_other}'", prefix="MODEL")
+            if val_self != val_other:
+                differences[field_name] = (val_self, val_other)
+        log("DEBUG", f"Differences found: {differences}", prefix="MODEL")
+        return differences
+
+    def merge_with(self, other: 'Finding', prefer: str = 'larger') -> 'Finding':
+        """
+        Merges this Finding with another, field by field. Preference is given based on:
+        - 'filled' (prefer non-empty)
+        - 'tokens' (prefer more words)
+        - 'larger' (prefer longer strings)
+        """
+        log("DEBUG", f"Merging finding ID {self.id} with ID {other.id}", prefix="MODEL")
+
+        merged_data = {}
+        for field_name in self.__dataclass_fields__:
+            val_a = getattr(self, field_name)
+            val_b = getattr(other, field_name)
+            log("DEBUG", f"Evaluating merge for field '{field_name}': val_a='{val_a}' val_b='{val_b}'", prefix="MODEL")
+
+            if val_a == val_b:
+                merged_data[field_name] = val_a  # identical, safe to use either
+                log("DEBUG", f"Values identical. Using '{val_a}'", prefix="MODEL")
+            elif not val_a:
+                merged_data[field_name] = val_b  # prefer non-empty value
+                log("DEBUG", f"val_a empty. Using val_b='{val_b}'", prefix="MODEL")
+            elif not val_b:
+                merged_data[field_name] = val_a  # prefer non-empty value
+                log("DEBUG", f"val_b empty. Using val_a='{val_a}'", prefix="MODEL")
+            elif isinstance(val_a, str) and isinstance(val_b, str):
+                # For strings, use length or token-count preference
+                if prefer == 'tokens':
+                    merged = val_a if len(val_a.split()) > len(val_b.split()) else val_b
+                else:
+                    merged = val_a if len(val_a) > len(val_b) else val_b
+                merged_data[field_name] = merged
+                log("DEBUG", f"Merged string based on preference '{prefer}': '{merged}'", prefix="MODEL")
+            elif isinstance(val_a, list) and isinstance(val_b, list):
+                merged_data[field_name] = list(set(val_a + val_b))
+                log("DEBUG", f"Merged list: {merged_data[field_name]}", prefix="MODEL")
+            elif isinstance(val_a, dict) and isinstance(val_b, dict):
+                merged = val_a.copy()
+                merged.update(val_b)
+                merged_data[field_name] = merged
+                log("DEBUG", f"Merged dict: {merged_data[field_name]}", prefix="MODEL")
+            else:
+                merged_data[field_name] = val_a  # fallback: pick original
+                log("DEBUG", f"Fallback merge strategy. Using val_a='{val_a}'", prefix="MODEL")
+
+        merged_finding = Finding(**merged_data)
+        log("DEBUG", f"Merged result: {merged_finding}", prefix="MODEL")
+        return merged_finding
+'''
