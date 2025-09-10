@@ -167,6 +167,8 @@ class TUI:
             prefix_is_default = ''
             prefix_not_default = ''
 
+        if options:
+            options.insert(0, 'Abort')
         option_text = None
         option_characters = None
         if isinstance(options, List):
@@ -184,6 +186,11 @@ class TUI:
         choice = self.get_user_input(choices=option_characters, default=default, multi_char=multi_char)
 
         log("DEBUG", f"User decision required: {prompt.strip()}, result: {choice.upper()}", prefix="TUI")
+
+        if choice == 'a':
+            log("ERROR", "User aborted.", prefix="TUI")
+            exit()
+
         return choice
 
     def get_user_input(
