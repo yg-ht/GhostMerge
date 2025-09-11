@@ -229,6 +229,7 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
         if runtime_type in (float,int):
             return None
         if runtime_type is str:
+            return ''
 
 
     # Booleans
