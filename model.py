@@ -173,14 +173,17 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
       - Avoids isinstance on typing.Union
       - Never calls typing aliases as constructors
     """
-    def _typename(tp: Any) -> str:
-        try:
-            return tp.__name__
-        except AttributeError:
-            return get_expected_type(tp)
+    #def _typename(tp: Any) -> str:
+    #    try:
+    #        return tp.__name__
+    #    except AttributeError:
+    #        return get_expected_type(tp)
 
     origin = get_origin(expected_type)
     args = get_args(expected_type)
+    # Collapse typing origin to a runtime class when available
+    runtime_type = origin or expected_type
+
 
     log("DEBUG", f"Attempting to coerce field '{field_name}' with value: {repr(value)} to type: {get_expected_type(expected_type)}",
         prefix="MODEL")
@@ -205,10 +208,7 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
                 last_err = e
                 continue
         log("WARN", f"Value did not match any Union member types {tuple(get_expected_type(a) for a in args)}", prefix="MODEL", exception=last_err)
-        raise last_err if last_err else TypeError(f"Value {value!r} does not match {_typename(expected_type)}")
-
-    # Collapse typing origin to a runtime class when available
-    runtime_type = origin or expected_type
+        raise last_err if last_err else TypeError(f"Value {value!r} does not match {runtime_type}")
 
     # Already correct type
     try:
@@ -218,6 +218,18 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
     except TypeError:
         # runtime_type may not be a proper class, ignore
         pass
+
+    # Blank handling for non containers
+    if is_blank(value):
+        log("DEBUG", f"Blank value found", prefix="MODEL")
+        if runtime_type is list:
+            return []
+        if runtime_type is dict:
+            return {}
+        if runtime_type in (float,int):
+            return None
+        if runtime_type is str:
+
 
     # Booleans
     if runtime_type is bool:
@@ -234,39 +246,34 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
     # List[T]
     if runtime_type is list:
         inner = args[0] if args else Any
+        # if it is blank,
         if is_blank(value):
             log("DEBUG", "Blank List found, coercing to empty list", prefix="MODEL")
             return []
-
+        # if it is currently a str
         if isinstance(value, str):
             s = value.strip()
             if not s:
                 return []
             parsed = None
-
             # If this looks like a structured literal, try proper parsing first
             if s[:1] in "[(" or s[:1] == "{" or s[:1] == '"':
+                # tolerate both JSON and Pythonic quoting
                 try:
-                    # tolerate both JSON and Pythonic quoting
-                    try:
-                        parsed = json.loads(s)
-                    except Exception:
-                        parsed = ast.literal_eval(s)
+                    parsed = json.loads(s)
                 except Exception as e:
+                    parsed = ast.literal_eval(s)
                     log("WARN", f"Failed to parse list-ish string structurally: {s!r}", prefix="MODEL", exception=e)
-
             if parsed is None:
                 # Heuristic: split delimited strings, otherwise treat as single tag
                 # commas, semicolons, or pipes as delimiters
                 parts = [p.strip() for p in re.split(r"[;,|]", s) if p.strip()]
                 parsed = parts if parts else [s]
-
             # Normalise tuple to list in case "(a, b)"
             if isinstance(parsed, tuple):
                 parsed = list(parsed)
-
             value = parsed
-
+        # if it still isn't a list
         if not isinstance(value, list):
             log("DEBUG", f"Expected list, got {type(value)} with value {value!r}", prefix="MODEL")
             raise TypeError(f"Expected List, got {type(value)}")
@@ -288,7 +295,7 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
                 log("DEBUG", f"Parsed dict from string: {value!r}", prefix="MODEL")
             except Exception as e:
                 log("WARN", f"Failed to parse dict from string: {value!r}", prefix="MODEL", exception=e)
-                raise ValueError(f"Could not parse Dict from string: {value!r}")
+                return None
         if not isinstance(value, dict):
             log("DEBUG", f"Expected dict, got {type(value)}", prefix="MODEL")
             raise TypeError(f"Expected Dict, got {type(value)}")
@@ -302,11 +309,6 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
         log("DEBUG", f"Coerced dict values: {coerced!r}", prefix="MODEL")
         return coerced
 
-    # Blank handling for non containers
-    if is_blank(value) and runtime_type not in (list, dict):
-        log("DEBUG", f"Blank value for non container, returning None", prefix="MODEL")
-        return None
-
     # Scalars
     if runtime_type in (int, float):
         try:
@@ -315,7 +317,7 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
             return result
         except Exception as e:
             log("WARN", f"Failed scalar coercion to {runtime_type.__name__} for value {value!r}", prefix="MODEL", exception=e)
-            raise ValueError
+            raise ValueError(f"Failed scalar coercion to {runtime_type.__name__} for value {value!r}")
 
     # Unsupported typing artefact
     raise TypeError(f"Unsupported expected_type for coercion: {expected_type!r}")
