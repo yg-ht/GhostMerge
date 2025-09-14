@@ -1,9 +1,9 @@
 {
   "log_verbosity": "INFO",
   "log_verbosity_cli": "INFO",
-  "log_verbosity_matching": "WARN",
+  "log_verbosity_matching": "DEBUG",
   "log_verbosity_merge": "DEBUG",
-  "log_verbosity_model": "DEBUG",
+  "log_verbosity_model": "INFO",
   "log_verbosity_sensitivity": "WARN",
   "log_verbosity_tui": "WARN",
   "log_verbosity_utils": "WARN",
@@ -14,9 +14,13 @@
   "interactive_mode": true,
   "sensitivity_check_enabled": true,
   "sensitivity_check_terms_file": "sensitive_terms.txt",
+  "fuzzy_match_threshold": [90,80],
   "match_weight_title": 0.6,
-  "match_weight_description": 0.3,
-  "match_weight_finding_type": 0.1,
+  "match_min_threshold_title": 60,
+  "match_weight_type": 0.2,
+  "match_weight_description": 0.5,
+  "match_weight_impact": 0.4,
+  "match_weight_mitigation": 0.4,
   "allowed_severities": ["Informational", "Low", "Medium", "High", "Critical"],
   "tui_refresh_rate": 4.0
 }

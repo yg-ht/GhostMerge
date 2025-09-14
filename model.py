@@ -53,7 +53,7 @@ class Finding:
                         coerced = coerced.strip()
                     coerced_data[field_name] = coerced
                 except Exception:
-                    expected_str = get_expected_type(expected_type)
+                    expected_str = get_expected_type_str(expected_type)
                     log("DEBUG",
                         f"Field '{field_name}' expected {expected_str} but got type {type(raw_value).__name__}: \"{raw_value}\"",
                         prefix="MODEL")
@@ -109,29 +109,20 @@ def prompt_user_to_fix_field(field_name: str, expected_type: Any, current_value:
     """Prompt user to correct an invalid field inline"""
     tui = get_tui()
 
-    if 'Optional' in get_expected_type(expected_type):
-        is_optional = True
-        log('DEBUG', 'Optional field detected', prefix="MODEL")
-    else:
-        is_optional = False
-        log('DEBUG', 'Mandatory field detected', prefix="MODEL")
-
-    origin = get_origin(expected_type)
-    args = get_args(expected_type)
-
-    prompt = (f"[red]Invalid value[/red] [yellow]'{current_value}' ({get_expected_type(type(current_value))})[/yellow] in "
-              f"[bold]{field_name}[/bold] and we need a [bold]{get_expected_type(expected_type)}[/bold] to fix it.\n")
+    prompt = (f"Invalid value '{current_value}' ({get_expected_type_str(type(current_value))}) in "
+              f"{field_name} and we need a {get_expected_type_str(expected_type)} to fix it.\n")
 
     options = ['Fix', 'Skip whole record']
     # Detect Optional[T] (Union[..., NoneType])
+    is_optional = is_optional_field(expected_type)
     if is_optional:
-        options.append(f'Empty') ######
+        options.append(f'Blank') ######
 
     action = tui.render_user_choice(prompt, options, default=None,
                                             title=f'Field-level resolution: {field_name}')
 
-    if action == "e" and is_optional:
-        log("DEBUG", f"User chose to use empty value for {field_name}", prefix="MODEL")
+    if action == "b" and is_optional:
+        log("DEBUG", f"User chose to use blank value for {field_name}", prefix="MODEL")
         if expected_type == str:
             return [0, None]
         if expected_type == list:
@@ -173,11 +164,6 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
       - Avoids isinstance on typing.Union
       - Never calls typing aliases as constructors
     """
-    #def _typename(tp: Any) -> str:
-    #    try:
-    #        return tp.__name__
-    #    except AttributeError:
-    #        return get_expected_type(tp)
 
     origin = get_origin(expected_type)
     args = get_args(expected_type)
@@ -185,7 +171,7 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
     runtime_type = origin or expected_type
 
 
-    log("DEBUG", f"Attempting to coerce field '{field_name}' with value: {repr(value)} to type: {get_expected_type(expected_type)}",
+    log("DEBUG", f"Attempting to coerce field '{field_name}' with value: {repr(value)} to type: {get_expected_type_str(expected_type)}",
         prefix="MODEL")
 
     # Handle Union and Optional first
@@ -196,7 +182,7 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
             if is_blank(value):
                 log("DEBUG", f"Optional value is blank, returning None", prefix="MODEL")
                 return None
-            log("DEBUG", f"Optional detected, coercing to non None member {get_expected_type(non_none[0])}", prefix="MODEL")
+            log("DEBUG", f"Optional detected, coercing to non None member {get_expected_type_str(non_none[0])}", prefix="MODEL")
             return coerce_value(value, non_none[0], field_name)
 
         # General Union: try each member in order
@@ -207,7 +193,7 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
             except Exception as e:
                 last_err = e
                 continue
-        log("WARN", f"Value did not match any Union member types {tuple(get_expected_type(a) for a in args)}", prefix="MODEL", exception=last_err)
+        log("WARN", f"Value did not match any Union member types {tuple(get_expected_type_str(a) for a in args)}", prefix="MODEL", exception=last_err)
         raise last_err if last_err else TypeError(f"Value {value!r} does not match {runtime_type}")
 
     # Already correct type
@@ -294,8 +280,8 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
                 parsed = ast.literal_eval(value)
                 value = parsed
                 log("DEBUG", f"Parsed dict from string: {value!r}", prefix="MODEL")
-            except Exception as e:
-                log("WARN", f"Failed to parse dict from string: {value!r}", prefix="MODEL", exception=e)
+            except ValueError:
+                log("WARN", f"Failed to parse dict from string: {value!r}", prefix="MODEL")
                 return None
         if not isinstance(value, dict):
             log("DEBUG", f"Expected dict, got {type(value)}", prefix="MODEL")
@@ -316,14 +302,14 @@ def coerce_value(value: Any, expected_type: Any, field_name: Optional[str] = Non
             result = runtime_type(value)
             log("DEBUG", f"Coerced scalar to {runtime_type.__name__}: {result!r}", prefix="MODEL")
             return result
-        except Exception as e:
-            log("WARN", f"Failed scalar coercion to {runtime_type.__name__} for value {value!r}", prefix="MODEL", exception=e)
+        except ValueError:
+            log("WARN", f"Failed scalar coercion to {runtime_type.__name__} for value {value!r}", prefix="MODEL")
             raise ValueError(f"Failed scalar coercion to {runtime_type.__name__} for value {value!r}")
 
     # Unsupported typing artefact
     raise TypeError(f"Unsupported expected_type for coercion: {expected_type!r}")
 
-def get_expected_type(t: Any) -> str:
+def get_expected_type_str(t: Any) -> str:
     """
     Return a human-readable name for a typing annotation or runtime type.
 
@@ -344,14 +330,14 @@ def get_expected_type(t: Any) -> str:
 
     if origin is Union:
         # Optional[...] is Union[X, NoneType]
-        readable = [get_expected_type(a) for a in args]
+        readable = [get_expected_type_str(a) for a in args]
         return " or ".join(readable)
     elif origin is list:
-        inner = get_expected_type(args[0]) if args else "Any"
+        inner = get_expected_type_str(args[0]) if args else "Any"
         return f"List[{inner}]"
     elif origin is dict:
-        key_str = get_expected_type(args[0]) if args else "Any"
-        val_str = get_expected_type(args[1]) if args else "Any"
+        key_str = get_expected_type_str(args[0]) if args else "Any"
+        val_str = get_expected_type_str(args[1]) if args else "Any"
         return f"Dict[{key_str}, {val_str}]"
     elif hasattr(t, "__name__"):
         return t.__name__
@@ -359,3 +345,12 @@ def get_expected_type(t: Any) -> str:
         return t.__name__
     else:
         return str(t)
+
+def is_optional_field(expected_type):
+    if 'Optional' in get_expected_type_str(expected_type):
+        is_optional = True
+        log('DEBUG', 'Optional field detected', prefix="MODEL")
+    else:
+        is_optional = False
+        log('DEBUG', 'Mandatory field detected', prefix="MODEL")
+    return is_optional

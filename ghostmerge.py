@@ -1,4 +1,6 @@
 # import via the common imports route
+from operator import indexOf
+
 from imports import (Path, Optional, typer)
 # initialise global objects
 from globals import get_config, get_tui
@@ -9,7 +11,7 @@ tui = TUI()
 from utils import load_config, log, load_json, write_json, return_ASCII_art, setup_signal_handlers
 from model import Finding
 from matching import fuzzy_match_findings
-from merge import interactive_merge
+from merge import merge_main
 
 # run the app
 app = typer.Typer()
@@ -63,18 +65,31 @@ def ghostmerge(
     if file_out_right is None:
         file_out_right = str(file_in_left) + CONFIG['default_output_filename_append']
 
-    matches, unmatched_left, unmatched_right = fuzzy_match_findings(findings_left, findings_right)
+    matches = []
+    unmatched_left = findings_left
+    unmatched_right = findings_right
+    for fuzzy_threshold in CONFIG['fuzzy_match_threshold']:
+        log('INFO', f'Performing fuzzy matching at {fuzzy_threshold}% match threshold','CLI')
+        new_matches, unmatched_left, unmatched_right = fuzzy_match_findings(unmatched_left, unmatched_right, fuzzy_threshold)
+        matches.extend(new_matches)
 
+    log("INFO", f"After all fuzzy matching there are {len(unmatched_left)} unmatched findings from left", prefix="CLI")
+    log("INFO", f"After all fuzzy matching there are {len(unmatched_right)} unmatched findings from right", prefix="CLI")
+
+    log("INFO", f"Starting interactive merge for {len(matches)} fuzzy matched findings", prefix="CLI")
     merged_left, merged_right = [], []
-    for idx, (finding_left, finding_right, score) in enumerate(matches):
-        log("INFO", f"Processing matched pair #{idx}: ID A={finding_left.id} ↔ ID B={finding_right.id} (score: {score:.2f})", prefix="CLI")
+    for match in matches:
+        log("INFO", f"Processing matched pair #{matches.index(match)}: ID Left={match('left')['id']} ↔ ID Right={match('right')['id']} (score: {match('score'):.2f})", prefix="CLI")
 
         # Separate merge decisions for each side
-        result_left = interactive_merge(finding_left, finding_right)
-        result_right = interactive_merge(finding_right, finding_left)
+        result_left, result_right = merge_main(match("left"), match("right"), score=match("score"), side='Left')
 
         merged_left.append(result_left)
         merged_right.append(result_right)
+
+    # TODO: deal with unmatched findings
+    #matches.extend(unmatched_left)
+    #matches.extend(unmatched_right)
 
     write_json(file_out_left, [f.to_dict() for f in merged_left])
     write_json(file_out_right, [f.to_dict() for f in merged_right])

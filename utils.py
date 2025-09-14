@@ -1,4 +1,6 @@
 # external module imports
+from soupsieve.util import lower
+
 from imports import datetime, json, traceback, os, Path, Panel, Text, Optional, random, b64decode, sys, signal
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
@@ -53,8 +55,8 @@ def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
     level = level.upper()
     level_map = {
         "DEBUG": "[dim cyan][DEBUG][/dim cyan]",
-        "INFO": "[bold green][INFO][/bold green]",
-        "WARN": "[bold yellow][WARN][/bold yellow]",
+        "INFO": "[bold green][INFO ][/bold green]",
+        "WARN": "[bold yellow][WARN ][/bold yellow]",
         "ERROR": "[bold red][ERROR][/bold red]",
     }
 
@@ -121,7 +123,14 @@ def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
     else:
         exception_text = None
 
-    # do log to file early on in case there are issues
+    # prep the log presentation for TUI
+    tag = level_map.get(level, "[white][LOG][/white]")
+    full_prefix = f"[{prefix.center(11)}] " if prefix else ""
+    full_message_rich = f"{tag} {full_prefix}{Text.from_markup(str(msg))}"
+    full_message_plain = f"{tag} {full_prefix}{Text(str(msg))}"
+    # push message to the TUI
+
+    # do log to file
     if log_to_file and is_path_writable(log_file_path):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         plain_prefix = f"{prefix:<11} " if prefix else ""
@@ -132,21 +141,15 @@ def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
         with Path(log_file_path).open("a", encoding="utf-8") as f:
             f.write(file_msg)
 
-    # prep the log presentation for TUI
-    tag = level_map.get(level, "[white][LOG][/white]")
-    full_prefix = f"[{prefix.center(11)}] " if prefix else ""
-    full_message = f"{tag} {full_prefix}{Text.from_markup(str(msg))}"
-    # push message to the TUI
-
     # if the log includes an exception dump it to terminal
     if TUI:
-        TUI.update_messages(full_message)
+        TUI.update_messages(full_message_rich)
         if exception:
             TUI.update_messages(f"[red]{exception_text}[/red]")
-        else:
-            print(f"[red]{exception_text}[/red]")
     else:
-        print(f"{full_message}")
+        print(f"{full_message_plain}")
+        if exception:
+            print(f"{exception_text}")
 
 
 # ── IO Utilities ────────────────────────────────────────────────────
@@ -231,6 +234,15 @@ def is_blank(v):
             or (isinstance(v, str) and v.strip() == "")
             or (isinstance(v, (list, dict)) and len(v) == 0)
     )
+
+def blank_for_type(type_name: str):
+    type_name = lower(type_name)
+    if type_name in ['float','int','str','bool']:
+        return None
+    if type_name is 'list':
+        return []
+    if type_name is 'dict':
+        return {}
 
 def return_ASCII_art():
     images = []

@@ -1,12 +1,17 @@
 # external module imports
+import dataclasses
+
+import model
 from imports import (difflib, os, subprocess, tempfile, threading, sleep, Console, RenderableType, readchar,
-                     Layout, Live, Panel, Text, Columns, Any, List, Optional)
+                     Layout, Live, Panel, Text, Table, Columns, Any, List, Optional, MarkupError, Tuple)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, set_tui
+from model import get_expected_type_str
+
 CONFIG = get_config()
 
 # local module imports
-from utils import log
+from utils import log, blank_for_type
 from merge import stringify_for_diff
 
 __all__ = ["tui"]
@@ -25,7 +30,7 @@ class TUI:
         self.layout = Layout(name="root")
         self.layout.split(
             Layout(name="data_viewer", ratio=2),
-            Layout(name="messages", size=10),
+            Layout(name="messages", size=20),
             Layout(name="user_input", size=10)
         )
         log('DEBUG', 'Split console layout', 'TUI')
@@ -84,7 +89,7 @@ class TUI:
         new_lines = message_str.splitlines()
         self._message_history.extend(new_lines)
         # Limit history to the last 8 lines
-        self._message_history = self._message_history[-8:]
+        self._message_history = self._message_history[-18:]
 
         # Combine the history for display
         history_text = "\n".join(self._message_history)
@@ -93,10 +98,17 @@ class TUI:
         else:
             title = 'Messages'
         with self._layout_lock:
-            renderable = Text.from_markup(history_text)
-            self.layout["messages"].update(Panel(renderable, title=title, style=style))
-            if self.live:
-                self.live.refresh()
+            try:
+                renderable = Text.from_markup(history_text)
+                self.layout["messages"].update(Panel(renderable, title=title, style=style))
+                if self.live:
+                    self.live.refresh()
+            except MarkupError:
+                log('WARN', 'MarkupError detected:')
+                renderable = Text(history_text)
+                self.layout["messages"].update(Panel(renderable, title=title, style=style))
+                if self.live:
+                    self.live.refresh()
 
     def update_input(self, text: RenderableType, style: str = "", title: str = None):
         if title:
@@ -152,7 +164,9 @@ class TUI:
         options: Optional[List[str]] = None,
         default: Optional[str] = None,
         title: Optional[str] = "Make a choice",
-        multi_char: bool = False
+        multi_char: bool = False,
+        is_optional: bool = False
+
     ) -> str:
         """
         Display a prompt and capture a user's choice
@@ -169,6 +183,8 @@ class TUI:
 
         if options:
             options.insert(0, 'Abort')
+        if options and is_optional:
+            options.insert(1, 'Blank')
         option_text = None
         option_characters = None
         if isinstance(options, List):
@@ -187,7 +203,7 @@ class TUI:
 
         log("DEBUG", f"User decision required: {prompt.strip()}, result: {choice.upper()}", prefix="TUI")
 
-        if choice == 'a':
+        if choice == 'a' and not multi_char and options:
             log("ERROR", "User aborted.", prefix="TUI")
             exit()
 
@@ -250,9 +266,23 @@ class TUI:
 
         return result
 
-    def render_diff_single_field(self, value_from_side_left: Any, value_from_side_right: Any,
+    def render_left_and_right_record(self, finding_record: Tuple[model.Finding, model.Finding]):
+        left_right_table: Table = Table(
+            title="Merged Finding (post‑manual)", box=None, show_lines=False
+        )
+        left_right_table.add_column("Field", style="bold white")
+        left_right_table.add_column("Left Value", overflow="fold")
+        left_right_table.add_column("Right Value", overflow="fold")
+        left, right = finding_record
+        for field in dataclasses.fields(model.Finding):
+            left_value = getattr(left, field.name, blank_for_type(get_expected_type_str(field.type)))
+            right_value = getattr(right, field.name, blank_for_type(get_expected_type_str(field.type)))
+            left_right_table.add_row(field.name,left_value,right_value)
+        self.update_data(left_right_table, title='Preview')
+
+    def render_diff_single_field(self, value_from_side_target: Any, value_from_side_comparison: Any,
                                  title: Optional[str] = "Field-level diff") -> Columns:
-        """Return two side‑by‑side *Panels* that highlight differences.
+        """Return two side‑by‑side Panels that highlight differences.
 
         Complex structures (``dict``/``list``) are serialised into pretty strings
         before diffing so the user easily sees diff
@@ -260,40 +290,40 @@ class TUI:
 
         log(
             "DEBUG",
-            f"Field types: Left={type(value_from_side_left)}, Right={type(value_from_side_right)}",
+            f"Field types: Target={type(value_from_side_target)}, Comparison={type(value_from_side_comparison)}",
             prefix="TUI",
         )
 
         # Serialise non‑scalar data for human‑readable diff output.
-        stringified_left = stringify_for_diff(value_from_side_left)
-        stringified_right = stringify_for_diff(value_from_side_right)
+        stringified_target = stringify_for_diff(value_from_side_target)
+        stringified_comparison = stringify_for_diff(value_from_side_comparison)
 
         # Build Rich *Text* fragments with colour annotations.
-        diff_for_side_left: Text = Text()
-        diff_for_side_right: Text = Text()
+        diff_for_side_target: Text = Text()
+        diff_for_side_comparison: Text = Text()
 
         for line in difflib.ndiff(
-            stringified_left.splitlines(), stringified_right.splitlines()
+            stringified_target.splitlines(), stringified_comparison.splitlines()
         ):
             change_code, line_content = line[:2], line[2:]
             if change_code == "- ":  # Present only in A – mark red in A panel.
-                diff_for_side_left.append(line_content + "\n", style="bold blue")
+                diff_for_side_target.append(line_content + "\n", style="bold blue")
             elif change_code == "+ ":  # Present only in B – mark green in B panel.
-                diff_for_side_right.append(line_content + "\n", style="bold green")
+                diff_for_side_comparison.append(line_content + "\n", style="bold green")
             else:  # Unchanged or intraline hint – copy to both panels.
-                diff_for_side_left.append(line_content + "\n")
-                diff_for_side_right.append(line_content + "\n")
+                diff_for_side_target.append(line_content + "\n")
+                diff_for_side_comparison.append(line_content + "\n")
 
-        log("DEBUG", "render_diff_single_field construction complete", prefix="TUI")
+        log("DEBUG", f"render_diff_single_field construction complete", prefix="TUI")
 
         field_diff = Columns(
             [
-                Panel(diff_for_side_left or Text("<empty>"), title="L", padding=(0, 1)),
-                Panel(diff_for_side_right or Text("<empty>"), title="R", padding=(0, 1)),
+                Panel(diff_for_side_target or Text("<empty>"), title="Target", padding=(0, 1)),
+                Panel(diff_for_side_comparison or Text("<empty>"), title="Comparison", padding=(0, 1)),
             ],
             equal=True,
             expand=True,
         )
 
-        self.update_data(field_diff)
+        self.update_data(field_diff, title=title)
 

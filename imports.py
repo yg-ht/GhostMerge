@@ -16,7 +16,7 @@ import tempfile
 import threading
 import traceback
 from base64 import b64decode
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from time import sleep
 
@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Tuple, Optional, Union, get_origin, get_args
 import typer
 from rich.columns import Columns
 from rich.console import Console, RenderableType
+from rich.errors import MarkupError
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -57,6 +58,7 @@ __all__ = [
     "dumps",
     "dataclass",
     "field",
+    "fields",
 
     # ── Third-party ──
     "BeautifulSoup",
@@ -73,6 +75,7 @@ __all__ = [
     "Text",
     "Columns",
     "Any",
+    "MarkupError",
     "Dict",
     "List",
     "Tuple",

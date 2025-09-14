@@ -12,7 +12,9 @@
 - [x] Implemented graceful shutdown with signal handlers
 - [x] Built I/O handlers for JSON and CSV
 - [x] Added support for tag normalisation and HTML stripping
-  - [ ] Consider options for more normalisation - for example, depluralisation 
+- [ ] Consider additional normalisation:
+  - [ ] depluralisation
+  - [ ] removal of double spaces
 
 ### 🔍 Matching Engine
 - [x] Implemented `score_finding_similarity()` with:
