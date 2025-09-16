@@ -1,5 +1,5 @@
 # external module imports
-from imports import (fuzz, List, Tuple)
+from imports import (fuzz, Dict, List, Tuple)
 # get global state objects (CONFIG and TUI)
 from globals import get_config
 CONFIG = get_config()
@@ -88,20 +88,21 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
 def fuzzy_match_findings(
     list_Left: List[Finding],
     list_Right: List[Finding],
-    threshold: float
-) -> Tuple[List[Tuple[Finding, Finding, float]], List[Finding], List[Finding]]:
+    threshold: float,
+    next_id: int
+) -> Tuple[List[Dict[str,Finding|str]], List[Finding], List[Finding]]:
     """
     Matches findings from two lists using fuzzy scoring.
 
     Returns:
-    - matches: list of tuples (Finding A, Finding B, score)
+    - matches: Dict of tuples (Finding A, Finding B, score)
     - unmatched_left: findings in Left that were not matched by Right
     - unmatched_right: findings in Right that were not matched by Left
     """
     log("INFO", f"Beginning fuzzy match on {len(list_Left)} findings from Left and {len(list_Right)} from Right", prefix="MATCHING")
 
-    matches = []
-    unmatched_left = []
+    matches: List[Dict[str,Finding|float]] = []
+    unmatched_left: List[Finding] = []
     matched_indices_right = set()
 
     for idx_left, finding_left in enumerate(list_Left):
@@ -129,7 +130,7 @@ def fuzzy_match_findings(
                 best_idx_right = idx_right
 
         if best_score >= threshold and best_match:
-            matches.append([{"left": finding_left, "right": best_match, "score": best_score}])
+            matches.extend([{"left": finding_left, "right": best_match, "score": best_score}])
             matched_indices_right.add(best_idx_right)
             log("INFO", f"Matched Left#{idx_left} (ID: {finding_left.id}) with Right#{best_idx_right} (ID: {best_match.id}) at {best_score:.2f}", prefix="MATCHING")
         else:

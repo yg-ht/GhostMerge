@@ -192,37 +192,6 @@ def setup_signal_handlers():
         raise
 '''
 
-'''class IDTracker:
-    """
-    Tracks and assigns unique IDs across a dataset.
-    Ensures no collisions when new IDs are needed.
-    """
-    def __init__(self, prefix: str):
-        self.prefix = prefix
-        self.existing_ids = set()
-
-    def register_existing(self, existing_id: str):
-        self.existing_ids.add(existing_id)
-        log("DEBUG", f"Registered existing ID: {existing_id}", prefix="IDTracker")
-
-    def get_next_available_id(self) -> str:
-        current = 1
-        while True:
-            candidate = f"{self.prefix}{current:03d}"
-            if candidate not in self.existing_ids:
-                self.existing_ids.add(candidate)
-                log("DEBUG", f"Generated new ID: {candidate}", prefix="IDTracker")
-                return candidate
-            current += 1
-    
-    def get_next_available_id(existing_ids: set[int]) -> int:
-        current = 1
-        while current in existing_ids:
-            current += 1
-        log("DEBUG", f"Next available ID: {current}", prefix="UTILS")
-        return current
-'''
-
 def normalise_tags(tag_str: str) -> list[str]:
     tags = list({tag.strip().lower() for tag in tag_str.replace(',', ' ').split() if tag.strip()})
     log("DEBUG", f"Normalised tags: {tags}", prefix="UTILS")

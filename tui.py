@@ -48,7 +48,7 @@ class TUI:
         set_tui(self)
 
     def _render_loop(self):
-        with Live(self.layout, refresh_per_second=self._refresh_rate, screen=True) as live:
+        with Live(self.layout, refresh_per_second=self._refresh_rate, screen=False) as live:
             self.live = live
             while self._running:
                 sleep(0.1)  # loop so that external updates are reflected

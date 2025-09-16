@@ -78,13 +78,14 @@ def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Find
 
         else: # all str / int etc fields should resolve using the resolve_conflict function
             resolved_value = resolve_conflict(value_from_left, value_from_right)
+            auto_fields[field_name] = resolved_value
             log("DEBUG", f"Resolved field '{field_name}' → Left:{value_from_left} | Right:{value_from_right} → '{resolved_value}'", prefix="MERGE")
 
     log("INFO", f"Gathered the auto-complete values for Left (ID #{finding_from_left.id}) and Right (ID #{finding_from_right.id})", prefix="MERGE")
     return auto_fields
 
 # ── Main merge logic ───────────────────────────────────────────────────
-def merge_main(finding_record_pair: Tuple[ Finding, Finding, int]) -> Finding:
+def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Finding]:
     """Run automatic merge then solicit human confirmation/overrides.
 
     The *canonical* merge result produced by ``merge_individual_findings`` is
@@ -93,20 +94,23 @@ def merge_main(finding_record_pair: Tuple[ Finding, Finding, int]) -> Finding:
     """
     tui = get_tui()
 
-    finding_left_side, finding_right_side = finding_record_pair
+    finding_left_side = finding_record_pair['left']
+    finding_right_side = finding_record_pair['right']
+    score = finding_record_pair['score']
+    merged_record_left = Finding
+    merged_record_right = Finding
+
 
     log("INFO", f"Starting merge_main for: {finding_left_side.id} ↔ {finding_right_side.id}", prefix="MERGE")
 
     # Step 1 – Generate the auto-offered suggestions
     auto_value_fields: Dict[str, Any] = get_auto_suggest_values(finding_left_side, finding_right_side)
 
-    merged_record: Dict[str, Any] = {}
-
     # Iterate deterministically over field names.
     for field in fields(Finding):
         if field.name is "id":
-            merged_record["Left"]["id"] = finding_left_side.id
-            merged_record["Right"]["id"] = finding_left_side.id
+            merged_record_left.id = finding_left_side.id
+            merged_record_right.id = finding_right_side.id
             continue
 
         # get the expected type once for future efforts
@@ -121,8 +125,10 @@ def merge_main(finding_record_pair: Tuple[ Finding, Finding, int]) -> Finding:
 
         # Fast‑path when both sides agree and match the offered suggestion.
         if (value_from_left == value_from_right == auto_value):
-            merged_record["Left"][field.name] = auto_value
-            merged_record["Right"][field.name] = auto_value
+            #merged_record_left[field.name] = auto_value
+            setattr(merged_record_left, field.name, auto_value)
+#            merged_record_right[field.name] = auto_value
+            setattr(merged_record_right, field.name, auto_value)
             log("DEBUG",f"Field '{field}' identical across both sides – auto‑accepted.",prefix="MERGE",)
             continue
 
@@ -157,25 +163,25 @@ def merge_main(finding_record_pair: Tuple[ Finding, Finding, int]) -> Finding:
 
         # Commit the chosen value into the merged record.
         if analyst_choice == "b" and is_optional:
-            merged_record['Left'][field.name] = blank_for_type(expected_type_str)
-            merged_record['Right'][field.name] = blank_for_type(expected_type_str)
+            merged_record_left['left'][field.name] = blank_for_type(expected_type_str)
+            merged_record_left['right'][field.name] = blank_for_type(expected_type_str)
         if analyst_choice == "k":
-            merged_record['Left'][field.name] = value_from_left
-            merged_record['Right'][field.name] = value_from_right
+            merged_record_left['left'][field.name] = value_from_left
+            merged_record_left['right'][field.name] = value_from_right
         elif analyst_choice == "l":
-            merged_record['Left'][field.name] = value_from_left
-            merged_record['Right'][field.name] = value_from_left
+            merged_record_left['left'][field.name] = value_from_left
+            merged_record_left['right'][field.name] = value_from_left
         elif analyst_choice == "r":
-            merged_record['Left'][field.name] = value_from_right
-            merged_record['Right'][field.name] = value_from_right
+            merged_record_left['left'][field.name] = value_from_right
+            merged_record_left['right'][field.name] = value_from_right
         elif analyst_choice == "o":
-            merged_record['Left'][field.name] = auto_value
-            merged_record['Right'][field.name] = auto_value
+            merged_record_left['left'][field.name] = auto_value
+            merged_record_left['right'][field.name] = auto_value
 
         # Sensitivity check inline per field
         if CONFIG['sensitivity_check_enabled']:
             sensitive_terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"])
-            temp_finding = Finding.from_dict({"id": finding_left_side.id, field: merged_record[field.name]})
+            temp_finding = Finding.from_dict({"id": finding_left_side.id, field: merged_record_left[field.name]})
             sensitivity_hits = check_finding_for_sensitivities(temp_finding, sensitive_terms)
 
             if sensitivity_hits.get(field.name):
@@ -189,12 +195,12 @@ def merge_main(finding_record_pair: Tuple[ Finding, Finding, int]) -> Finding:
                     action = tui.render_user_choice(prompt, options=action_choices, title=f"Field-level resolution: {field.name}")
 
                     if action == "o" and offered:
-                        merged_record[field.name] = merged_record[field.name].replace(sensitive_term, offered)
+                        merged_record_left[field.name] = merged_record_left[field.name].replace(sensitive_term, offered)
                     elif action == "e":
-                        merged_record[field.name] = tui.invoke_editor(merged_record[field.name])
+                        merged_record_left[field.name] = tui.invoke_editor(merged_record_left[field.name])
                     elif action == "k":
                         log("WARN", "Keep field as is", prefix="MERGE")
                         continue
 
     log("INFO", "This record's merge is finalised.", prefix="MERGE")
-    return Finding.from_dict(merged_record)
+    return Finding.from_dict(merged_record_left)

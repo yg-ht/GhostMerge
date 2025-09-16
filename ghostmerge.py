@@ -1,7 +1,7 @@
 # import via the common imports route
 from operator import indexOf
 
-from imports import (Path, Optional, typer)
+from imports import (Path, Optional, List, Dict, typer)
 # initialise global objects
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -65,13 +65,17 @@ def ghostmerge(
     if file_out_right is None:
         file_out_right = str(file_in_left) + CONFIG['default_output_filename_append']
 
-    matches = []
+    matches: List[Dict[str,Finding|float]] = []
     unmatched_left = findings_left
     unmatched_right = findings_right
+    next_id = 1
     for fuzzy_threshold in CONFIG['fuzzy_match_threshold']:
         log('INFO', f'Performing fuzzy matching at {fuzzy_threshold}% match threshold','CLI')
-        new_matches, unmatched_left, unmatched_right = fuzzy_match_findings(unmatched_left, unmatched_right, fuzzy_threshold)
+        new_matches, unmatched_left, unmatched_right = fuzzy_match_findings(unmatched_left, unmatched_right, fuzzy_threshold, next_id=next_id)
+        log('DEBUG', f'Updating matches dictionary with any new matches', 'CLI')
         matches.extend(new_matches)
+        log('DEBUG', f'Matches dictionary now contains {len(matches)}', 'CLI')
+        next_id = next_id + len(matches)
 
     log("INFO", f"After all fuzzy matching there are {len(unmatched_left)} unmatched findings from left", prefix="CLI")
     log("INFO", f"After all fuzzy matching there are {len(unmatched_right)} unmatched findings from right", prefix="CLI")
@@ -79,10 +83,10 @@ def ghostmerge(
     log("INFO", f"Starting interactive merge for {len(matches)} fuzzy matched findings", prefix="CLI")
     merged_left, merged_right = [], []
     for match in matches:
-        log("INFO", f"Processing matched pair #{matches.index(match)}: ID Left={match('left')['id']} ↔ ID Right={match('right')['id']} (score: {match('score'):.2f})", prefix="CLI")
+        log("INFO", f"Processing matched pair: ID Left={match['left'].id} ↔ ID Right={match['right'].id} (score: {match['score']:.2f})", prefix="CLI")
 
         # Separate merge decisions for each side
-        result_left, result_right = merge_main(match("left"), match("right"), score=match("score"), side='Left')
+        result_left, result_right = merge_main(match)
 
         merged_left.append(result_left)
         merged_right.append(result_right)
