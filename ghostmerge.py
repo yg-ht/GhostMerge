@@ -56,8 +56,22 @@ def ghostmerge(
 
     log("INFO", "Starting merge operation", prefix="CLI")
 
-    findings_left = [Finding.from_dict(f) for f in load_json(file_in_left)]
-    findings_right = [Finding.from_dict(f) for f in load_json(file_in_right)]
+    #findings_left = [Finding.from_dict(f) for f in load_json(file_in_left)]
+    #findings_right = [Finding.from_dict(f) for f in load_json(file_in_right)]
+
+    findings_left = []
+    json_left = load_json(file_in_left)
+    for finding_json_blob in json_left:
+        finding_left_temp = Finding.from_dict(finding_json_blob)
+        if finding_left_temp is not None:
+            findings_left.append(finding_left_temp)
+
+    findings_right = []
+    json_right = load_json(file_in_right)
+    for finding_json_blob in json_right:
+        finding_right_temp = Finding.from_dict(finding_json_blob)
+        if finding_right_temp is not None:
+            findings_right.append(finding_right_temp)
 
     if file_out_left is None:
         file_out_left = str(file_in_left) + CONFIG['default_output_filename_append']

@@ -61,8 +61,10 @@ class Finding:
                         prefix="MODEL")
                     correction = prompt_user_to_fix_field(field_name, expected_type, raw_value)
                     if correction[0] == 0:
+                        log('DEBUG', f"User prompt to resolve successful", "MODEL")
                         coerced_data[field_name] = correction[1]
                     elif correction[0] == 1:
+                        log('DEBUG', f"User prompt to resolve not successful", "MODEL")
                         return None
                     else:
                         exit()

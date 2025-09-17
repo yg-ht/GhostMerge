@@ -97,8 +97,8 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
     finding_left_side = finding_record_pair['left']
     finding_right_side = finding_record_pair['right']
     score = finding_record_pair['score']
-    merged_record_left = Finding
-    merged_record_right = Finding
+    merged_record_left = Finding(finding_left_side.id)
+    merged_record_right = Finding(finding_right_side.id)
 
 
     log("INFO", f"Starting merge_main for: {finding_left_side.id} ↔ {finding_right_side.id}", prefix="MERGE")
@@ -203,4 +203,4 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
                         continue
 
     log("INFO", "This record's merge is finalised.", prefix="MERGE")
-    return Finding.from_dict(merged_record_left)
+    return Tuple([Finding.from_dict(merged_record_left), Finding.from_dict(merged_record_right)])
