@@ -1,4 +1,6 @@
 # external module imports
+from types import NoneType
+
 from imports import (ast, dataclass, field, Any, Dict, List, Optional, Union, get_origin, get_args, re, json)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
@@ -104,6 +106,19 @@ class Finding:
             "tags": self.tags,
             "extra_fields": self.extra_fields,
         }
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """
+        Mimics dict.get() for dataclass attributes.
+        Returns the attribute if it exists, otherwise the default.
+        """
+        if isinstance(key, NoneType):
+            log("WARN", f"Attempted and failed to get attribute with key: {key} that has a NoneType", prefix="MODEL")
+            return False
+        else:
+            if hasattr(self, key):
+                return getattr(self, key)
+            return self.extra_fields.get(key, default) if self.extra_fields else default
 
 def prompt_user_to_fix_field(field_name: str, expected_type: Any, current_value: Any) -> tuple[int, Any]:
     """Prompt user to correct an invalid field inline"""
