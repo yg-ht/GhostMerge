@@ -1,7 +1,8 @@
 # external module imports
 from soupsieve.util import lower
 
-from imports import datetime, json, traceback, os, Path, Panel, Text, Optional, random, b64decode, sys, signal
+from imports import traceback, os, Panel, random, b64decode, sys, signal, get_origin, get_args
+from imports import datetime, json, Any, Path, Text, Optional, Union
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -207,11 +208,75 @@ def is_blank(v):
 def blank_for_type(type_name: str):
     type_name = lower(type_name)
     if type_name in ['float','int','str','bool']:
+        log('DEBUG', f'Type is {type_name}, returning None', prefix="UTILS")
         return None
     if type_name is 'list':
+        log('DEBUG', f'Type is {type_name}, returning []', prefix="UTILS")
         return []
     if type_name is 'dict':
+        log('DEBUG', f'Type is {type_name}, returning {{}}', prefix="UTILS")
         return {}
+    else:
+        log('DEBUG', 'Type not detected returning None', prefix="UTILS")
+        return None
+
+def get_type_as_str(t: Any) -> str:
+    """
+    Return a human-readable name for a typing annotation or runtime type.
+
+    Behavior
+    - Union/Optional: returns "A or B" (e.g., Optional[int] -> "int or NoneType").
+    - List[T]: returns "List[T]" with T formatted recursively.
+    - Dict[K, V]: returns "Dict[K, V]" with K and V formatted recursively.
+    - Named/built-in types: uses the type's __name__ (e.g., str -> "str").
+    - Fallback: returns str(t) if no clearer representation is available.
+
+    Notes
+    - Uses typing.get_origin/get_args and recurses one level for nested composite types.
+    - Handles both typing annotations and concrete classes/instances gracefully.
+    """
+
+    origin = get_origin(t)
+    args = get_args(t)
+    log("DEBUG", f'Origin: {origin} | Args: {args}', prefix="UTILS")
+
+    if origin is Union:
+        log("DEBUG", 'Union detected', prefix="UTILS")
+        # Optional[...] is Union[X, NoneType]
+        readable = [get_type_as_str(arg) for arg in args]
+        return " or ".join(readable)
+    elif origin is list:
+        log("DEBUG", 'List detected', prefix="UTILS")
+        inner = get_type_as_str(args[0]) if args else "Any"
+        return f"List[{inner}]"
+    elif origin is dict:
+        log("DEBUG", 'Dict detected', prefix="UTILS")
+        key_str = get_type_as_str(args[0]) if args else "Any"
+        val_str = get_type_as_str(args[1]) if args else "Any"
+        return f"Dict[{key_str}, {val_str}]"
+    elif hasattr(t, "__type__"):
+        log("DEBUG", f'Data\'s type attribute: {t.__type__}', prefix="UTILS")
+        return t.__type__
+    elif hasattr(t, "__name__"):
+        log("DEBUG", f'Data\'s name attribute: {t.__name__}', prefix="UTILS")
+        return t.__name__
+    elif isinstance(t, type):
+        log("DEBUG", 'Data is a type definition', prefix="UTILS")
+        return t.__name__
+    else:
+        log("DEBUG", f'Unable to identify useful type. Full object details: {str(t)}', prefix="UTILS")
+        return str(t)
+
+def is_optional_field(expected_type):
+    if (('Optional' in get_type_as_str(expected_type)) or
+            ('NoneType' in get_type_as_str(expected_type)) or
+            ('None' in get_type_as_str(expected_type))):
+        is_optional = True
+        log('DEBUG', 'Optional field detected', prefix="MODEL")
+    else:
+        is_optional = False
+        log('DEBUG', 'Mandated field detected', prefix="MODEL")
+    return is_optional
 
 def return_ASCII_art():
     images = []

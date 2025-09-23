@@ -25,7 +25,7 @@ from readchar import readchar
 from bs4 import BeautifulSoup
 from json import dumps
 from rapidfuzz import fuzz
-from typing import Any, Dict, List, Tuple, Optional, Union, get_origin, get_args
+from typing import Any, Dict, List, Tuple, Optional, Union, get_origin, get_args, get_type_hints
 
 # ── Interface related ────────────────────────────────────────────────
 import typer
@@ -69,8 +69,6 @@ __all__ = [
     "Layout",
     "Live",
     "Panel",
-    "Confirm",
-    "Prompt",
     "Table",
     "Text",
     "Columns",
@@ -83,6 +81,7 @@ __all__ = [
     "Union",
     "get_origin",
     "get_args",
+    "get_type_hints",
 
     # ── CLI / Interface ──
     "typer",

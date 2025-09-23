@@ -1,8 +1,6 @@
-# ✅ GhostMerge TODO
+# GhostMerge TODO
 
-## ✔️ Completed Tasks
-
-### 🛠 Project Setup & Infrastructure
+## Project Setup & Infrastructure
 - [x] Created CLI entry point using Typer
 - [x] Set up centralised config file (`ghostmerge_config.json`)
 - [x] Designed and implemented Finding data model
@@ -12,67 +10,53 @@
 - [x] Implemented graceful shutdown with signal handlers
 - [x] Built I/O handlers for JSON and CSV
 - [x] Added support for tag normalisation and HTML stripping
-- [ ] Consider additional normalisation:
-  - [ ] depluralisation
-  - [ ] removal of double spaces
 
-### 🔍 Matching Engine
-- [x] Implemented `score_finding_similarity()` with:
-  - [x] Token-based title match
-  - [x] Optional description fallback
-  - [x] Exact `finding_type` boost
-  - [x] Weighted score using config values
-- [x] Built `fuzzy_match_findings()` matcher:
-  - [x] One-to-one greedy matching
-  - [x] Returns match tuples, unmatched A, unmatched B
-  - [x] Logs all scoring, skips, and decisions
-- [x] Added matching weights to config:
-  - [x] `match_weight_title`
-  - [x] `match_weight_description`
-  - [x] `match_weight_finding_type`
+## Tooling & Environment
+- [x] Generated `requirements.txt`
+- [x] File imports completed with centralised `utils`
+- [x] Type guards and defensive parsing on incoming data
 
-### 🔧 Tooling & Environment
-- [x] Generated `requirements.txt` with only external libraries
-- [x] Generated reproducible zip bundle of project
-- [x] Refactored file imports to centralised `utils`
-- [x] Used type guards and defensive parsing on incoming data
+## Matching Engine
+- [x] Built `fuzzy_match_findings()` matcher
+- [x] Added matching weights to config
 
-## ⏳ In Progress / Next Up
+## Style normalisation
+- [ ] Depluralisation
+- [ ] Removal of double spaces
+- [ ] Title case normalising
+- [ ] Control or advise on use of parenthesis
+- [ ] Enforce the presence of reference URLs (configurable)
+- [ ] Enforce the presence of compliance references (configurable)
+- [ ] Integration with LLM for grammar etc support (configurable)
+- [ ] Identify regional use of spellings ("s" vs "z" for example)
+- [ ] Alert on long sentences
 
-### 🧠 Automatic Merge Engine and supporting functions
-- [ ] Refactor such that we use "left" and "right" instead of A and B (in progress)
-- [ ] Build merge orchestration logic:
-  - [ ] Handle unique-to-left/right detection
-  - [ ] Detect and route conflicting records
-  - [ ] Maintain original IDs in output
-  - [ ] Allow auto-merging of low-risk fields (e.g. tags, references)
-  - [ ] Start with very high fuzzy matches and iterate down
+## Automatic Merge Engine and supporting functions
+- [x] Refactor such that we use "left" and "right" instead of A and B (in progress)
+- [ ] Handle unique-to-left/right detection
+- [ ] Detect and route conflicting records
+- [ ] Maintain original IDs in output
+- [ ] Allow auto-merging of low-risk fields (e.g. tags, references)
+- [ ] Start with very high fuzzy matches and iterate down
   
-### 🖥️ Interactive Merge Flow (TUI)
-- [ ] Render side-by-side diffs
-- [ ] Render side-by-side preview before user agrees that fuzzy match is close enough
+## Interactive Merge Flow
+- [ ] Render side-by-side field-level diffs
+- [ ] Render side-by-side record-level preview
 - [ ] Prompt user per-field to select preferred value
-  - [ ] Keep left and right as they are
-  - [ ] Use left
-  - [ ] Use right
-  - [ ] Auto suggested option
-  - [ ] Remove value (where appropriate)
-  - [ ] Skip whole record
-  - [ ] Manual edit
-  - [ ] Full editor, not just in-line
-- [ ] Expose `match_score` to user before they decide to accept a match
-- [ ] Allow user to **reject a match entirely** (not just resolve fields)
-- [ ] Prompt user at match-level: "Accept this pairing?" before proceeding to field selection
-- [ ] When a match is rejected, **return both findings to unmatched pool**
-- [ ] Track and log **rejected matches** for debug use
-- [ ] Add logic to optionally **re-process orphans** after all initial matches are reviewed
-- [ ] Provide user-facing access to **unmatched A and B findings** after merge
-- [ ] Allow user to **manually pair unmatched findings** from side A to B (manual match)
-- [ ] Implement config file `threshold` override to adjust sensitivity of fuzzy matching
-- [ ] Deal with orphans - those that aren't matched somehow?
-- [ ] Support merged record preview before final write 
+- [ ] Auto-suggest option development
+- [ ] Remove value / return blank on optional fields
+- [ ] Skip whole record
+- [ ] Manual field-level edit
+- [ ] Expose `match_score` to user where it is useful information
+- [ ] Allow user to reject a match entirely, not just resolve fields
+- [ ] When a match is rejected, return both findings to unmatched pool
+- [ ] Add logic to optionally re-process orphans after all initial matches are reviewed
+- [ ] Process unmatched findings after main merge effort completed
+- [ ] Allow manual matching of unmatched findings
+- [x] Implement config file `threshold` override to adjust sensitivity of fuzzy matching
+- [ ] Preview merged record before final write and prompt for acceptance 
 
-### 🛡️ Sensitive Content Checker
+##  Sensitive Content Checker
 - [x] Load sensitivity list from file
 - [x] Scan selected fields (e.g. impact, description)
 - [x] Suggest redaction or replacement

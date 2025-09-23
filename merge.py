@@ -6,7 +6,7 @@ from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
 from utils import log, normalise_tags, is_blank, blank_for_type
-from model import Finding, is_optional_field, get_expected_type_str
+from model import Finding, is_optional_field, get_type_as_str
 from sensitivity import load_sensitive_terms, check_finding_for_sensitivities
 
 # ── Conflict Resolution ─────────────────────────────────────────────
@@ -114,10 +114,10 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
             continue
 
         # get the expected type once for future efforts
-        expected_type_str = get_expected_type_str(field.type)
+        expected_type_str = get_type_as_str(field.type)
 
-        value_from_left: Any = getattr(finding_left_side, field.name, blank_for_type(get_expected_type_str(field.type)))
-        value_from_right: Any = getattr(finding_right_side, field.name, blank_for_type(get_expected_type_str(field.type)))
+        value_from_left: Any = getattr(finding_left_side, field.name, blank_for_type(get_type_as_str(field.type)))
+        value_from_right: Any = getattr(finding_right_side, field.name, blank_for_type(get_type_as_str(field.type)))
         auto_value: Any = auto_value_fields[field.name]
 
         log("DEBUG",f"Field '{field}': Left={value_from_left!r} "
@@ -136,7 +136,7 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
         tui.render_left_and_right_record(finding_record_pair)
         log('WARN', 'Difference detected, please review ready for merge actions', 'MERGE')
 
-        tui.render_user_choice('Press any key when ready...', f'Waiting for user to complete data review')
+        tui.render_user_choice('Waiting for user to complete data review')
 
         tui.render_diff_single_field(value_from_left, value_from_right, title=f"Field diff for {field}")
 
@@ -203,4 +203,4 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
                         continue
 
     log("INFO", "This record's merge is finalised.", prefix="MERGE")
-    return Tuple([Finding.from_dict(merged_record_left), Finding.from_dict(merged_record_right)])
+    return tuple([Finding.from_dict(merged_record_left), Finding.from_dict(merged_record_right)])

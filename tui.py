@@ -6,7 +6,7 @@ from imports import (difflib, os, subprocess, tempfile, threading, sleep, Consol
                      Layout, Live, Panel, Text, Table, Columns, Any, List, Optional, MarkupError, Tuple)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, set_tui
-from model import get_expected_type_str
+from model import get_type_as_str
 
 CONFIG = get_config()
 
@@ -161,7 +161,7 @@ class TUI:
     def render_user_choice(
         self,
         prompt: str,
-        options: Optional[List[str]] = None,
+        options: Optional[List[str]] = [],
         default: Optional[str] = None,
         title: Optional[str] = "Make a choice",
         multi_char: bool = False,
@@ -174,16 +174,33 @@ class TUI:
         If multi_char is True, allows multi-character input and returns it.
         """
 
+        if options:
+            duplicate_options_check = []
+            for option in options:
+                duplicate_options_check.append(option[0].lower())
+            if len(duplicate_options_check) > len(options):
+                log('ERROR', 'Duplicate options detected, cannot proceed', "TUI")
+
         if default:
+            log("DEBUG", "Default detected, setting display marker", prefix="TUI")
             prefix_is_default = '--> '
             prefix_not_default = '    '
         else:
+            log("DEBUG", "No default detected", prefix="TUI")
             prefix_is_default = ''
             prefix_not_default = ''
 
+        if not options and not is_optional and not multi_char:
+            log("DEBUG", "No options provided, not optional, not multi_char", prefix="TUI")
+            options = []
+            options.insert('Press any key to continue...')
+            if not default:
+                default = 'p'
         if options:
+            log("DEBUG", "User options detected, adding 'Abort'", prefix="TUI")
             options.insert(0, 'Abort')
         if options and is_optional:
+            log("DEBUG", "User options detected and is_optional, adding 'Blank'", prefix="TUI")
             options.insert(1, 'Blank')
         option_text = None
         option_characters = None
@@ -266,18 +283,18 @@ class TUI:
 
         return result
 
-    def render_left_and_right_record(self, finding_record: Tuple[model.Finding, model.Finding]):
+    def render_left_and_right_record(self, finding_record: Tuple[model.Finding, model.Finding, float]):
         left_right_table: Table = Table(
             title="Merged Finding (post‑manual)", box=None, show_lines=False
         )
         left_right_table.add_column("Field", style="bold white")
         left_right_table.add_column("Left Value", overflow="fold")
         left_right_table.add_column("Right Value", overflow="fold")
-        left, right = finding_record
+        left, right, score = finding_record
         for field in dataclasses.fields(model.Finding):
-            left_value = getattr(left, field.name, blank_for_type(get_expected_type_str(field.type)))
-            right_value = getattr(right, field.name, blank_for_type(get_expected_type_str(field.type)))
-            left_right_table.add_row(field.name,left_value,right_value)
+            left_value = str(getattr(left, field.name, blank_for_type(get_type_as_str(field.type))))
+            right_value = str(getattr(right, field.name, blank_for_type(get_type_as_str(field.type))))
+            left_right_table.add_row(str(field.name),left_value,right_value)
         self.update_data(left_right_table, title='Preview')
 
     def render_diff_single_field(self, value_from_side_target: Any, value_from_side_comparison: Any,
