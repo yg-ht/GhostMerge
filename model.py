@@ -1,5 +1,7 @@
 # external module imports
+import typing
 from types import NoneType
+from xmlrpc.client import Boolean
 
 from imports import ast, dataclass, field, Any, Dict, List, Optional, Union, re, json, get_origin, get_args, get_type_hints
 # get global state objects (CONFIG and TUI)
@@ -93,10 +95,13 @@ class Finding:
                         if isinstance(coerced, str):
                             coerced = coerced.strip()
                         coerced_data[field_name] = coerced
-                    except Exception as e:
+                    except TypeError as e:
+                        log('ERROR', f"Encountered unexpected required type, aborting", "MODEL")
+                        exit()
+                    except ValueError as e:
                         log('WARN', f'Failed to coerce {field_name} to {expected_type_str}', 'MODEL')
                         log("DEBUG",
-                            f"Field '{field_name}' expected {expected_type_str} but got type {get_type_as_str(raw_value)}: \"{raw_value}\" error is:\n{e}",
+                            f"Field '{field_name}' expected {expected_type_str} but got type {get_type_as_str(type(raw_value))}: \"{raw_value}\" error is:\n{e}",
                             prefix="MODEL")
                         correction = prompt_user_to_fix_field(field_name, field_type, raw_value)
                         if correction[0] == 0:
@@ -214,34 +219,11 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
       - Never calls typing aliases as constructors
     """
 
-    #origin = get_origin(expected_type)
+    origin_type = get_origin(expected_type)
     type_args = get_args(expected_type)
     expected_type_as_str = get_type_as_str(expected_type)
     # Collapse typing origin to a runtime class when available
-    #runtime_type = origin or expected_type
-
-
-    # Handle Union and Optional first
-    if expected_type is Union:
-        non_none = [t for t in type_args if t is not type(None)]
-        if type(None) in type_args and len(non_none) == 1:
-            # Optional[T]
-            if is_blank(value):
-                log("DEBUG", f"Optional value is blank, returning None", prefix="MODEL")
-                return None
-            log("DEBUG", f"Optional detected, coercing to non None member {get_type_as_str(non_none[0])}", prefix="MODEL")
-            return coerce_value(value, non_none[0], field_name)
-
-        # General Union: try each member in order
-        last_err = None
-        for member in type_args:
-            try:
-                return coerce_value(value, member, field_name)
-            except Exception as e:
-                last_err = e
-                continue
-        log("WARN", f"Value did not match any Union member types {tuple(get_type_as_str(a) for a in type_args)}", prefix="MODEL", exception=last_err)
-        raise last_err if last_err else TypeError(f"Value {value!r} does not match {expected_type}")
+    origin_or_expected_type = origin_type or expected_type
 
     # Already correct type
     try:
@@ -257,8 +239,30 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
         log("DEBUG", f"Blank value found", prefix="MODEL")
         return blank_for_type(expected_type_as_str)
 
+    # Handle Union
+    if origin_or_expected_type is Union:
+        log("DEBUG", "Union type expected", prefix="MODEL")
+        non_none = [t for t in type_args if t is not type(None)]
+
+        # General Union: try each member in order
+        last_err = None
+        for type_member in type_args:
+            if type_member in non_none:
+                try:
+                    union_coerced_value = coerce_value(value, type_member, field_name)
+                    return union_coerced_value
+                except Exception as e:
+                    log("DEBUG",
+                        f"Value did not match current Union member type: {get_type_as_str(type_member)}",
+                        prefix="MODEL")
+                    last_err = e
+                    continue
+        log("DEBUG", f"Value did not match any Union member types {tuple(get_type_as_str(a) for a in type_args)}", prefix="MODEL", exception=last_err)
+        raise last_err if last_err else ValueError(f"Value {value!r} does not match {expected_type}")
+
     # Booleans
-    if expected_type is bool:
+    if origin_or_expected_type is bool:
+        log("DEBUG", "Boolean type expected", prefix="MODEL")
         if isinstance(value, (int, float)):
             return bool(value)
         if isinstance(value, str):
@@ -270,7 +274,8 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
         raise ValueError(f"Cannot coerce to bool: {value!r}")
 
     # List[T]
-    if expected_type is list:
+    if origin_or_expected_type is list:
+        log("DEBUG", "List type expected", prefix="MODEL")
         inner = type_args[0] if type_args else Any
         # if it is blank,
         if is_blank(value):
@@ -281,20 +286,10 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
             s = value.strip()
             if not s:
                 return []
-            parsed = None
-            # If this looks like a structured literal, try proper parsing first
-            if s[:1] in "[(" or s[:1] == "{" or s[:1] == '"':
-                # tolerate both JSON and Pythonic quoting
-                try:
-                    parsed = json.loads(s)
-                except Exception as e:
-                    parsed = ast.literal_eval(s)
-                    log("WARN", f"Failed to parse list-ish string structurally: {s!r}", prefix="MODEL", exception=e)
-            if parsed is None:
-                # Heuristic: split delimited strings, otherwise treat as single tag
-                # commas, semicolons, or pipes as delimiters
-                parts = [p.strip() for p in re.split(r"[;,|]", s) if p.strip()]
-                parsed = parts if parts else [s]
+            # Heuristic: split delimited strings, otherwise treat as single tag
+            # commas, semicolons, or pipes as delimiters
+            parts = [p.strip() for p in re.split(r"[;,|]", s) if p.strip()]
+            parsed = parts if parts else [s]
             # Normalise tuple to list in case "(a, b)"
             if isinstance(parsed, tuple):
                 parsed = list(parsed)
@@ -309,7 +304,8 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
         return coerced_list
 
     # dict[K, V]
-    if expected_type is dict:
+    if origin_or_expected_type is dict:
+        log("DEBUG", "Dict type expected", prefix="MODEL")
         key_t, val_t = type_args if len(type_args) == 2 else (Any, Any)
         if is_blank(value):
             log("INFO", f"Blank Dict found, coercing to empty dict", prefix="MODEL")
@@ -336,7 +332,8 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
         return coerced
 
     # Scalars
-    if expected_type in (int, float):
+    if (origin_or_expected_type is int) or (origin_or_expected_type is float):
+        log("DEBUG", "Int or Float type expected", prefix="MODEL")
         try:
             result = expected_type(value)
             log("DEBUG", f"Coerced scalar to {get_type_as_str(expected_type)}: {result!r}", prefix="MODEL")
