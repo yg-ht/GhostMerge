@@ -193,7 +193,7 @@ class TUI:
         if not options and not is_optional and not multi_char:
             log("DEBUG", "No options provided, not optional, not multi_char", prefix="TUI")
             options = []
-            options.insert('Press any key to continue...')
+            options.append('Press any key to continue...')
             if not default:
                 default = 'p'
         if options:
