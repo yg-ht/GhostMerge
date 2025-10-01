@@ -43,6 +43,7 @@ class Finding:
         Convert a raw dict (e.g., from JSON) into a Finding instance, validating and coercing fields
         with interactive user prompting when mismatches occur.
         """
+        tui = get_tui()
         try:
             log("DEBUG", f"Parsing finding from data: {data}", prefix="MODEL")
             coerced_data = {}
@@ -90,29 +91,30 @@ class Finding:
                     coerced_data[field_name] = raw_value
                 else:
                     try:
-                        log('DEBUG', f'Attempting to coerce {field_name} to {expected_type_str}', 'MODEL')
+                        log('DEBUG', f'Attempting to coerce {field_name} to {expected_type_str}', prefix='MODEL')
                         coerced = coerce_value(raw_value, field_type, field_name)
                         if isinstance(coerced, str):
                             coerced = coerced.strip()
                         coerced_data[field_name] = coerced
                     except TypeError as e:
-                        log('ERROR', f"Encountered unexpected required type, aborting", "MODEL")
+                        log('ERROR', f"Encountered unexpected required type, aborting", prefix="MODEL")
                         exit()
                     except ValueError as e:
-                        log('WARN', f'Failed to coerce {field_name} to {expected_type_str}', 'MODEL')
+                        log('WARN', f'Failed to coerce {field_name} to {expected_type_str}', prefix='MODEL')
                         log("DEBUG",
                             f"Field '{field_name}' expected {expected_type_str} but got type {get_type_as_str(type(raw_value))}: \"{raw_value}\" error is:\n{e}",
                             prefix="MODEL")
+                        tui.render_single_partial_dict_record(data)
                         correction = prompt_user_to_fix_field(field_name, field_type, raw_value)
                         if correction[0] == 0:
-                            log('DEBUG', f"User prompt to resolve successful", "MODEL")
+                            log('DEBUG', f"User prompt to resolve successful", prefix="MODEL")
                             coerced_data[field_name] = correction[1]
                         elif correction[0] == 1:
-                            log('INFO', f"User prompt to resolve not successful", "MODEL")
+                            log('INFO', f"User prompt to resolve not successful", prefix="MODEL")
                             return None
                         else:
                             log('ERROR', f"User prompt to resolve field type mismatch not successful for "
-                                         f"unknown reason - aborting", "MODEL")
+                                         f"unknown reason - aborting", prefix="MODEL")
                             exit()
 
             # Validate severity

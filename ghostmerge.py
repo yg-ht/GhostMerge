@@ -95,6 +95,7 @@ def ghostmerge(
     log("INFO", f"After all fuzzy matching there are {len(unmatched_right)} unmatched findings from right", prefix="CLI")
 
     log("INFO", f"Starting interactive merge for {len(matches)} fuzzy matched findings", prefix="CLI")
+
     merged_left, merged_right = [], []
     for match in matches:
         log("INFO", f"Processing matched pair: ID Left={match['left'].id} ↔ ID Right={match['right'].id} (score: {match['score']:.2f})", prefix="CLI")

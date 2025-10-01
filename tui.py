@@ -3,7 +3,7 @@ import dataclasses
 
 import model
 from imports import (difflib, os, subprocess, tempfile, threading, sleep, Console, RenderableType, readchar,
-                     Layout, Live, Panel, Text, Table, Columns, Any, List, Optional, MarkupError, Tuple)
+                     Layout, Live, Panel, Text, Table, Columns, Any, List, Optional, MarkupError, Tuple, Dict)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, set_tui
 from model import get_type_as_str
@@ -30,7 +30,7 @@ class TUI:
         self.layout = Layout(name="root")
         self.layout.split(
             Layout(name="data_viewer", ratio=2),
-            Layout(name="messages", size=20),
+            Layout(name="messages", size=10),
             Layout(name="user_input", size=10)
         )
         log('DEBUG', 'Split console layout', 'TUI')
@@ -88,8 +88,8 @@ class TUI:
         # Split incoming text into lines, add each separately
         new_lines = message_str.splitlines()
         self._message_history.extend(new_lines)
-        # Limit history to the last 8 lines
-        self._message_history = self._message_history[-18:]
+        # Limit history to the last X lines
+        self._message_history = self._message_history[-8:]
 
         # Combine the history for display
         history_text = "\n".join(self._message_history)
@@ -283,19 +283,52 @@ class TUI:
 
         return result
 
-    def render_left_and_right_record(self, finding_record: Tuple[model.Finding, model.Finding, float]):
+    def render_left_and_right_record(self, finding_record: Tuple[model.Finding, model.Finding, float], differences: str):
         left_right_table: Table = Table(
             title="Merged Finding (post‑manual)", box=None, show_lines=False
         )
-        left_right_table.add_column("Field", style="bold white")
+        left_right_table.add_column("Field Name", style="bold white")
         left_right_table.add_column("Left Value", overflow="fold")
         left_right_table.add_column("Right Value", overflow="fold")
-        left, right, score = finding_record
+        left_record = finding_record['left']
+        right_record = finding_record['right']
+        score = finding_record['score']
+        log('INFO', f'These two records have a {score}% match', prefix='TUI')
         for field in dataclasses.fields(model.Finding):
-            left_value = str(getattr(left, field.name, blank_for_type(get_type_as_str(field.type))))
-            right_value = str(getattr(right, field.name, blank_for_type(get_type_as_str(field.type))))
-            left_right_table.add_row(str(field.name),left_value,right_value)
+            left_value = str(getattr(left_record, field.name, blank_for_type(get_type_as_str(field.type))))
+            right_value = str(getattr(right_record, field.name, blank_for_type(get_type_as_str(field.type))))
+            log('DEBUG', f'Rendering field {field.name}: {left_value} -> {right_value}', prefix="TUI")
+            if field.name in differences:
+                field_style ="bold red"
+            else:
+                field_style = ""
+            left_right_table.add_row(str(field.name),left_value,right_value, style=field_style)
         self.update_data(left_right_table, title='Preview')
+
+    def render_single_partial_dict_record(self, finding_record: Dict):
+        record_table: Table = Table(
+            title="Raw finding from Dict", box=None, show_lines=False
+        )
+        log('DEBUG', f'Rendering record: {str(finding_record)}', prefix="TUI")
+        record_table.add_column("Field Name", style="bold white")
+        record_table.add_column("Field Value", overflow="fold")
+        for id, field_name in enumerate(finding_record):
+            log('DEBUG', f'Rendering field: {str(field_name)} with value: {str(finding_record[field_name])}', prefix="TUI")
+            record_table.add_row(str(field_name), str(finding_record[field_name]))
+        self.update_data(record_table, title='Preview')
+
+    def render_single_whole_finding_record(self, finding_record: model.Finding):
+        record_table: Table = Table(
+            title="Merged Finding (post‑manual)", box=None, show_lines=False
+        )
+        record_table.add_column("Field Name", style="bold white")
+        record_table.add_column("Field Value", overflow="fold")
+        for field in dataclasses.fields(model.Finding):
+            field_value = str(getattr(finding_record, field.name, blank_for_type(get_type_as_str(field.type))))
+            log('DEBUG', f'Rendering field {field.name}: {field_value}', prefix="TUI")
+            # style here ####
+            record_table.add_row(str(field.name), field_value)
+        self.update_data(record_table, title='Preview')
 
     def render_diff_single_field(self, value_from_side_target: Any, value_from_side_comparison: Any,
                                  title: Optional[str] = "Field-level diff") -> Columns:

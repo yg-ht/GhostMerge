@@ -106,6 +106,7 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
     # Step 1 – Generate the auto-offered suggestions
     auto_value_fields: Dict[str, Any] = get_auto_suggest_values(finding_left_side, finding_right_side)
 
+    different_fields = ' | '
     # Iterate deterministically over field names.
     for field in fields(Finding):
         if field.name is "id":
@@ -124,17 +125,20 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
                     f"| Right={value_from_right!r} | Auto={auto_value!r}",prefix="MERGE",)
 
         # Fast‑path when both sides agree and match the offered suggestion.
-        if (value_from_left == value_from_right == auto_value):
+        if (value_from_left == value_from_right):
             #merged_record_left[field.name] = auto_value
             setattr(merged_record_left, field.name, auto_value)
 #            merged_record_right[field.name] = auto_value
             setattr(merged_record_right, field.name, auto_value)
             log("DEBUG",f"Field '{field}' identical across both sides – auto‑accepted.",prefix="MERGE",)
             continue
+        else:
+            different_fields = different_fields + field.name + ' | '
 
         # ── Interactive resolution ──────────────────────────────────────────
-        tui.render_left_and_right_record(finding_record_pair)
-        log('WARN', 'Difference detected, please review ready for merge actions', 'MERGE')
+        log('WARN', f'Difference detected in: {different_fields}', 'MERGE')
+        tui.render_left_and_right_record(finding_record_pair, different_fields)
+        log('WARN', 'Please review above, ready for merge actions', 'MERGE')
 
         tui.render_user_choice('Waiting for user to complete data review')
 
