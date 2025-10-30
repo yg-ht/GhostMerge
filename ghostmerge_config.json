@@ -4,7 +4,7 @@
   "log_verbosity_matching": "INFO",
   "log_verbosity_merge": "INFO",
   "log_verbosity_model": "INFO",
-  "log_verbosity_sensitivity": "WARN",
+  "log_verbosity_sensitivity": "DEBUG",
   "log_verbosity_tui": "INFO",
   "log_verbosity_utils": "INFO",
   "log_file_enabled": true,

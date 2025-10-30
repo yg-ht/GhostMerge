@@ -1,10 +1,10 @@
 # external module imports
 from imports import (Dict, List, Tuple, Optional)
 # get global state objects (CONFIG and TUI)
-from globals import get_config
+from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log
+from utils import log, stringify_field
 from model import Finding
 
 def load_sensitive_terms(path: str) -> Dict[str, Optional[str]]:
@@ -31,33 +31,49 @@ def load_sensitive_terms(path: str) -> Dict[str, Optional[str]]:
         raise
     return terms
 
-def scan_for_sensitive_terms(text: str, terms: Dict[str, Optional[str]]) -> List[Tuple[str, Optional[str]]]:
-    """Scans a string for known sensitive terms. Returns list of (term, suggestion)."""
-    found = []
-    lowered = text.lower()
-    log("DEBUG", f"Scanning text of length {len(text)} for {len(terms)} terms", prefix="SENSITIVITY")
+def check_for_sensitivities(field) -> List[Tuple[str, Optional[str]]]:
+    """Returns List of [(found_term, optional suggested_replacement)...] if sensitivities are found, else None."""
+    terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"])
 
-    for term, replacement in terms.items():
-        if term in lowered:
-            log("DEBUG", f"Match found: '{term}' → Suggested: '{replacement}'", prefix="SENSITIVITY")
-            found.append((term, replacement))
-    return found
-
-def check_finding_for_sensitivities(finding: Finding, terms: Dict[str, Optional[str]]) -> Dict[str, List[Tuple[str, Optional[str]]]]:
-    """Returns dict of field -> [(term, suggestion)...] if sensitivities are found."""
-    results = {}
-    fields_to_check = [
-        "description", "impact", "mitigation", "replication_steps",
-        "references", "finding_guidance"
-    ]
-    log("DEBUG", f"Checking finding ID: {finding.id} for sensitive content", prefix="SENSITIVITY")
-    for field in fields_to_check:
-        content = getattr(finding, field, None)
-        if not content or not isinstance(content, str):
-            log("DEBUG", f"Skipping field '{field}' (empty or non-string)", prefix="SENSITIVITY")
-            continue
-        matches = scan_for_sensitive_terms(content, terms)
-        if matches:
-            log("INFO", f"Sensitive terms found in '{field}': {matches}", prefix="SENSITIVITY")
-            results[field] = matches
+    results = []
+    stringified_field = stringify_field(field)
+    log("DEBUG", f"Checking content starting: {stringified_field:50} for sensitive content", prefix="SENSITIVITY")
+    if not stringified_field or not isinstance(stringified_field, str):
+        log("DEBUG", f"Skipping field '{field}' (empty or non-string)", prefix="SENSITIVITY")
+        return None
+    else:
+        lowered = stringified_field.lower()
+        log("DEBUG", f"Scanning text ({len(stringified_field)} chars) for {len(terms)} terms", prefix="SENSITIVITY")
+        for term, replacement in terms.items():
+            if term in lowered:
+                log("DEBUG", f"Sensitive term found: '{term}' → Suggested: '{replacement}'", prefix="SENSITIVITY")
+                results.append((term, replacement))
     return results
+
+def main_sensitivities_checker(field_value: str, field_side: str) -> str | None:
+    sensitivity_hits = check_for_sensitivities(field_value)
+    tui = get_tui()
+
+    result = None
+
+    if len(sensitivity_hits) > 0:
+        action_choices = ['Edit', 'Keep']
+        for sensitive_term, offered in sensitivity_hits:
+            prompt = f"Sensitive term [yellow]{sensitive_term}[/yellow] in [bold]{field_value}[/bold] on {field_side}\n\n"
+            if offered:
+                prompt += f"Offered: [yellow]{sensitive_term}[/yellow] → [green]{offered}[/green]"
+                action_choices.append('Offered')
+
+            action = tui.render_user_choice(prompt, options=action_choices,
+                                            title=f"Field-level resolution: {field_value.name}")
+
+            if action == "o" and offered:
+                result = field_value.replace(sensitive_term, offered)
+            elif action == "e":
+                edited_term = tui.invoke_editor(field_value)
+                result = field_value.replace(sensitive_term, edited_term)
+            elif action == "k":
+                log("WARN", "Keep field as is", prefix="MERGE")
+                continue
+
+    return result

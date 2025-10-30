@@ -278,6 +278,13 @@ def is_optional_field(expected_type):
         log('DEBUG', 'Mandated field detected', prefix="MODEL")
     return is_optional
 
+def stringify_field(value: Any) -> str:
+    if isinstance(value, dict):
+        return dumps(value, indent=2, sort_keys=True)
+    elif isinstance(value, list):
+        return "\n".join(map(str, value))
+    return str(value or "")
+
 def return_ASCII_art():
     images = []
     images.append('ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKWkeKWkuKWk+KWk+KWkuKWkSAgICAgICAgICAgICAgICAgICA'

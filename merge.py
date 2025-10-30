@@ -7,7 +7,7 @@ CONFIG = get_config()
 # local module imports
 from utils import log, normalise_tags, is_blank, blank_for_type
 from model import Finding, is_optional_field, get_type_as_str
-from sensitivity import load_sensitive_terms, check_finding_for_sensitivities
+from sensitivity import main_sensitivities_checker
 
 # ── Conflict Resolution ─────────────────────────────────────────────
 def resolve_conflict(value_from_left, value_from_right) -> str:
@@ -32,13 +32,6 @@ def resolve_conflict(value_from_left, value_from_right) -> str:
         return value_from_right
     else:
         return value_from_left if len_left >= len_right else value_from_right
-
-def stringify_for_diff(value: Any) -> str:
-    if isinstance(value, dict):
-        return dumps(value, indent=2, sort_keys=True)
-    elif isinstance(value, list):
-        return "\n".join(map(str, value))
-    return str(value or "")
 
 # ── Finding Merge ───────────────────────────────────────────────────
 def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Finding) -> dict:
@@ -65,7 +58,7 @@ def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Find
             normalised_tags_left = normalise_tags(" ".join(value_from_left or []))
             normalised_tags_right = normalise_tags(" ".join(value_from_right or []))
             auto_fields["tags"] = list(set(normalised_tags_left + normalised_tags_right))
-            log("DEBUG", f"Tags normalised and merged for auto-value", prefix="MERGE")
+            log("DEBUG", f"Tags normalised and combined for auto-value", prefix="MERGE")
 
         elif field_name == "extra_fields":
             resolved_extra_fields = {}
@@ -142,22 +135,28 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
 
         tui.render_user_choice('Waiting for user to complete data review')
 
-        tui.render_diff_single_field(value_from_left, value_from_right, title=f"Field diff for {field}")
+        tui.render_diff_single_field(value_from_left, value_from_right, auto_value, title=f"Field diff for {field.name}")
+
+        analyst_options = ['Keep both', 'Left only', 'Right only']
 
         # Establish which option should be highlighted as the default.
-        if auto_value:
-            default_choice: str = "o"
+        default_choice = ''
+        if not auto_value:
+            log("DEBUG", "Offered / auto_value is blank, not adding option")
         else:
-            default_choice: str = "e"
+            if field.name == 'tags':
+                analyst_options.append(f'Offered (combine all tags)')
+            elif field.name == 'extra_fields':
+                analyst_options.append(f'Offered (combine all fields)')
+            default_choice: str = 'o'
 
-        analyst_options = ['Keep both', 'Left only', 'Right only', 'Offered']
         # If the field is permitted to be blank, add this as an option
         is_optional = is_optional_field(expected_type_str)
         if is_optional:
             analyst_options.append(f'Blank')
 
         analyst_choice = tui.render_user_choice('Choose:', analyst_options, default_choice,
-                                                f'Field-level resolution: {field}')
+                                                f"Field-level resolution")
 
         log(
             "DEBUG",
@@ -167,44 +166,29 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
 
         # Commit the chosen value into the merged record.
         if analyst_choice == "b" and is_optional:
-            merged_record_left['left'][field.name] = blank_for_type(expected_type_str)
-            merged_record_left['right'][field.name] = blank_for_type(expected_type_str)
+            setattr(merged_record_left, field.name, blank_for_type(expected_type_str))
+            setattr(merged_record_right, field.name, blank_for_type(expected_type_str))
         if analyst_choice == "k":
-            merged_record_left['left'][field.name] = value_from_left
-            merged_record_left['right'][field.name] = value_from_right
+            setattr(merged_record_left, field.name, value_from_left)
+            setattr(merged_record_right, field.name, value_from_right)
         elif analyst_choice == "l":
-            merged_record_left['left'][field.name] = value_from_left
-            merged_record_left['right'][field.name] = value_from_left
+            setattr(merged_record_left, field.name, value_from_left)
+            setattr(merged_record_right, field.name, value_from_left)
         elif analyst_choice == "r":
-            merged_record_left['left'][field.name] = value_from_right
-            merged_record_left['right'][field.name] = value_from_right
-        elif analyst_choice == "o":
-            merged_record_left['left'][field.name] = auto_value
-            merged_record_left['right'][field.name] = auto_value
+            setattr(merged_record_left, field.name, value_from_right)
+            setattr(merged_record_right, field.name, value_from_right)
+        elif analyst_choice == "o" and auto_value:
+            setattr(merged_record_left, field.name, auto_value)
+            setattr(merged_record_right, field.name, auto_value)
 
         # Sensitivity check inline per field
         if CONFIG['sensitivity_check_enabled']:
-            sensitive_terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"])
-            temp_finding = Finding.from_dict({"id": finding_left_side.id, field: merged_record_left[field.name]})
-            sensitivity_hits = check_finding_for_sensitivities(temp_finding, sensitive_terms)
+            result_sensitivities_left = main_sensitivities_checker(getattr(merged_record_left, field.name), 'Left')
+            result_sensitivities_right = main_sensitivities_checker(getattr(merged_record_right, field.name), 'Right')
 
-            if sensitivity_hits.get(field.name):
-                action_choices = ['Edit', 'Keep']
-                for sensitive_term, offered in sensitivity_hits[field.name]:
-                    prompt = f"Sensitive term [yellow]{sensitive_term}[/yellow] in [bold]{field}[/bold]\n\n"
-                    if offered:
-                        prompt += f"Offered: [yellow]{sensitive_term}[/yellow] → [green]{offered}[/green]"
-                        action_choices.append('Offered')
-
-                    action = tui.render_user_choice(prompt, options=action_choices, title=f"Field-level resolution: {field.name}")
-
-                    if action == "o" and offered:
-                        merged_record_left[field.name] = merged_record_left[field.name].replace(sensitive_term, offered)
-                    elif action == "e":
-                        merged_record_left[field.name] = tui.invoke_editor(merged_record_left[field.name])
-                    elif action == "k":
-                        log("WARN", "Keep field as is", prefix="MERGE")
-                        continue
+            if result_sensitivities_left:
+                for sensitive_result in result_sensitivities_left:
+                    setattr(merged_record_left, field.name, auto_value)
 
     log("INFO", "This record's merge is finalised.", prefix="MERGE")
     return tuple([Finding.from_dict(merged_record_left), Finding.from_dict(merged_record_right)])

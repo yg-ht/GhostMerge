@@ -11,8 +11,7 @@ from model import get_type_as_str
 CONFIG = get_config()
 
 # local module imports
-from utils import log, blank_for_type
-from merge import stringify_for_diff
+from utils import log, blank_for_type, is_blank, stringify_field
 
 __all__ = ["tui"]
 
@@ -191,11 +190,10 @@ class TUI:
             prefix_not_default = ''
 
         if not options and not is_optional and not multi_char:
-            log("DEBUG", "No options provided, not optional, not multi_char", prefix="TUI")
+            log("DEBUG", "No options provided, not an optional field, not multi_char", prefix="TUI")
             options = []
-            options.append('Press any key to continue...')
-            if not default:
-                default = 'p'
+            options.append('Press "enter" or "space" to continue...')
+            default = 'p'
         if options:
             log("DEBUG", "User options detected, adding 'Abort'", prefix="TUI")
             options.insert(0, 'Abort')
@@ -237,6 +235,7 @@ class TUI:
         Returns the selected character as lowercase. If multi_char is True, allows user to input any string.
         """
 
+        log("DEBUG", f"User choices are: {str(choices)}", prefix="TUI")
         if multi_char:
             # Read a string instead of a single char
             buffer = ""
@@ -266,11 +265,12 @@ class TUI:
             if default:
                 default = default.lower()
                 if default not in choices:
-                    raise log("DEBUG", f"Default choice '{default}' not in choices: {str(choices)}", prefix="TUI")
+                    log("WARN", f"Default choice '{default}' not in choices: {str(choices)}", prefix="TUI")
 
             while True:
                 user_input = readchar().lower()
-                if user_input == "" and default:
+                log("DEBUG", f"User input detected: {user_input}", prefix="TUI")
+                if user_input.strip() == "" and default:
                     result = default
                     break
                 if isinstance(choices, List):
@@ -330,7 +330,7 @@ class TUI:
             record_table.add_row(str(field.name), field_value)
         self.update_data(record_table, title='Preview')
 
-    def render_diff_single_field(self, value_from_side_target: Any, value_from_side_comparison: Any,
+    def render_diff_single_field(self, value_from_left: Any, value_from_right: Any, auto_value: Optional[str] = None,
                                  title: Optional[str] = "Field-level diff") -> Columns:
         """Return two side‑by‑side Panels that highlight differences.
 
@@ -340,40 +340,52 @@ class TUI:
 
         log(
             "DEBUG",
-            f"Field types: Target={type(value_from_side_target)}, Comparison={type(value_from_side_comparison)}",
+            f"Field types: Left={type(value_from_left)}, Right={type(value_from_right)}, Auto={auto_value}, Title={title}",
             prefix="TUI",
         )
 
         # Serialise non‑scalar data for human‑readable diff output.
-        stringified_target = stringify_for_diff(value_from_side_target)
-        stringified_comparison = stringify_for_diff(value_from_side_comparison)
+        stringified_target = stringify_field(value_from_left)
+        stringified_comparison = stringify_field(value_from_right)
 
         # Build Rich *Text* fragments with colour annotations.
-        diff_for_side_target: Text = Text()
-        diff_for_side_comparison: Text = Text()
+        diff_for_side_left: Text = Text()
+        diff_for_side_right: Text = Text()
 
         for line in difflib.ndiff(
             stringified_target.splitlines(), stringified_comparison.splitlines()
         ):
             change_code, line_content = line[:2], line[2:]
-            if change_code == "- ":  # Present only in A – mark red in A panel.
-                diff_for_side_target.append(line_content + "\n", style="bold blue")
-            elif change_code == "+ ":  # Present only in B – mark green in B panel.
-                diff_for_side_comparison.append(line_content + "\n", style="bold green")
-            else:  # Unchanged or intraline hint – copy to both panels.
-                diff_for_side_target.append(line_content + "\n")
-                diff_for_side_comparison.append(line_content + "\n")
+            if change_code == "- ":  # Present only in Left – mark blue in Left panel.
+                diff_for_side_left.append(line_content + "\n", style="bold blue")
+            elif change_code == "+ ":  # Present only in Right – mark green in B panel.
+                diff_for_side_right.append(line_content + "\n", style="bold blue")
+            else:  # Unchanged or intra-line hint – copy to both panels.
+                diff_for_side_left.append(line_content + "\n")
+                diff_for_side_right.append(line_content + "\n")
 
         log("DEBUG", f"render_diff_single_field construction complete", prefix="TUI")
 
-        field_diff = Columns(
-            [
-                Panel(diff_for_side_target or Text("<empty>"), title="Target", padding=(0, 1)),
-                Panel(diff_for_side_comparison or Text("<empty>"), title="Comparison", padding=(0, 1)),
-            ],
-            equal=True,
-            expand=True,
-        )
+        if auto_value is not None:
+            stringified_auto = stringify_field(auto_value)
+            field_diff = Columns(
+                [
+                    Panel(diff_for_side_left or Text("<empty>"), title="Left", padding=(0, 1)),
+                    Panel(diff_for_side_right or Text("<empty>"), title="Right", padding=(0, 1)),
+                    Panel(stringified_auto or Text("<empty>"), title="Offered resolution", padding=(0, 1)),
+                ],
+                equal=True,
+                expand=True,
+            )
+        else:
+            field_diff = Columns(
+                [
+                    Panel(diff_for_side_left or Text("<empty>"), title="Left", padding=(0, 1)),
+                    Panel(diff_for_side_right or Text("<empty>"), title="Right", padding=(0, 1)),
+                ],
+                equal=True,
+                expand=True,
+            )
 
         self.update_data(field_diff, title=title)
 
