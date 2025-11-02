@@ -25,12 +25,15 @@ class TUI:
         self.console = Console()
         log('DEBUG', 'Started console', 'TUI')
 
+        self.num_lines_messages = 10
+        self.num_lines_input = 10
+
         # Split the screen into logical sections
         self.layout = Layout(name="root")
         self.layout.split(
             Layout(name="data_viewer", ratio=2),
-            Layout(name="messages", size=10),
-            Layout(name="user_input", size=10)
+            Layout(name="messages", size=self.num_lines_messages + 2),
+            Layout(name="user_input", size=self.num_lines_input + 2)
         )
         log('DEBUG', 'Split console layout', 'TUI')
 
@@ -45,6 +48,18 @@ class TUI:
         # set the global variable
         log('DEBUG', 'Calling set_tui', 'TUI')
         set_tui(self)
+
+    def resize_splits(self):
+        # Split the screen into logical sections
+        log('DEBUG', 'Unspliting console layout', 'TUI')
+        self.layout.unsplit()
+        self.layout.split(
+            Layout(name="data_viewer", ratio=2),
+            Layout(name="messages", size=CONFIG['num_lines_messages'] + 2),
+            Layout(name="user_input", size=CONFIG['num_lines_input'] + 2)
+        )
+        log('DEBUG', 'Resplit console layout', 'TUI')
+
 
     def _render_loop(self):
         with Live(self.layout, refresh_per_second=self._refresh_rate, screen=False) as live:
@@ -94,7 +109,7 @@ class TUI:
         new_lines = message_str.splitlines()
         self._message_history.extend(new_lines)
         # Limit history to the last X lines
-        self._message_history = self._message_history[-8:]
+        self._message_history = self._message_history[-self.num_lines_messages:]
 
         # Combine the history for display
         history_text = "\n".join(self._message_history)
@@ -292,7 +307,7 @@ class TUI:
 
     def render_left_and_right_record(self, finding_record: Tuple[model.Finding, model.Finding, float], differences: str = ''):
         left_right_table: Table = Table(
-            title="Merged Finding (post‑manual)", box=None, show_lines=False
+            title="Merged Finding", box=None, show_lines=False
         )
         left_right_table.add_column("Field Name", style="bold white")
         left_right_table.add_column("Left Value", overflow="fold")
@@ -324,16 +339,19 @@ class TUI:
             record_table.add_row(str(field_name), str(finding_record[field_name]))
         self.update_data(record_table, title='Preview')
 
-    def render_single_whole_finding_record(self, finding_record: model.Finding):
+    def render_single_whole_finding_record(self, finding_record: model.Finding, highlight_value: str = None):
         record_table: Table = Table(
             title="Merged Finding (post‑manual)", box=None, show_lines=False
         )
         record_table.add_column("Field Name", style="bold white")
         record_table.add_column("Field Value", overflow="fold")
         for field in dataclasses.fields(model.Finding):
-            field_value = str(getattr(finding_record, field.name, blank_for_type(get_type_as_str(field.type))))
+            field_value = str(finding_record.get(field.name) or blank_for_type(get_type_as_str(field.type)))
             log('DEBUG', f'Rendering field {field.name}: {field_value}', prefix="TUI")
             # style here ####
+            if highlight_value:
+                field_value.replace(highlight_value,f'[{CONFIG["field_level_diff_highlight_style"]}]'
+                                                    f'{highlight_value}[/{CONFIG["field_level_diff_highlight_style"]}]')
             record_table.add_row(str(field.name), field_value)
         self.update_data(record_table, title='Preview')
 

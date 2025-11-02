@@ -170,6 +170,21 @@ class Finding:
                 return getattr(self, key)
             return self.extra_fields.get(key, default) if self.extra_fields else default
 
+    def set(self, key: str, value: Any = None) -> Any:
+        """
+        Mimics dict.set() for dataclass attributes.
+        Returns True if successful, otherwise False.
+        """
+        if not key or key == '':
+            log("WARN", f'Attempted and failed to set attribute with blank or non-str key: "{str(key)}"', prefix='MODEL')
+        elif not hasattr(self, key):
+            log("WARN", f'Attempted and failed to set non-existant key: "{str(key)}"', prefix='MODEL')
+        else:
+            setattr(self, key, value)
+            return True
+        # if not definitively successful, return False
+        return False
+
 def prompt_user_to_fix_field(field_name: str, expected_type: type, current_value: Any) -> tuple[int, Any]:
     """Prompt user to correct an invalid field inline"""
     tui = get_tui()

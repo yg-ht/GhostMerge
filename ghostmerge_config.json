@@ -4,8 +4,8 @@
   "log_verbosity_matching": "INFO",
   "log_verbosity_merge": "DEBUG",
   "log_verbosity_model": "INFO",
-  "log_verbosity_sensitivity": "INFO",
-  "log_verbosity_tui": "DEBUG",
+  "log_verbosity_sensitivity": "DEBUG",
+  "log_verbosity_tui": "INFO",
   "log_verbosity_utils": "INFO",
   "log_file_enabled": true,
   "log_file_path": "ghostmerge.log",
@@ -25,5 +25,7 @@
   "tui_refresh_rate": 4.0,
   "field_level_diff_highlight_style": "bold blue",
   "field_level_diff_nolight_style": "bold white",
-  "field_level_diff_max_width": 80
+  "field_level_diff_max_width": 80,
+  "num_lines_messages": 15,
+  "num_lines_input": 15
 }

@@ -1,13 +1,13 @@
 # external module imports
 import model
-from imports import (dumps, Table, Any, Dict, List, fields, Tuple)
+from imports import (Any, Dict, fields, Tuple)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
 from utils import log, normalise_tags, is_blank, blank_for_type
 from model import Finding, is_optional_field, get_type_as_str
-from sensitivity import main_sensitivities_checker
+from sensitivity import sensitivities_checker_single_field
 
 # ── Conflict Resolution ─────────────────────────────────────────────
 def resolve_conflict(value_from_left, value_from_right) -> str:
@@ -34,7 +34,7 @@ def resolve_conflict(value_from_left, value_from_right) -> str:
         return value_from_left if len_left >= len_right else value_from_right
 
 # ── Finding Merge ───────────────────────────────────────────────────
-def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Finding) -> dict:
+def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Finding) -> Finding:
     """
     Performs a detailed, field-by-field selection process of two Finding objects to determine an auto-suggest value.
     """
@@ -75,56 +75,51 @@ def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Find
             log("DEBUG", f"Resolved field '{field_name}' → Left:{value_from_left} | Right:{value_from_right} → '{resolved_value}'", prefix="MERGE")
 
     log("INFO", f"Gathered the auto-complete values for Left (ID #{finding_from_left.id}) and Right (ID #{finding_from_right.id})", prefix="MERGE")
-    return auto_fields
+    return Finding.from_dict(auto_fields)
 
 # ── Main merge logic ───────────────────────────────────────────────────
-def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Finding]:
+def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Finding]:
     """Run automatic merge then solicit human confirmation/overrides.
 
-    The *canonical* merge result produced by ``merge_individual_findings`` is
-    treated as the default for every field.  The analyst sees a diff and may
-    pick, such as:
+    finding_record_pair has this structure:
+    {
+        'left': finding_record_pair['left'],
+        'right': finding_record_pair['right'],
+        'score': finding_record_pair['score']
+    }
+
+    auto_value_fields: has this structure:
+    Dict[str, Any] = get_auto_suggest_values(finding_record_pair['left'], finding_record_pair['right'])
+
     """
     tui = get_tui()
 
-    finding_left_side = finding_record_pair['left']
-    finding_right_side = finding_record_pair['right']
-    score = finding_record_pair['score']
-    merged_record_left = Finding(finding_left_side.id)
-    merged_record_right = Finding(finding_right_side.id)
-    merged_record_pair = {}
-    #### THIS BIT ###
-
-
-    log("INFO", f"Starting merge_main for: {finding_left_side.id} ↔ {finding_right_side.id}", prefix="MERGE")
+    log("INFO", f"Starting merge_main for: {finding_pair['left'].id} ↔ {finding_pair['right'].id}", prefix="MERGE")
 
     # Step 1 – Generate the auto-offered suggestions
-    auto_value_fields: Dict[str, Any] = get_auto_suggest_values(finding_left_side, finding_right_side)
+    finding_pair.update({'auto': get_auto_suggest_values(finding_pair['left'], finding_pair['right'])})
 
     different_fields = ' | '
     # Iterate deterministically over field names.
     for field in fields(Finding):
         if field.name is "id":
-            merged_record_left.id = finding_left_side.id
-            merged_record_right.id = finding_right_side.id
+            # we retain these IDs so can just skip
             continue
 
         # get the expected type once for future efforts
         expected_type_str = get_type_as_str(field.type)
 
-        value_from_left: Any = getattr(finding_left_side, field.name, blank_for_type(get_type_as_str(field.type)))
-        value_from_right: Any = getattr(finding_right_side, field.name, blank_for_type(get_type_as_str(field.type)))
-        auto_value: Any = auto_value_fields[field.name]
+        value_from_left: Any = getattr(finding_pair.get('left'), field.name, blank_for_type(get_type_as_str(field.type)))
+        value_from_right: Any = getattr(finding_pair.get('right'), field.name, blank_for_type(get_type_as_str(field.type)))
+        auto_value: Any = finding_pair.get('auto').get(field.name)
 
         log("DEBUG",f"Field '{field}': Left={value_from_left!r} "
                     f"| Right={value_from_right!r} | Auto={auto_value!r}",prefix="MERGE",)
 
         # Fast‑path when both sides agree and match the offered suggestion.
         if (value_from_left == value_from_right):
-            #merged_record_left[field.name] = auto_value
-            setattr(merged_record_left, field.name, auto_value)
-#            merged_record_right[field.name] = auto_value
-            setattr(merged_record_right, field.name, auto_value)
+            finding_pair['left'].set(field.name, auto_value)
+            finding_pair['right'].set(field.name, auto_value)
             log("DEBUG",f"Field '{field}' identical across both sides – auto‑accepted.",prefix="MERGE",)
             continue
         else:
@@ -132,14 +127,14 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
 
         # ── Interactive resolution ──────────────────────────────────────────
         log('WARN', f'Difference detected in: {different_fields}', 'MERGE')
-        tui.render_left_and_right_record(finding_record_pair, different_fields)
+        tui.render_left_and_right_record(finding_pair, different_fields)
         log('WARN', 'Please review above, ready for merge actions', 'MERGE')
 
         tui.render_user_choice('Waiting for user to complete data review')
 
         tui.render_diff_single_field(value_from_left, value_from_right, auto_value, title=f"Field diff for {field.name}")
 
-        analyst_options = ['Keep both', 'Left only', 'Right only']
+        analyst_options = ['Keep both', 'Left only', 'Right only', 'Merge (left + right)']
 
         # Establish which option should be highlighted as the default.
         default_choice = ''
@@ -170,34 +165,23 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
 
         # Commit the chosen value into the merged record.
         if analyst_choice == "b" and is_optional:
-            setattr(merged_record_left, field.name, blank_for_type(expected_type_str))
-            setattr(merged_record_right, field.name, blank_for_type(expected_type_str))
+            finding_pair['left'].set(field.name, blank_for_type(expected_type_str))
+            finding_pair['right'].set(field.name, blank_for_type(expected_type_str))
         if analyst_choice == "k":
-            setattr(merged_record_left, field.name, value_from_left)
-            setattr(merged_record_right, field.name, value_from_right)
+            finding_pair['left'].set(field.name, value_from_left)
+            finding_pair['right'].set(field.name, value_from_right)
         elif analyst_choice == "l":
-            setattr(merged_record_left, field.name, value_from_left)
-            setattr(merged_record_right, field.name, value_from_left)
+            finding_pair['left'].set(field.name, value_from_left)
+            finding_pair['right'].set(field.name, value_from_left)
+        elif analyst_choice == "m":
+            finding_pair['left'].set(field.name, f"{value_from_left} {value_from_right}")
+            finding_pair['right'].set(field.name, f"{value_from_left} {value_from_right}")
         elif analyst_choice == "r":
-            setattr(merged_record_left, field.name, value_from_right)
-            setattr(merged_record_right, field.name, value_from_right)
+            finding_pair['left'].set(field.name, value_from_right)
+            finding_pair['right'].set(field.name, value_from_right)
         elif analyst_choice == "o" and auto_value:
-            setattr(merged_record_left, field.name, auto_value)
-            setattr(merged_record_right, field.name, auto_value)
-
-        merged_record_pair =
-
-        # Sensitivity check inline per field
-        if CONFIG['sensitivity_check_enabled']:
-            #### THIS BIT ####
-            tui.render_left_and_right_record(tuple([merged_record_left, merged_record_right]))
-            result_sensitivities_left = main_sensitivities_checker(field.name, getattr(merged_record_left, field.name), 'Left')
-            result_sensitivities_right = main_sensitivities_checker(field.name, getattr(merged_record_right, field.name), 'Right')
-
-            if result_sensitivities_left:
-                setattr(merged_record_left, field.name, result_sensitivities_left)
-            if result_sensitivities_right:
-                setattr(merged_record_left, field.name, result_sensitivities_right)
+            finding_pair['left'].set(field.name, auto_value)
+            finding_pair['right'].set(field.name, auto_value)
 
     log("INFO", "This record's merge is finalised.", prefix="MERGE")
-    return tuple([Finding.from_dict(merged_record_left), Finding.from_dict(merged_record_right)])
+    return tuple([finding_pair['left'], finding_pair['right']])

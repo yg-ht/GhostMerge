@@ -12,6 +12,7 @@ from utils import load_config, log, load_json, write_json, return_ASCII_art, set
 from model import Finding
 from matching import fuzzy_match_findings
 from merge import merge_main
+from sensitivity import sensitivities_checker_single_record
 
 # run the app
 app = typer.Typer()
@@ -36,6 +37,7 @@ def ghostmerge(
         load_config()
 
     get_tui().start()
+    tui.resize_splits()
 
     tui.update_data(return_ASCII_art(), 'white', 'Welcome to GhostMerge')
     log("INFO", "\n"
@@ -74,10 +76,10 @@ def ghostmerge(
             findings_right.append(finding_right_temp)
 
     if file_out_left is None:
-        file_out_left = str(file_in_left) + CONFIG['default_output_filename_append']
+        file_out_left = str(file_in_left).replace('.json', CONFIG['default_output_filename_append'])
 
     if file_out_right is None:
-        file_out_right = str(file_in_left) + CONFIG['default_output_filename_append']
+        file_out_right = str(file_in_right).replace('.json', CONFIG['default_output_filename_append'])
 
     matches: List[Dict[str,Finding|float]] = []
     unmatched_left = findings_left
@@ -106,12 +108,24 @@ def ghostmerge(
         merged_left.append(result_left)
         merged_right.append(result_right)
 
-    # TODO: deal with unmatched findings
-    #matches.extend(unmatched_left)
-    #matches.extend(unmatched_right)
+    for unmatched_left_record in unmatched_left:
+        merged_left.append(unmatched_left_record)
+    for unmatched_right_record in unmatched_right:
+        merged_right.append(unmatched_right_record)
 
-    write_json(file_out_left, [f.to_dict() for f in merged_left])
-    write_json(file_out_right, [f.to_dict() for f in merged_right])
+    final_left, final_right = [], []
+    # Sensitivity check inline per field for new records
+    if CONFIG['sensitivity_check_enabled']:
+        for record in merged_left:
+            final_left.append(sensitivities_checker_single_record(record, 'Left'))
+        for record in merged_right:
+            final_right.append(sensitivities_checker_single_record(record, 'Right'))
+    else:
+        final_left = merged_left
+        final_right = merged_right
+
+    write_json(file_out_left, [f.to_dict() for f in final_left])
+    write_json(file_out_right, [f.to_dict() for f in final_right])
     log("INFO", f"Written merged files to {file_out_left} and {file_out_right}", prefix="CLI")
 
 if __name__ == "__main__":
