@@ -2,7 +2,7 @@
 import dataclasses
 
 import model
-from imports import (difflib, os, subprocess, tempfile, threading, sleep, Console, RenderableType, readchar,
+from imports import (difflib, os, subprocess, tempfile, threading, sleep, Console, RenderableType, readchar, re,
                      Layout, Live, Panel, Text, Table, Columns, Any, List, Optional, MarkupError, Tuple, Dict)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, set_tui
@@ -11,7 +11,7 @@ from model import get_type_as_str
 CONFIG = get_config()
 
 # local module imports
-from utils import log, blank_for_type, is_blank, stringify_field
+from utils import log, blank_for_type, stringify_field, wrap_string
 
 __all__ = ["tui"]
 
@@ -64,6 +64,12 @@ class TUI:
         self._running = False
         if self._thread:
             self._thread.join()
+
+    def blank_data(self):
+        self.update_data('')
+
+    def blank_input(self):
+        self.update_input('')
 
     def update_data(self, text: RenderableType, style: str = "", title: str = None):
         if title:
@@ -222,6 +228,7 @@ class TUI:
             log("ERROR", "User aborted.", prefix="TUI")
             exit()
 
+        self.blank_input()
         return choice
 
     def get_user_input(
@@ -283,7 +290,7 @@ class TUI:
 
         return result
 
-    def render_left_and_right_record(self, finding_record: Tuple[model.Finding, model.Finding, float], differences: str):
+    def render_left_and_right_record(self, finding_record: Tuple[model.Finding, model.Finding, float], differences: str = ''):
         left_right_table: Table = Table(
             title="Merged Finding (post‑manual)", box=None, show_lines=False
         )
@@ -330,12 +337,11 @@ class TUI:
             record_table.add_row(str(field.name), field_value)
         self.update_data(record_table, title='Preview')
 
-    def render_diff_single_field(self, value_from_left: Any, value_from_right: Any, auto_value: Optional[str] = None,
-                                 title: Optional[str] = "Field-level diff") -> Columns:
-        """Return two side‑by‑side Panels that highlight differences.
+    def render_diff_single_field(self, value_from_left: Any, value_from_right: Any, auto_value: Optional[Any] = None,
+                                 title: Optional[str] = "Field-level diff"):
+        """Return two or three columns for side‑by‑side rendering in a Panel, highlighting differences in two fields.
 
-        Complex structures (``dict``/``list``) are serialised into pretty strings
-        before diffing so the user easily sees diff
+        Complex structures are serialised into strings before diffing so the user easily sees diff
         """
 
         log(
@@ -345,34 +351,54 @@ class TUI:
         )
 
         # Serialise non‑scalar data for human‑readable diff output.
-        stringified_target = stringify_field(value_from_left)
-        stringified_comparison = stringify_field(value_from_right)
+        if CONFIG['field_level_diff_max_width'] > 0:
+            stringified_left = wrap_string(stringify_field(value_from_left), CONFIG['field_level_diff_max_width'])
+            stringified_right = wrap_string(stringify_field(value_from_right), CONFIG['field_level_diff_max_width'])
+            stringified_auto = wrap_string(stringify_field(auto_value), CONFIG['field_level_diff_max_width'])
+        else:
+            stringified_left = stringify_field(value_from_left)
+            stringified_right = stringify_field(value_from_right)
+            stringified_auto = stringify_field(auto_value)
+        log('DEBUG', f'Top and tail of stringified left: {stringified_left[20:]}...{stringified_left[:20]}', prefix="TUI")
+        log('DEBUG', f'Top and tail of stringified right: {stringified_right[20:]}...{stringified_right[:20]}', prefix="TUI")
+        log('DEBUG', f'Top and tail of stringified auto: {stringified_auto[20:]}...{stringified_auto[:20]}', prefix="TUI")
 
         # Build Rich *Text* fragments with colour annotations.
         diff_for_side_left: Text = Text()
         diff_for_side_right: Text = Text()
 
-        for line in difflib.ndiff(
-            stringified_target.splitlines(), stringified_comparison.splitlines()
-        ):
+        previous_change_code = None
+        for line in difflib.ndiff(stringified_left.splitlines(), stringified_right.splitlines()):
             change_code, line_content = line[:2], line[2:]
+            log('DEBUG', f'Current line change_code: {change_code}', prefix="TUI")
             if change_code == "- ":  # Present only in Left – mark blue in Left panel.
-                diff_for_side_left.append(line_content + "\n", style="bold blue")
-            elif change_code == "+ ":  # Present only in Right – mark green in B panel.
-                diff_for_side_right.append(line_content + "\n", style="bold blue")
-            else:  # Unchanged or intra-line hint – copy to both panels.
-                diff_for_side_left.append(line_content + "\n")
-                diff_for_side_right.append(line_content + "\n")
+                log('DEBUG', f'Line is only in left: {line_content[10:]}', prefix="TUI")
+                diff_for_side_left.append(line_content + "\n", style=CONFIG['field_level_diff_highlight_style'])
+            elif change_code == "+ ":  # Present only in Right – mark blue in Right panel.
+                log('DEBUG', f'Line is only in right: {line_content[10:]}', prefix="TUI")
+                diff_for_side_right.append(line_content + "\n", style=CONFIG['field_level_diff_highlight_style'])
+            elif change_code == "? ":
+                log('DEBUG', 'Line is a user hint (aka intra-line)', prefix="TUI")
+                if previous_change_code == "- ":
+                    diff_for_side_left.append(line_content)
+                elif previous_change_code == "+ ":
+                    diff_for_side_right.append(line_content)
+                else:
+                    log('ERROR', f'Unexpected previous change code in render_diff_single_field: "{previous_change_code}"', prefix="TUI")
+            else:  # Unchanged – copy to both panels.
+                log('DEBUG', f'Line is in both: {line_content[:10]}', prefix="TUI")
+                diff_for_side_left.append(line_content + "\n", style=CONFIG['field_level_diff_nolight_style'])
+                diff_for_side_right.append(line_content + "\n", style=CONFIG['field_level_diff_nolight_style'])
+            previous_change_code = change_code
 
         log("DEBUG", f"render_diff_single_field construction complete", prefix="TUI")
 
         if auto_value is not None:
-            stringified_auto = stringify_field(auto_value)
             field_diff = Columns(
                 [
-                    Panel(diff_for_side_left or Text("<empty>"), title="Left", padding=(0, 1)),
-                    Panel(diff_for_side_right or Text("<empty>"), title="Right", padding=(0, 1)),
-                    Panel(stringified_auto or Text("<empty>"), title="Offered resolution", padding=(0, 1)),
+                    Panel(diff_for_side_left, title="Left", padding=(0, 1)),
+                    Panel(diff_for_side_right, title="Right", padding=(0, 1)),
+                    Panel(stringified_auto, title="Offered resolution", padding=(0, 1)),
                 ],
                 equal=True,
                 expand=True,
@@ -380,8 +406,8 @@ class TUI:
         else:
             field_diff = Columns(
                 [
-                    Panel(diff_for_side_left or Text("<empty>"), title="Left", padding=(0, 1)),
-                    Panel(diff_for_side_right or Text("<empty>"), title="Right", padding=(0, 1)),
+                    Panel(diff_for_side_left, title="Left", padding=(0, 1)),
+                    Panel(diff_for_side_right, title="Right", padding=(0, 1)),
                 ],
                 equal=True,
                 expand=True,

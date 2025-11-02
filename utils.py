@@ -1,8 +1,7 @@
 # external module imports
 from soupsieve.util import lower
 
-from imports import traceback, os, Panel, random, b64decode, sys, signal, get_origin, get_args
-from imports import datetime, json, Any, Path, Text, Optional, Union
+from imports import traceback, os, random, b64decode, sys, signal, get_origin, get_args, textwrap, datetime, json, Any, Path, Text, Union
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -284,6 +283,17 @@ def stringify_field(value: Any) -> str:
     elif isinstance(value, list):
         return "\n".join(map(str, value))
     return str(value or "")
+
+def wrap_string(input: str, width: int) -> str:
+    return "\n".join(
+        textwrap.fill(
+            line,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=True,
+        ) if line else ""  # preserve blank lines
+        for line in input.splitlines()
+    )
 
 def return_ASCII_art():
     images = []

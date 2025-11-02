@@ -24,7 +24,7 @@ class Finding:
     cvss_score: Optional[float] = None
     cvss_vector: Optional[str] = None
     finding_type: Optional[str] = None
-    title: Optional[str] = None
+    title: str = None
     description: Optional[str] = None
     impact: Optional[str] = None
     mitigation: Optional[str] = None

@@ -92,6 +92,8 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
     score = finding_record_pair['score']
     merged_record_left = Finding(finding_left_side.id)
     merged_record_right = Finding(finding_right_side.id)
+    merged_record_pair = {}
+    #### THIS BIT ###
 
 
     log("INFO", f"Starting merge_main for: {finding_left_side.id} ↔ {finding_right_side.id}", prefix="MERGE")
@@ -148,6 +150,8 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
                 analyst_options.append(f'Offered (combine all tags)')
             elif field.name == 'extra_fields':
                 analyst_options.append(f'Offered (combine all fields)')
+            else:
+                analyst_options.append(f'Offered')
             default_choice: str = 'o'
 
         # If the field is permitted to be blank, add this as an option
@@ -181,14 +185,19 @@ def merge_main(finding_record_pair: Dict[str,Finding|float]) -> Tuple[Finding,Fi
             setattr(merged_record_left, field.name, auto_value)
             setattr(merged_record_right, field.name, auto_value)
 
+        merged_record_pair =
+
         # Sensitivity check inline per field
         if CONFIG['sensitivity_check_enabled']:
-            result_sensitivities_left = main_sensitivities_checker(getattr(merged_record_left, field.name), 'Left')
-            result_sensitivities_right = main_sensitivities_checker(getattr(merged_record_right, field.name), 'Right')
+            #### THIS BIT ####
+            tui.render_left_and_right_record(tuple([merged_record_left, merged_record_right]))
+            result_sensitivities_left = main_sensitivities_checker(field.name, getattr(merged_record_left, field.name), 'Left')
+            result_sensitivities_right = main_sensitivities_checker(field.name, getattr(merged_record_right, field.name), 'Right')
 
             if result_sensitivities_left:
-                for sensitive_result in result_sensitivities_left:
-                    setattr(merged_record_left, field.name, auto_value)
+                setattr(merged_record_left, field.name, result_sensitivities_left)
+            if result_sensitivities_right:
+                setattr(merged_record_left, field.name, result_sensitivities_right)
 
     log("INFO", "This record's merge is finalised.", prefix="MERGE")
     return tuple([Finding.from_dict(merged_record_left), Finding.from_dict(merged_record_right)])

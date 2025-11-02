@@ -50,7 +50,7 @@ def check_for_sensitivities(field) -> List[Tuple[str, Optional[str]]]:
                 results.append((term, replacement))
     return results
 
-def main_sensitivities_checker(field_value: str, field_side: str) -> str | None:
+def main_sensitivities_checker(field_name: str, field_value: str, field_side: str) -> str | None:
     sensitivity_hits = check_for_sensitivities(field_value)
     tui = get_tui()
 
@@ -59,13 +59,14 @@ def main_sensitivities_checker(field_value: str, field_side: str) -> str | None:
     if len(sensitivity_hits) > 0:
         action_choices = ['Edit', 'Keep']
         for sensitive_term, offered in sensitivity_hits:
+            tui.render_single_whole_finding_record(merged_record_left)
             prompt = f"Sensitive term [yellow]{sensitive_term}[/yellow] in [bold]{field_value}[/bold] on {field_side}\n\n"
             if offered:
                 prompt += f"Offered: [yellow]{sensitive_term}[/yellow] → [green]{offered}[/green]"
                 action_choices.append('Offered')
 
             action = tui.render_user_choice(prompt, options=action_choices,
-                                            title=f"Field-level resolution: {field_value.name}")
+                                            title=f"Field-level resolution: {field_name}")
 
             if action == "o" and offered:
                 result = field_value.replace(sensitive_term, offered)
