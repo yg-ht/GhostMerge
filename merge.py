@@ -7,7 +7,6 @@ CONFIG = get_config()
 # local module imports
 from utils import log, normalise_tags, is_blank, blank_for_type
 from model import Finding, is_optional_field, get_type_as_str
-from sensitivity import sensitivities_checker_single_field
 
 # ── Conflict Resolution ─────────────────────────────────────────────
 def resolve_conflict(value_from_left, value_from_right) -> str:
@@ -74,7 +73,7 @@ def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Find
             auto_fields[field_name] = resolved_value
             log("DEBUG", f"Resolved field '{field_name}' → Left:{value_from_left} | Right:{value_from_right} → '{resolved_value}'", prefix="MERGE")
 
-    log("INFO", f"Gathered the auto-complete values for Left (ID #{finding_from_left.id}) and Right (ID #{finding_from_right.id})", prefix="MERGE")
+    log("DEBUG", f"Gathered the auto-complete values for Left (ID #{finding_from_left.id}) and Right (ID #{finding_from_right.id})", prefix="MERGE")
     return Finding.from_dict(auto_fields)
 
 # ── Main merge logic ───────────────────────────────────────────────────
@@ -100,7 +99,7 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
     finding_pair.update({'auto': get_auto_suggest_values(finding_pair['left'], finding_pair['right'])})
 
     different_fields = ' | '
-    # Iterate deterministically over field names.
+    # Iterate deterministically over field names to identify differences
     for field in fields(Finding):
         if field.name is "id":
             # we retain these IDs so can just skip
@@ -113,75 +112,89 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
         value_from_right: Any = getattr(finding_pair.get('right'), field.name, blank_for_type(get_type_as_str(field.type)))
         auto_value: Any = finding_pair.get('auto').get(field.name)
 
-        log("DEBUG",f"Field '{field}': Left={value_from_left!r} "
+        log("DEBUG",f"Field '{field.name}': Left={value_from_left!r} "
                     f"| Right={value_from_right!r} | Auto={auto_value!r}",prefix="MERGE",)
 
         # Fast‑path when both sides agree and match the offered suggestion.
         if (value_from_left == value_from_right):
             finding_pair['left'].set(field.name, auto_value)
             finding_pair['right'].set(field.name, auto_value)
-            log("DEBUG",f"Field '{field}' identical across both sides – auto‑accepted.",prefix="MERGE",)
+            log("DEBUG",f"Field '{field.name}' identical across both sides – auto‑accepted.",prefix="MERGE",)
             continue
         else:
             different_fields = different_fields + field.name + ' | '
 
-        # ── Interactive resolution ──────────────────────────────────────────
-        log('WARN', f'Difference detected in: {different_fields}', 'MERGE')
-        tui.render_left_and_right_record(finding_pair, different_fields)
-        log('WARN', 'Please review above, ready for merge actions', 'MERGE')
+    log('DEBUG', f'Difference detected in: {different_fields}', 'MERGE')
 
-        tui.render_user_choice('Waiting for user to complete data review')
+    # Iterate deterministically over field names to process differences
+    for field in fields(Finding):
+        if field.name in different_fields:
 
-        tui.render_diff_single_field(value_from_left, value_from_right, auto_value, title=f"Field diff for {field.name}")
+            # get the expected type once for future efforts
+            expected_type_str = get_type_as_str(field.type)
 
-        analyst_options = ['Keep both', 'Left only', 'Right only', 'Merge (left + right)']
+            value_from_left: Any = getattr(finding_pair.get('left'), field.name,
+                                           blank_for_type(get_type_as_str(field.type)))
+            value_from_right: Any = getattr(finding_pair.get('right'), field.name,
+                                            blank_for_type(get_type_as_str(field.type)))
+            auto_value: Any = finding_pair.get('auto').get(field.name)
 
-        # Establish which option should be highlighted as the default.
-        default_choice = ''
-        if not auto_value:
-            log("DEBUG", "Offered / auto_value is blank, not adding option")
-        else:
-            if field.name == 'tags':
-                analyst_options.append(f'Offered (combine all tags)')
-            elif field.name == 'extra_fields':
-                analyst_options.append(f'Offered (combine all fields)')
+            # ── Interactive resolution ──────────────────────────────────────────
+            tui.render_left_and_right_record(finding_pair, different_fields)
+            log('WARN', 'Please review above, ready for merge actions', 'MERGE')
+
+            tui.render_user_choice('Waiting for user to complete data review')
+
+            tui.render_diff_single_field(value_from_left, value_from_right, auto_value, title=f"Field diff for {field.name}")
+
+            analyst_options = ['Blank', 'Keep both', 'Left only', 'Right only', 'Merge (left + right)']
+
+            # Establish which option should be highlighted as the default.
+            default_choice = ''
+            if not auto_value:
+                log("DEBUG", "Offered / auto_value is blank, not adding option")
             else:
-                analyst_options.append(f'Offered')
-            default_choice: str = 'o'
+                if field.name == 'tags':
+                    analyst_options.append(f'Offered (combine all tags)')
+                elif field.name == 'extra_fields':
+                    analyst_options.append(f'Offered (combine all fields)')
+                else:
+                    analyst_options.append(f'Offered')
+                default_choice: str = 'o'
 
-        # If the field is permitted to be blank, add this as an option
-        is_optional = is_optional_field(expected_type_str)
-        if is_optional:
-            analyst_options.append(f'Blank')
+            # If the field is permitted to be blank, add this as an option
+            is_optional = is_optional_field(expected_type_str)
+            if is_optional:
+                analyst_options.append(f'Blank')
 
-        analyst_choice = tui.render_user_choice('Choose:', analyst_options, default_choice,
-                                                f"Field-level resolution")
+            analyst_choice = tui.render_user_choice('Choose:', analyst_options, default_choice,
+                                                    f"Field-level resolution")
 
-        log(
-            "DEBUG",
-            f"User selection for '{field}' → {analyst_choice.upper()}",
-            prefix="MERGE",
-        )
+            log(
+                "DEBUG",
+                f"User selection for '{field.name}' → {analyst_choice.upper()}",
+                prefix="MERGE",
+            )
 
-        # Commit the chosen value into the merged record.
-        if analyst_choice == "b" and is_optional:
-            finding_pair['left'].set(field.name, blank_for_type(expected_type_str))
-            finding_pair['right'].set(field.name, blank_for_type(expected_type_str))
-        if analyst_choice == "k":
-            finding_pair['left'].set(field.name, value_from_left)
-            finding_pair['right'].set(field.name, value_from_right)
-        elif analyst_choice == "l":
-            finding_pair['left'].set(field.name, value_from_left)
-            finding_pair['right'].set(field.name, value_from_left)
-        elif analyst_choice == "m":
-            finding_pair['left'].set(field.name, f"{value_from_left} {value_from_right}")
-            finding_pair['right'].set(field.name, f"{value_from_left} {value_from_right}")
-        elif analyst_choice == "r":
-            finding_pair['left'].set(field.name, value_from_right)
-            finding_pair['right'].set(field.name, value_from_right)
-        elif analyst_choice == "o" and auto_value:
-            finding_pair['left'].set(field.name, auto_value)
-            finding_pair['right'].set(field.name, auto_value)
+            # Commit the chosen value into the merged record.
+            if analyst_choice == "b" and is_optional:
+                finding_pair['left'].set(field.name, blank_for_type(expected_type_str))
+                finding_pair['right'].set(field.name, blank_for_type(expected_type_str))
+            if analyst_choice == "k":
+                finding_pair['left'].set(field.name, value_from_left)
+                finding_pair['right'].set(field.name, value_from_right)
+            elif analyst_choice == "l":
+                finding_pair['left'].set(field.name, value_from_left)
+                finding_pair['right'].set(field.name, value_from_left)
+            elif analyst_choice == "m":
+                finding_pair['left'].set(field.name, f"{value_from_left} {value_from_right}")
+                finding_pair['right'].set(field.name, f"{value_from_left} {value_from_right}")
+            elif analyst_choice == "r":
+                finding_pair['left'].set(field.name, value_from_right)
+                finding_pair['right'].set(field.name, value_from_right)
+            elif analyst_choice == "o" and auto_value:
+                finding_pair['left'].set(field.name, auto_value)
+                finding_pair['right'].set(field.name, auto_value)
 
     log("INFO", "This record's merge is finalised.", prefix="MERGE")
     return tuple([finding_pair['left'], finding_pair['right']])

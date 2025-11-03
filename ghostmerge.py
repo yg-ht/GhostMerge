@@ -108,13 +108,21 @@ def ghostmerge(
         merged_left.append(result_left)
         merged_right.append(result_right)
 
+    unmatched_records_appended = 0
+    log("DEBUG", f"Appending {len(unmatched_left)} unmatched records from Left", prefix="CLI")
     for unmatched_left_record in unmatched_left:
         merged_left.append(unmatched_left_record)
+        merged_right.append(unmatched_left_record)
+        unmatched_records_appended += 1
+    log("DEBUG", f"Appending {len(unmatched_right)} unmatched records from Right", prefix="CLI")
     for unmatched_right_record in unmatched_right:
+        merged_left.append(unmatched_right_record)
         merged_right.append(unmatched_right_record)
+        unmatched_records_appended += 1
+    log("INFO", f"Successfully appended {unmatched_records_appended} unmatched records to both Left and Right", prefix="CLI")
 
     final_left, final_right = [], []
-    # Sensitivity check inline per field for new records
+    # Sensitivity check inline per field for all records
     if CONFIG['sensitivity_check_enabled']:
         for record in merged_left:
             final_left.append(sensitivities_checker_single_record(record, 'Left'))
@@ -127,6 +135,13 @@ def ghostmerge(
     write_json(file_out_left, [f.to_dict() for f in final_left])
     write_json(file_out_right, [f.to_dict() for f in final_right])
     log("INFO", f"Written merged files to {file_out_left} and {file_out_right}", prefix="CLI")
+
+    tui.update_data('Merge complete')
+
+    log("INFO", "#########################", prefix="CLI")
+    log("INFO", "## Processing complete ##", prefix="CLI")
+    log("INFO", "#########################", prefix="CLI")
+    log("INFO", "", prefix="CLI")
 
 if __name__ == "__main__":
     app()

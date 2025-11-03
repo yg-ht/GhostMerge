@@ -52,11 +52,13 @@ class TUI:
     def resize_splits(self):
         # Split the screen into logical sections
         log('DEBUG', 'Unspliting console layout', 'TUI')
+        self.num_lines_messages = CONFIG['num_lines_messages']
+        self.num_lines_input = CONFIG['num_lines_input']
         self.layout.unsplit()
         self.layout.split(
             Layout(name="data_viewer", ratio=2),
-            Layout(name="messages", size=CONFIG['num_lines_messages'] + 2),
-            Layout(name="user_input", size=CONFIG['num_lines_input'] + 2)
+            Layout(name="messages", size=self.num_lines_messages + 2),
+            Layout(name="user_input", size=self.num_lines_input + 2)
         )
         log('DEBUG', 'Resplit console layout', 'TUI')
 
@@ -152,6 +154,7 @@ class TUI:
         if the subprocess crashes.
         """
 
+        self.stop()
         chosen_editor: str = os.getenv("EDITOR", "nano")
         log("DEBUG", f"_invoke_editor(): Using editor '{chosen_editor}'", prefix="TUI")
 
@@ -176,6 +179,7 @@ class TUI:
             os.unlink(temporary_path)
             log("DEBUG", f"invoke_editor(): Temporary file {temporary_path} deleted", prefix="TUI")
 
+        self.start()
         return edited_text.strip()
 
     def render_user_choice(
@@ -315,7 +319,7 @@ class TUI:
         left_record = finding_record['left']
         right_record = finding_record['right']
         score = finding_record['score']
-        log('INFO', f'These two records have a {score}% match', prefix='TUI')
+        log('INFO', f'These two records have a {score:.2f}% match', prefix='TUI')
         for field in dataclasses.fields(model.Finding):
             left_value = str(getattr(left_record, field.name, blank_for_type(get_type_as_str(field.type))))
             right_value = str(getattr(right_record, field.name, blank_for_type(get_type_as_str(field.type))))
@@ -339,9 +343,9 @@ class TUI:
             record_table.add_row(str(field_name), str(finding_record[field_name]))
         self.update_data(record_table, title='Preview')
 
-    def render_single_whole_finding_record(self, finding_record: model.Finding, highlight_value: str = None):
+    def render_single_whole_finding_record(self, finding_record: model.Finding, highlight_value: str = None, highlight_field: str = None):
         record_table: Table = Table(
-            title="Merged Finding (post‑manual)", box=None, show_lines=False
+            title="Merged Finding", box=None, show_lines=False
         )
         record_table.add_column("Field Name", style="bold white")
         record_table.add_column("Field Value", overflow="fold")
@@ -349,9 +353,14 @@ class TUI:
             field_value = str(finding_record.get(field.name) or blank_for_type(get_type_as_str(field.type)))
             log('DEBUG', f'Rendering field {field.name}: {field_value}', prefix="TUI")
             # style here ####
-            if highlight_value:
-                field_value.replace(highlight_value,f'[{CONFIG["field_level_diff_highlight_style"]}]'
-                                                    f'{highlight_value}[/{CONFIG["field_level_diff_highlight_style"]}]')
+            if highlight_value and field.name in highlight_field:
+                field_value = re.sub(
+                    highlight_value,
+                    lambda m: f'[{CONFIG["field_level_diff_highlight_style"]}]{m.group(0)}[/{CONFIG["field_level_diff_highlight_style"]}]',
+                    field_value,
+                    flags=re.IGNORECASE
+                )
+
             record_table.add_row(str(field.name), field_value)
         self.update_data(record_table, title='Preview')
 

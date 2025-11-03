@@ -33,25 +33,25 @@
 
 ## Automatic Merge Engine and supporting functions
 - [x] Refactor such that we use "left" and "right" instead of A and B (in progress)
-- [ ] Handle unique-to-left/right detection
-- [ ] Detect and route conflicting records
-- [ ] Maintain original IDs in output
-- [ ] Allow auto-merging of low-risk fields (e.g. tags, references)
-- [ ] Start with very high fuzzy matches and iterate down
+- [x] Handle unique-to-left/right detection
+- [x] Detect and route conflicting records
+- [x] Maintain original IDs in output
+- [x] Allow auto-merging of low-risk fields (e.g. tags, references)
+- [x] Start with very high fuzzy matches and iterate down
   
 ## Interactive Merge Flow
-- [ ] Render side-by-side field-level diffs
-- [ ] Render side-by-side record-level preview
-- [ ] Prompt user per-field to select preferred value
-- [ ] Auto-suggest option development
-- [ ] Remove value / return blank on optional fields
-- [ ] Skip whole record
-- [ ] Manual field-level edit
-- [ ] Expose `match_score` to user where it is useful information
+- [x] Render side-by-side field-level diffs
+- [x] Render side-by-side record-level preview
+- [x] Prompt user per-field to select preferred value
+- [x] Auto-suggest option development
+- [x] Remove value / return blank on optional fields
+- [x] Skip whole record
+- [x] Manual field-level edit
+- [x] Expose `match_score` to user where it is useful information
 - [ ] Allow user to reject a match entirely, not just resolve fields
 - [ ] When a match is rejected, return both findings to unmatched pool
 - [ ] Add logic to optionally re-process orphans after all initial matches are reviewed
-- [ ] Process unmatched findings after main merge effort completed
+- [x] Process unmatched findings after main merge effort completed
 - [ ] Allow manual matching of unmatched findings
 - [x] Implement config file `threshold` override to adjust sensitivity of fuzzy matching
 - [ ] Preview merged record before final write and prompt for acceptance 
@@ -60,5 +60,5 @@
 - [x] Load sensitivity list from file
 - [x] Scan selected fields (e.g. impact, description)
 - [x] Suggest redaction or replacement
-- [ ] Allow override per field/output file
+- [x] Allow override per field/output file
 - [ ] Redact from left, but retain in right (or vice versa)
