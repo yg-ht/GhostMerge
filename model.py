@@ -340,7 +340,7 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
             raise TypeError(f"Expected Dict, got {type(value)}")
         coerced = {}
         for k, v in value.items():
-            ck = coerce_value(k, key_t, field_name)
+            ck = coerce_value(v, 'str', k)
             # Enforce basic hashability for keys
             if not isinstance(ck, (str, int, float, bool, tuple, type(None))):
                 raise TypeError(f"Coerced key is unhashable: {ck!r}")

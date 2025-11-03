@@ -1,15 +1,16 @@
 # external module imports
 from soupsieve.util import lower
 
-from imports import traceback, os, random, b64decode, sys, signal, get_origin, get_args, textwrap, datetime, json, Any, Path, Text, Union
+from imports import dumps, traceback, os, random, b64decode, sys, signal, get_origin, get_args, textwrap, datetime, json, Any, Path, Text, Union
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 # ── Config & Logging ────────────────────────────────────────────────
 LEVEL_ORDER = ["DEBUG", "INFO", "WARN", "ERROR"]
 
-def load_config(config_path: str | Path = "ghostmerge_config.json"):
+def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"):
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
