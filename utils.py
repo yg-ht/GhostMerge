@@ -1,7 +1,7 @@
 # external module imports
 from soupsieve.util import lower
 
-from imports import dumps, traceback, os, random, b64decode, sys, signal, get_origin, get_args, textwrap, datetime, json, Any, Path, Text, Union
+from imports import dumps, escape, traceback, os, random, b64decode, sys, signal, get_origin, get_args, textwrap, datetime, json, Any, Path, Text, Union
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -161,7 +161,7 @@ def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
     if TUI:
         TUI.update_messages(full_message_rich)
         if exception:
-            TUI.update_messages(f"[red]{exception_text}[/red]")
+            TUI.update_messages(f"[red]{escape(exception_text)}[/red]")
     else:
         print(f"{full_message_plain}")
         if exception:
@@ -169,16 +169,26 @@ def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
 
 
 # ── IO Utilities ────────────────────────────────────────────────────
-def load_json(path: str | Path) -> list[dict]:
+def load_json(json_path: str | Path | None = None, json_string: str | None = None) -> list[dict[str, Any]]:
+    if json_path:
+        try:
+            with open(json_path, 'r', encoding='utf-8') as json_file_handle:
+                json_string = json_file_handle.read()
+        except Exception as e:
+            log("ERROR", f"Failed to read {json_path}", prefix="UTILS", exception=e)
+            raise
+
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        data = json.loads(json_string)
         if not isinstance(data, list):
             raise ValueError("JSON must be a list of records.")
         log("DEBUG", f"Loaded {len(data)} records from JSON", prefix="UTILS")
         return data
     except Exception as e:
-        log("ERROR", f"Failed to read {path}", prefix="UTILS", exception=e)
+        if json_string:
+            log("ERROR", f"Failed to ingest {json_string[:40]} as a JSON object", prefix="UTILS", exception=e)
+        else:
+            log("ERROR", f"JSON is not a str so can't be ingested", prefix="UTILS", exception=e)
         raise
 
 def write_json(path: str | Path, data: list[dict]) -> None:

@@ -9,6 +9,13 @@ from model import Finding
 
 def load_sensitive_terms(path: str) -> Dict[str, Optional[str]]:
     """Parses a file of sensitive terms and optional replacements."""
+    path_local = path + ".local"
+    try:
+        if open(path_local).close():
+            path = path_local
+    except FileNotFoundError:
+        log('DEBUG', 'Using standard sensitivity terms file, as ".local" variant does not exist.', prefix="SENSITIVITY")
+
     terms = {}
     try:
         log("DEBUG", f"Opening sensitivity terms file at: {path}", prefix="SENSITIVITY")

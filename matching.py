@@ -1,5 +1,5 @@
 # external module imports
-from imports import (fuzz, Dict, List, Tuple)
+from imports import (fields, fuzz, Dict, List, Tuple)
 # get global state objects (CONFIG and TUI)
 from globals import get_config
 CONFIG = get_config()
@@ -18,6 +18,7 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
     # Retrieve configurable weightings for each component from the loaded config
     # These determine how much influence title, description, and finding_type have on the final score
     raw_weights = {
+        "common": CONFIG.get("match_weight_common", 0.05),
         "title": CONFIG.get("match_weight_title", 0.3),
         "type": CONFIG.get("match_weight_finding_type", 0.1),
         "desc": CONFIG.get("match_weight_description", 0.2),
@@ -59,7 +60,7 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
         desc_score = desc_score_no_weight * weights['desc']
         log("DEBUG", f"Description weighted score between Finding Left and Right: {desc_score:.2f}", prefix="MATCHING")
     else:
-        log("DEBUG", "At least one finding is missing an impact. Description score is 0", prefix="MATCHING")
+        log("DEBUG", "At least one finding is missing an description. Description score is 0", prefix="MATCHING")
 
     # Impact similarity scoring
     impact_score = 0
@@ -79,8 +80,59 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
     else:
         log("DEBUG", "At least one finding is missing a mitigation. Mitigation score is 0", prefix="MATCHING")
 
+################################################################################
+#        {                                                                     #
+#            "id": self.id,                                                    #
+#            "severity": self.severity,                                        #
+#            "cvss_score": self.cvss_score,                                    #
+#            "cvss_vector": self.cvss_vector,                                  #
+#            "finding_type": self.finding_type,                                #
+#            "title": self.title,                                              #
+#            "description": self.description,                                  #
+#            "impact": self.impact,                                            #
+#            "mitigation": self.mitigation,                                    #
+#            "replication_steps": self.replication_steps,                      #
+#            "host_detection_techniques": self.host_detection_techniques,      #
+#            "network_detection_techniques": self.network_detection_techniques,#
+#            "references": self.references,                                    #
+#            "finding_guidance": self.finding_guidance,                        #
+#            "tags": self.tags,                                                #
+#            "extra_fields": self.extra_fields,                                #
+#        }                                                                     #
+################################################################################
+
+    common_score_final_total = 0
+    common_score_running_total = 0
+    common_score_count = 0
+    for field in fields(Finding):
+        common_score = 0
+        if field.name is "id":
+            # ID numbers don't represent a difference that we care about for matching purposes
+            continue
+
+        if not hasattr(raw_weights, field.name):
+            if field.type == 'str':
+                # if field is a string, do a string based fuzzy match score
+                common_score_no_weight = fuzz.token_set_ratio(getattr(finding_left, field.name), getattr(finding_right, field.name))
+            elif getattr(finding_left, field.name) == getattr(finding_right, field.name):
+                # otherwise, if the values match completely, it gets an unweighted 100% match
+                common_score_no_weight = 100.0
+            else:
+                # finally, if they don't match complete, it gets an unweighted 0% match
+                common_score_no_weight = 0.0
+
+            common_score = common_score_no_weight * weights['common']
+            common_score_count += 1
+            log("DEBUG", f"Common field ({field.name}) weighted score between Finding Left and Right: {common_score:.2f}",
+                prefix="MATCHING")
+
+        common_score_running_total = common_score_running_total + common_score
+
+    common_score_final_total = common_score_running_total / common_score_count
+
+
     # Calculate the weighted average of all component scores based on their configured importance
-    combined_score = (title_score + type_score + desc_score + impact_score + mitigation_score)
+    combined_score = (title_score + type_score + desc_score + impact_score + mitigation_score + common_score_final_total)
     log("DEBUG", f"Final score: {combined_score:.2f}", prefix="MATCHING")
 
     return combined_score

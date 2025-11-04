@@ -1,8 +1,9 @@
 # external module imports
 import dataclasses
+from xml.sax.saxutils import escape
 
 import model
-from imports import (difflib, os, subprocess, tempfile, threading, sleep, Console, RenderableType, readchar, re,
+from imports import (difflib, escape, os, subprocess, tempfile, threading, sleep, Console, RenderableType, readchar, re,
                      Layout, Live, Panel, Text, Table, Columns, Any, List, Optional, MarkupError, Tuple, Dict)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, set_tui
@@ -125,9 +126,12 @@ class TUI:
                 self.layout["messages"].update(Panel(renderable, title=title, style=style))
                 if self.live:
                     self.live.refresh()
-            except MarkupError:
-                log('WARN', 'MarkupError detected:')
-                renderable = Text(history_text)
+            except MarkupError as e:
+                log('WARN', 'MarkupError detected:', prefix='TUI', exception=e)
+                if "closing tag" in str(e) and "doesn't match any open tag" in str(e):
+                    Text.from_markup(escape(history_text))
+                else:
+                    renderable = Text(history_text)
                 self.layout["messages"].update(Panel(renderable, title=title, style=style))
                 if self.live:
                     self.live.refresh()

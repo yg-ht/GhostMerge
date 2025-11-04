@@ -34,6 +34,7 @@ from rich.columns import Columns
 from rich.console import Console, RenderableType
 from rich.errors import MarkupError
 from rich.layout import Layout
+from rich.markup import escape
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
@@ -69,6 +70,7 @@ __all__ = [
     "Columns",
     "Console",
     "Dict",
+    "escape",
     "fuzz",
     "get_origin",
     "get_args",

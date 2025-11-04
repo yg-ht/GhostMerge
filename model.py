@@ -8,7 +8,7 @@ from imports import ast, dataclass, field, Any, Dict, List, Optional, Union, re,
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, is_blank, is_optional_field, blank_for_type, get_type_as_str
+from utils import log, is_blank, is_optional_field, blank_for_type, get_type_as_str, load_json
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -258,23 +258,62 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
 
     # Handle Union
     if origin_or_expected_type is Union:
-        log("DEBUG", "Union type expected", prefix="MODEL")
+        log(
+            "DEBUG",
+            f"Union type expected | field={field_name} | value_preview={repr(value)[:200]} | "
+            f"expected_type={getattr(expected_type, '__name__', str(expected_type))}",
+            prefix="MODEL",
+        )
         non_none = [t for t in type_args if t is not type(None)]
+        log(
+            "DEBUG",
+            "Computed non-None Union members | "
+            f"union_members={tuple(get_type_as_str(a) for a in type_args)} | "
+            f"non_none_members={tuple(get_type_as_str(a) for a in non_none)} | "
+            f"member_count={len(type_args)}",
+            prefix="MODEL",
+        )
 
         # General Union: try each member in order
         last_err = None
         for type_member in type_args:
             if type_member in non_none:
                 try:
+                    log(
+                        "DEBUG",
+                        f"Attempting coercion against current Union member | "
+                        f"member_type={get_type_as_str(type_member)} | field={field_name}",
+                        prefix="MODEL",
+                    )
                     union_coerced_value = coerce_value(value, type_member, field_name)
+                    log(
+                        "DEBUG",
+                        f"Coercion succeeded for current Union member | "
+                        f"result_type={type(union_coerced_value).__name__}",
+                        prefix="MODEL",
+                    )
                     return union_coerced_value
                 except Exception as e:
-                    log("DEBUG",
-                        f"Value did not match current Union member type: {get_type_as_str(type_member)}",
-                        prefix="MODEL")
+                    log(
+                        "DEBUG",
+                        f"Value did not match current Union member type | "
+                        f"member_type={get_type_as_str(type_member)} | "
+                        f"exception_type={type(e).__name__} | exception_msg={str(e)}",
+                        prefix="MODEL",
+                        exception=e,
+                    )
                     last_err = e
                     continue
-        log("DEBUG", f"Value did not match any Union member types {tuple(get_type_as_str(a) for a in type_args)}", prefix="MODEL", exception=last_err)
+        log(
+            "DEBUG",
+            "Value did not match any Union member types | "
+            f"field={field_name} | value_preview={repr(value)[:50]} | "
+            f"union_members={tuple(get_type_as_str(a) for a in type_args)} | "
+            f"attempted_members={tuple(get_type_as_str(a) for a in non_none)} | "
+            f"attempt_count={len(non_none)} | had_exception={last_err is not None}",
+            prefix="MODEL",
+            exception=last_err,
+        )
         raise last_err if last_err else ValueError(f"Value {value!r} does not match {expected_type}")
 
     # Booleans
@@ -322,29 +361,79 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
 
     # dict[K, V]
     if origin_or_expected_type is dict:
-        log("DEBUG", "Dict type expected", prefix="MODEL")
+        log(
+            "DEBUG",
+            f"Dict type expected | field={field_name} | value_preview={repr(value)[:50]} | "
+            f"type_args={tuple(get_type_as_str(a) for a in type_args) if type_args else '()'}",
+            prefix="MODEL",
+        )
         key_t, val_t = type_args if len(type_args) == 2 else (Any, Any)
+        log(
+            "DEBUG",
+            f"Resolved dict generics | key_t={get_type_as_str(key_t)} | val_t={get_type_as_str(val_t)}",
+            prefix="MODEL",
+        )
+
         if is_blank(value):
-            log("INFO", f"Blank Dict found, coercing to empty dict", prefix="MODEL")
+            log("INFO", f"Blank Dict found, coercing to empty dict | field={field_name}", prefix="MODEL")
             return {}
+
         if isinstance(value, str):
             try:
-                parsed = ast.literal_eval(value)
-                value = parsed
-                log("DEBUG", f"Parsed dict from string: {value!r}", prefix="MODEL")
-            except ValueError:
-                log("WARN", f"Failed to parse dict from string: {value!r}", prefix="MODEL")
+                parsed = json.loads(value) if isinstance(value, str) else value
+
+                if isinstance(parsed, dict):
+                    dict_data = [parsed]  # normalise to list of one for your loop shape
+                elif isinstance(parsed, list) and all(isinstance(x, dict) for x in parsed):
+                    dict_data = parsed
+                else:
+                    raise TypeError(f"Expected dict or list of dicts, got {type(parsed)}")
+
+                for sub_dict in dict_data:
+                    key = next(iter(sub_dict))
+                    log('DEBUG', f'Sub-Dict\'s key: "{key}"', prefix="MODEL")
+                    log('DEBUG', f'Sub-Dict\'s value: "{sub_dict[key]}"', prefix="MODEL")
+
+                return dict_data
+
+            except ValueError as e:
+                log(
+                    "ERROR",
+                    f"Failed to parse dict from string | field={field_name} | value_preview={repr(value)[:50]} | "
+                    f"exception_type={type(e).__name__} | exception_msg={str(e)}",
+                    prefix="MODEL",
+                    exception=e,
+                )
                 return None
+
         if not isinstance(value, dict):
-            log("DEBUG", f"Expected dict, got {type(value)}", prefix="MODEL")
+            log("WARN", f"Expected dict, got {type(value)} | field={field_name}", prefix="MODEL")
             raise TypeError(f"Expected Dict, got {type(value)}")
+
+
         coerced = {}
-        for k, v in value.items():
-            ck = coerce_value(v, 'str', k)
+        for key, v in value.items():
+            log(
+                "DEBUG",
+                f"Coercing dict entry | raw_key_preview={repr(key)[:50]} | raw_val_preview={repr(v)[:50]}",
+                prefix="MODEL",
+            )
+            coerced_key = str(key)
             # Enforce basic hashability for keys
-            if not isinstance(ck, (str, int, float, bool, tuple, type(None))):
-                raise TypeError(f"Coerced key is unhashable: {ck!r}")
-            coerced[ck] = coerce_value(v, val_t, field_name)
+            if not isinstance(coerced_key, (str, int, float, bool, tuple, type(None))):
+                log(
+                    "WARN",
+                    f"Coerced key is unhashable | coerced_key_preview={repr(coerced_key)[:50]} | type={type(coerced_key)}",
+                    prefix="MODEL",
+                )
+                raise TypeError(f"Coerced key is unhashable: {coerced_key!r}")
+            coerced_value = coerce_value(v, val_t, field_name)
+            coerced[coerced_key] = coerced_value
+            log(
+                "DEBUG",
+                f"Coerced dict entry | key_type={type(coerced_key).__name__} | val_type={type(coerced_value).__name__}",
+                prefix="MODEL",
+            )
         log("DEBUG", f"Coerced dict values: {coerced!r}", prefix="MODEL")
         return coerced
 

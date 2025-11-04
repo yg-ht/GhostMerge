@@ -60,6 +60,13 @@ def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Find
             log("DEBUG", f"Tags normalised and combined for auto-value", prefix="MERGE")
 
         elif field_name == "extra_fields":
+            if not value_from_left or not value_from_right:
+                if value_from_left:
+                    auto_fields["extra_fields"] = value_from_left
+                else:
+                    auto_fields["extra_fields"] = value_from_right
+                continue
+
             resolved_extra_fields = {}
             combined_keys = set((value_from_left or {}).keys()) | set((value_from_right or {}).keys())
             for key in combined_keys:
