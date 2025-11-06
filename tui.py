@@ -3,8 +3,9 @@ import dataclasses
 from xml.sax.saxutils import escape
 
 import model
-from imports import (difflib, escape, os, subprocess, tempfile, threading, sleep, Console, RenderableType, readchar, re,
-                     Layout, Live, Panel, Text, Table, Columns, Any, List, Optional, MarkupError, Tuple, Dict)
+from imports import (difflib, escape, os, subprocess, tempfile, threading, sleep, Console, RenderableType, readchar,
+                     readkey, key, re, Layout, Live, Panel, Text, Table, Columns, Any, List, Optional, MarkupError,
+                     Tuple, Dict)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, set_tui
 from model import get_type_as_str
@@ -31,10 +32,10 @@ class TUI:
 
         # Split the screen into logical sections
         self.layout = Layout(name="root")
-        self.layout.split(
-            Layout(name="data_viewer", ratio=2),
+        self.layout.split_column(
+            Layout(name="data_viewer", ratio=3),
             Layout(name="messages", size=self.num_lines_messages + 2),
-            Layout(name="user_input", size=self.num_lines_input + 2)
+            Layout(name="user_input", minimum_size=self.num_lines_input + 2, ratio=1)
         )
         log('DEBUG', 'Split console layout', 'TUI')
 
@@ -57,9 +58,9 @@ class TUI:
         self.num_lines_input = CONFIG['num_lines_input']
         self.layout.unsplit()
         self.layout.split(
-            Layout(name="data_viewer", ratio=2),
+            Layout(name="data_viewer", ratio=3),
             Layout(name="messages", size=self.num_lines_messages + 2),
-            Layout(name="user_input", size=self.num_lines_input + 2)
+            Layout(name="user_input", minimum_size=self.num_lines_input + 2, ratio=1)
         )
         log('DEBUG', 'Resplit console layout', 'TUI')
 
@@ -193,8 +194,8 @@ class TUI:
         default: Optional[str] = None,
         title: Optional[str] = "Make a choice",
         multi_char: bool = False,
-        is_optional: bool = False
-
+        is_optional: bool = False,
+        arrows_enabled: Dict[str, bool] = {'UP': False, 'DOWN': False, 'LEFT': False, 'RIGHT': False}
     ) -> str:
         """
         Display a prompt and capture a user's choice
@@ -203,11 +204,14 @@ class TUI:
         """
 
         if options:
-            duplicate_options_check = []
+            duplicate_options_check = {}
             for option in options:
-                duplicate_options_check.append(option[0].lower())
-            if len(duplicate_options_check) > len(options):
+                key = option[0].casefold()
+                count = duplicate_options_check.get(key, 0)
+                duplicate_options_check[key] = count + 1
+            if any(c > 1 for c in duplicate_options_check.values()):
                 log('ERROR', 'Duplicate options detected, cannot proceed', "TUI")
+            options.sort()
 
         if default:
             log("DEBUG", "Default detected, setting display marker", prefix="TUI")
@@ -243,7 +247,8 @@ class TUI:
 
         self.update_input(f"{prompt}{option_text}", title=title)
 
-        choice = self.get_user_input(choices=option_characters, default=default, multi_char=multi_char)
+        choice = self.get_user_input(choices=option_characters, default=default, multi_char=multi_char,
+                                     arrows_enabled=arrows_enabled)
 
         log("DEBUG", f"User decision required: {prompt.strip()}, result: {choice.upper()}", prefix="TUI")
 
@@ -258,7 +263,8 @@ class TUI:
         self,
         choices: Optional[list[str] | str],
         default: Optional[str],
-        multi_char: bool = False
+        multi_char: bool = False,
+        arrows_enabled: Dict[str, bool] = {'UP': False, 'DOWN': False, 'LEFT': False, 'RIGHT': False}
     ) -> str | bool:
         """
         Gather user input and check it is constrained to a set of single-character choices when specified.
@@ -298,7 +304,17 @@ class TUI:
                     log("WARN", f"Default choice '{default}' not in choices: {str(choices)}", prefix="TUI")
 
             while True:
-                user_input = readchar().lower()
+                user_input = readkey()
+                if user_input == key.UP and arrows_enabled['UP']:
+                    return key.UP
+                elif user_input == key.DOWN and arrows_enabled['DOWN']:
+                    return key.DOWN
+                elif user_input == key.LEFT and arrows_enabled['LEFT']:
+                    return key.LEFT
+                elif user_input == key.RIGHT and arrows_enabled['RIGHT']:
+                    return key.RIGHT
+
+                user_input = user_input.lower()
                 log("DEBUG", f"User input detected: {user_input}", prefix="TUI")
                 if user_input.strip() == "" and default:
                     result = default
@@ -313,7 +329,7 @@ class TUI:
 
         return result
 
-    def render_left_and_right_record(self, finding_record: Tuple[model.Finding, model.Finding, float], differences: str = ''):
+    def render_left_and_right_whole_finding_record(self, finding_record: Tuple[model.Finding, model.Finding, float], differences: str = ''):
         left_right_table: Table = Table(
             title="Merged Finding", box=None, show_lines=False
         )
@@ -323,16 +339,28 @@ class TUI:
         left_record = finding_record['left']
         right_record = finding_record['right']
         score = finding_record['score']
-        log('INFO', f'These two records have a {score:.2f}% match', prefix='TUI')
+        log('INFO', f'These two records have a {score:.2f}% match overall', prefix='TUI')
         for field in dataclasses.fields(model.Finding):
-            left_value = str(getattr(left_record, field.name, blank_for_type(get_type_as_str(field.type))))
-            right_value = str(getattr(right_record, field.name, blank_for_type(get_type_as_str(field.type))))
-            log('DEBUG', f'Rendering field {field.name}: {left_value} -> {right_value}', prefix="TUI")
+            left_value_raw = str(getattr(left_record, field.name, blank_for_type(get_type_as_str(field.type))))
+            right_value_raw = str(getattr(right_record, field.name, blank_for_type(get_type_as_str(field.type))))
+
+            if len(left_value_raw) > CONFIG["max_chars_field_render"]:
+                left_value = f'{left_value_raw[:CONFIG["max_chars_field_render"] - 3]}...'
+            else:
+                left_value = left_value_raw
+            if len(right_value_raw) > CONFIG["max_chars_field_render"]:
+                right_value = f'{right_value_raw[:CONFIG["max_chars_field_render"] - 3]}...'
+            else:
+                right_value = right_value_raw
+
+
+            log('DEBUG', f'Rendering field {field.name}: {left_value[:200]} -> {right_value[:200]}', prefix="TUI")
             if field.name in differences:
                 field_style ="bold red"
             else:
-                field_style = ""
-            left_right_table.add_row(str(field.name),left_value,right_value, style=field_style)
+                field_style = "blue"
+            left_right_table.add_row(f'[{field_style}]{str(field.name)}[/{field_style}]',
+                                     left_value,right_value)
         self.update_data(left_right_table, title='Preview')
 
     def render_single_partial_dict_record(self, finding_record: Dict):

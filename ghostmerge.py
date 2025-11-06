@@ -38,6 +38,7 @@ def ghostmerge(
 
     get_tui().start()
     tui.resize_splits()
+    tui.blank_input()
 
     tui.update_data(return_ASCII_art(), 'white', 'Welcome to GhostMerge')
     log("INFO", "\n"

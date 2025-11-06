@@ -1,6 +1,6 @@
 # external module imports
 import model
-from imports import (Any, Dict, fields, Tuple)
+from imports import (Any, Dict, fields, Tuple, key)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -147,14 +147,14 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
             auto_value: Any = finding_pair.get('auto').get(field.name)
 
             # ── Interactive resolution ──────────────────────────────────────────
-            tui.render_left_and_right_record(finding_pair, different_fields)
+            tui.render_left_and_right_whole_finding_record(finding_pair, different_fields)
             log('WARN', 'Please review above, ready for merge actions', 'MERGE')
 
             tui.render_user_choice('Waiting for user to complete data review')
 
             tui.render_diff_single_field(value_from_left, value_from_right, auto_value, title=f"Field diff for {field.name}")
 
-            analyst_options = ['Blank', 'Keep both', 'Left only', 'Right only', 'Merge (left + right)']
+            analyst_options = ['Keep Left and Right intact (▲ key)', 'Left only (◀️ key)', 'Right only (▶️ key)', 'Merge Left + Right together (▼ key)']
 
             # Establish which option should be highlighted as the default.
             default_choice = ''
@@ -174,12 +174,25 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
             if is_optional:
                 analyst_options.append(f'Blank')
 
-            analyst_choice = tui.render_user_choice('Choose:', analyst_options, default_choice,
-                                                    f"Field-level resolution")
+            analyst_choice = tui.render_user_choice('Choose:', analyst_options, default_choice, f"Field-level resolution",
+                                                    arrows_enabled={'UP': True, 'DOWN': True, 'LEFT': True, 'RIGHT': True})
+
+            analyst_choice_debug_out = None
+            if analyst_choice not in [key.UP, key.DOWN, key.LEFT, key.RIGHT]:
+                analyst_choice_debug_out = analyst_choice
+            else:
+                if analyst_choice == key.UP:
+                    analyst_choice_debug_out = 'Up'
+                if analyst_choice == key.DOWN:
+                    analyst_choice_debug_out = 'Down'
+                if analyst_choice == key.LEFT:
+                    analyst_choice_debug_out = 'Left'
+                if analyst_choice == key.RIGHT:
+                    analyst_choice_debug_out = 'Right'
 
             log(
                 "DEBUG",
-                f"User selection for '{field.name}' → {analyst_choice.upper()}",
+                f"User selection for '{field.name}' → {analyst_choice_debug_out.upper()}",
                 prefix="MERGE",
             )
 
@@ -187,16 +200,16 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
             if analyst_choice == "b" and is_optional:
                 finding_pair['left'].set(field.name, blank_for_type(expected_type_str))
                 finding_pair['right'].set(field.name, blank_for_type(expected_type_str))
-            if analyst_choice == "k":
+            if analyst_choice == "k" or analyst_choice == key.UP:
                 finding_pair['left'].set(field.name, value_from_left)
                 finding_pair['right'].set(field.name, value_from_right)
-            elif analyst_choice == "l":
+            elif analyst_choice == "l" or analyst_choice == key.LEFT:
                 finding_pair['left'].set(field.name, value_from_left)
                 finding_pair['right'].set(field.name, value_from_left)
-            elif analyst_choice == "m":
+            elif analyst_choice == "m" or analyst_choice == key.DOWN:
                 finding_pair['left'].set(field.name, f"{value_from_left} {value_from_right}")
                 finding_pair['right'].set(field.name, f"{value_from_left} {value_from_right}")
-            elif analyst_choice == "r":
+            elif analyst_choice == "r" or analyst_choice == key.RIGHT:
                 finding_pair['left'].set(field.name, value_from_right)
                 finding_pair['right'].set(field.name, value_from_right)
             elif analyst_choice == "o" and auto_value:

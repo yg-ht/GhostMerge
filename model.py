@@ -383,16 +383,19 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
                 parsed = json.loads(value) if isinstance(value, str) else value
 
                 if isinstance(parsed, dict):
-                    dict_data = [parsed]  # normalise to list of one for your loop shape
-                elif isinstance(parsed, list) and all(isinstance(x, dict) for x in parsed):
                     dict_data = parsed
+                    log('DEBUG', f'Parsed JSON data is already a Dict', prefix="MODEL")
+                elif isinstance(parsed, list):
+                    # normalise from a List to a single Dict
+                    if len(parsed) != 1 or not isinstance(parsed[0], dict):
+                        log('ERROR', f'Expected a single Dict inside the List', prefix="MODEL")
+                    dict_data = parsed[0]
+                    log('DEBUG', f'Removed outer List structure from inner Dict', prefix="MODEL")
                 else:
-                    raise TypeError(f"Expected dict or list of dicts, got {type(parsed)}")
+                    raise TypeError(f"Expected the JSON parsed data to be a Dict or List of Dicts, got {type(parsed)}")
 
-                for sub_dict in dict_data:
-                    key = next(iter(sub_dict))
-                    log('DEBUG', f'Sub-Dict\'s key: "{key}"', prefix="MODEL")
-                    log('DEBUG', f'Sub-Dict\'s value: "{sub_dict[key]}"', prefix="MODEL")
+                for key, value in dict_data.items():
+                    log('DEBUG', f'Key found: "{key}" with value: "{value}"', prefix="MODEL")
 
                 return dict_data
 

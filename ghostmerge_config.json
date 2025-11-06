@@ -26,7 +26,8 @@
   "tui_refresh_rate": 4.0,
   "field_level_diff_highlight_style": "bold blue",
   "field_level_diff_nolight_style": "bold white",
-  "field_level_diff_max_width": 80,
-  "num_lines_messages": 10,
-  "num_lines_input": 8
+  "field_level_diff_max_width": 114,
+  "num_lines_messages": 8,
+  "num_lines_input": 4,
+  "max_chars_field_render": 600
 }

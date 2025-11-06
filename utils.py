@@ -167,6 +167,9 @@ def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
         if exception:
             print(f"{exception_text}")
 
+    if level == 'ERROR':
+        exit(2)
+
 
 # ── IO Utilities ────────────────────────────────────────────────────
 def load_json(json_path: str | Path | None = None, json_string: str | None = None) -> list[dict[str, Any]]:

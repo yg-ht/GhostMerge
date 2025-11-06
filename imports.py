@@ -22,7 +22,7 @@ from pathlib import Path
 from time import sleep
 
 # ── Third-party libraries ───────────────────────────────────────────
-from readchar import readchar
+from readchar import readchar, readkey, key
 from bs4 import BeautifulSoup
 from json import dumps
 from rapidfuzz import fuzz
@@ -75,6 +75,7 @@ __all__ = [
     "get_origin",
     "get_args",
     "get_type_hints",
+    "key",
     "Layout",
     "List",
     "Live",
@@ -82,6 +83,7 @@ __all__ = [
     "Optional",
     "Panel",
     "readchar",
+    "readkey",
     "RenderableType",
     "Table",
     "Text",
