@@ -239,10 +239,10 @@ def blank_for_type(type_name: str):
     if type_name in ['float','int','str','bool']:
         log('DEBUG', f'Type is {type_name}, returning None', prefix="UTILS")
         return None
-    if type_name is 'list':
+    if type_name.startswith('list'):
         log('DEBUG', f'Type is {type_name}, returning []', prefix="UTILS")
         return []
-    if type_name is 'dict':
+    if type_name.startswith('dict'):
         log('DEBUG', f'Type is {type_name}, returning {{}}', prefix="UTILS")
         return {}
     else:
