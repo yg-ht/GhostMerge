@@ -52,7 +52,7 @@ def ghostmerge(
 
     log("DEBUG", f"Args: file_in_left={file_in_left},\n"
                  f"     file_in_right={file_in_right},\n"
-                 f"     file_out_left={file_out_right},\n"
+                 f"     file_out_left={file_out_left},\n"
                  f"     file_out_right={file_out_right},\n"
                  f"     config={config}",
         prefix="CLI")
