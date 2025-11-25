@@ -106,7 +106,7 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
     common_score_count = 0
     for field in fields(Finding):
         common_score = 0
-        if field.name is "id":
+        if field.name == "id":
             # ID numbers don't represent a difference that we care about for matching purposes
             continue
 

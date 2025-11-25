@@ -107,7 +107,7 @@ def sensitivities_checker_single_record(record: Finding, field_side: str, terms:
     if terms:
         for field in fields(Finding):
             log('DEBUG', f'Checking {field.name} for sensitive terms', prefix="SENSITIVITY")
-            if field.name is "id":
+            if field.name == "id":
                 # we retain these IDs so can just skip
                 continue
 

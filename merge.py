@@ -108,7 +108,7 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
     different_fields = ' | '
     # Iterate deterministically over field names to identify differences
     for field in fields(Finding):
-        if field.name is "id":
+        if field.name == "id":
             # we retain these IDs so can just skip
             continue
 
