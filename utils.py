@@ -18,6 +18,7 @@ def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"
             log('DEBUG', f'Config is now: {json.dumps(user_config, indent=2)}', prefix="UTILS")
             CONFIG.update(user_config)
             CONFIG["config_loaded"] = True
+            CONFIG["script_dir"] = SCRIPT_DIR
     except FileNotFoundError:
         log('ERROR', f'No config file found at: {config_path}', prefix="UTILS")
     except Exception as e:

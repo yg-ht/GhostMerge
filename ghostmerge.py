@@ -12,7 +12,7 @@ from utils import load_config, log, load_json, write_json, return_ASCII_art, set
 from model import Finding
 from matching import fuzzy_match_findings
 from merge import merge_main
-from sensitivity import sensitivities_checker_single_record
+from sensitivity import sensitivities_checker_single_record, load_sensitive_terms
 
 # run the app
 app = typer.Typer()
@@ -125,10 +125,11 @@ def ghostmerge(
     final_left, final_right = [], []
     # Sensitivity check inline per field for all records
     if CONFIG['sensitivity_check_enabled']:
+        terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"], CONFIG["script_dir"])
         for record in merged_left:
-            final_left.append(sensitivities_checker_single_record(record, 'Left'))
+            final_left.append(sensitivities_checker_single_record(record, 'Left', terms))
         for record in merged_right:
-            final_right.append(sensitivities_checker_single_record(record, 'Right'))
+            final_right.append(sensitivities_checker_single_record(record, 'Right', terms))
     else:
         final_left = merged_left
         final_right = merged_right

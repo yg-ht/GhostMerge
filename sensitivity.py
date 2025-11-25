@@ -1,5 +1,7 @@
 # external module imports
-from imports import (Dict, fields, List, re, Tuple, Optional)
+from os import close
+
+from imports import (Dict, fields, List, os, re, Tuple, Optional)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -7,19 +9,31 @@ CONFIG = get_config()
 from utils import log, stringify_field
 from model import Finding
 
-def load_sensitive_terms(path: str) -> Dict[str, Optional[str]]:
+def load_sensitive_terms(filename: str, filepath: str) -> Dict[str, Optional[str]] | None:
     """Parses a file of sensitive terms and optional replacements."""
-    path_local = path + ".local"
-    try:
-        if open(path_local).close():
-            path = path_local
-    except FileNotFoundError:
-        log('DEBUG', 'Using standard sensitivity terms file, as ".local" variant does not exist.', prefix="SENSITIVITY")
+    sensitive_terms_filepaths = [
+                                str(filename),
+                                f"{filename}.local",
+                                os.path.join(str(filepath), str(filename)),
+                                os.path.join(str(filepath), f"{filename}.local"),
+                               ]
+
+    sensitive_terms_file = None
+    for sensitive_terms_filepath in sensitive_terms_filepaths:
+        try:
+            with open(sensitive_terms_filepath) as f:
+                sensitive_terms_file = sensitive_terms_filepath
+                f.close()
+        except FileNotFoundError:
+            log('DEBUG', f'No sensitive terms file found at {sensitive_terms_filepath}', prefix="SENSITIVITY")
+    if sensitive_terms_file is None:
+        log('WARN', f'No sensitive terms file found - unable to check for sensitive terms!', prefix="SENSITIVITY")
+        return None
 
     terms = {}
     try:
-        log("DEBUG", f"Opening sensitivity terms file at: {path}", prefix="SENSITIVITY")
-        with open(path, 'r', encoding='utf-8') as f:
+        log("DEBUG", f"Opening sensitivity terms file at: {sensitive_terms_file}", prefix="SENSITIVITY")
+        with open(sensitive_terms_file, 'r', encoding='utf-8') as f:
             for line_number, line in enumerate(f, start=1):
                 original_line = line.strip()
                 if not original_line or original_line.startswith("#"):
@@ -34,8 +48,8 @@ def load_sensitive_terms(path: str) -> Dict[str, Optional[str]]:
                     terms[original_line.lower()] = None
         log("DEBUG", f"Loaded {len(terms)} sensitive terms", prefix="SENSITIVITY")
     except Exception as e:
-        log("ERROR", "Failed to load sensitive terms file", prefix="SENSITIVITY", exception=e)
-        raise
+        log("ERROR", "Failed to load sensitive terms file, unable to continue", prefix="SENSITIVITY", exception=e)
+        return None
     return terms
 
 def check_for_sensitivities(field, terms) -> List[Tuple[str, Optional[str]]]:
@@ -56,15 +70,14 @@ def check_for_sensitivities(field, terms) -> List[Tuple[str, Optional[str]]]:
                 results.append((term, replacement))
     return results
 
-def sensitivities_checker_single_field(field_name: str, record: Finding, field_side: str, terms: Dict[str, Optional[str]] = None) -> Finding:
+def sensitivities_checker_single_field(field_name: str, record: Finding, field_side: str, terms: Dict[str, Optional[str]]) -> Finding:
     tui = get_tui()
-    if not terms:
-        terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"])
     sensitivity_hits = check_for_sensitivities(record.get(field_name), terms)
 
     if len(sensitivity_hits) > 0:
         action_choices = ['Edit', 'Keep']
         for sensitive_term, offered in sensitivity_hits:
+            tui.blank_data()
             tui.render_single_whole_finding_record(record, sensitive_term, field_name)
             prompt = (f"Sensitive term [bold red]{sensitive_term}[/bold red] in [bold yellow]{field_name}[/bold yellow]"
                       f" field [bold]{record.get(field_name)[:25]}[/bold] on {field_side} record set\n\n")
@@ -90,19 +103,19 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
 
     return record
 
-def sensitivities_checker_single_record(record: Finding, field_side: str) -> Finding:
-    terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"])
-    for field in fields(Finding):
-        log('DEBUG', f'Checking {field.name} for sensitive terms', prefix="SENSITIVITY")
-        if field.name is "id":
-            # we retain these IDs so can just skip
-            continue
+def sensitivities_checker_single_record(record: Finding, field_side: str, terms: Dict[str, Optional[str]]) -> Finding:
+    if terms:
+        for field in fields(Finding):
+            log('DEBUG', f'Checking {field.name} for sensitive terms', prefix="SENSITIVITY")
+            if field.name is "id":
+                # we retain these IDs so can just skip
+                continue
 
-        if record.get(field.name):
-            # Sensitivity check inline per field
-            result_sensitivities = sensitivities_checker_single_field(field.name, record, field_side, terms)
-            if result_sensitivities:
-                log('DEBUG', f'Sensitivity check of "{field.name}" resulted in: "{str(result_sensitivities.get(field.name))[:30]}"', prefix="SENSITIVITY")
-            record.set(field.name, result_sensitivities.get(field.name))
+            if record.get(field.name):
+                # Sensitivity check inline per field
+                result_sensitivities = sensitivities_checker_single_field(field.name, record, field_side, terms)
+                if result_sensitivities:
+                    log('DEBUG', f'Sensitivity check of "{field.name}" resulted in: "{str(result_sensitivities.get(field.name))[:30]}"', prefix="SENSITIVITY")
+                record.set(field.name, result_sensitivities.get(field.name))
 
     return record
