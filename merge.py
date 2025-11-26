@@ -162,17 +162,17 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
                 log("DEBUG", "Offered / auto_value is blank, not adding option")
             else:
                 if field.name == 'tags':
-                    analyst_options.append(f'Offered (combine all tags)')
+                    analyst_options.append(f'Offered (spacebar) (combine all tags)')
                 elif field.name == 'extra_fields':
-                    analyst_options.append(f'Offered (combine all fields)')
+                    analyst_options.append(f'Offered (spacebar) (combine all fields)')
                 else:
-                    analyst_options.append(f'Offered')
+                    analyst_options.append(f'Offered (spacebar)')
                 default_choice: str = 'o'
 
             # If the field is permitted to be blank, add this as an option
             is_optional = is_optional_field(expected_type_str)
             if is_optional:
-                analyst_options.append(f'Blank')
+                analyst_options.append(f'Blank (▼ key)')
 
             analyst_choice = tui.render_user_choice('Choose:', analyst_options, default_choice, f"Field-level resolution",
                                                     arrows_enabled={'UP': True, 'DOWN': True, 'LEFT': True, 'RIGHT': True})

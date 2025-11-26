@@ -1,7 +1,7 @@
 # external module imports
 from os import close
 
-from imports import (Dict, fields, List, os, re, Tuple, Optional)
+from imports import (Dict, fields, key, List, os, re, Tuple, Optional)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -75,29 +75,46 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
     sensitivity_hits = check_for_sensitivities(record.get(field_name), terms)
 
     if len(sensitivity_hits) > 0:
-        action_choices = ['Edit', 'Keep']
+        action_choices = ['Edit (▲ key)', 'Keep (▼ key)']
         for sensitive_term, offered in sensitivity_hits:
             tui.blank_data()
             tui.render_single_whole_finding_record(record, sensitive_term, field_name)
             prompt = (f"Sensitive term [bold red]{sensitive_term}[/bold red] in [bold yellow]{field_name}[/bold yellow]"
                       f" field [bold]{record.get(field_name)[:25]}[/bold] on {field_side} record set\n\n")
+            default_choice = ''
             if offered:
                 prompt += f"Offered: [bold red]{sensitive_term}[/bold red] → [green]{offered}[/green]"
-                action_choices.append('Offered')
+                action_choices.append('Offered (spacebar)')
+                default_choice: str = 'o'
 
             action = tui.render_user_choice(prompt, options=action_choices,
-                                            title=f"Field-level resolution: {field_name}")
+                                            title=f"Field-level sensitive term resolution: {field_name}",
+                                            default=default_choice,
+                                            arrows_enabled={'UP': True, 'DOWN': True, 'LEFT': False, 'RIGHT': False})
+
+            analyst_choice_debug_out = None
+            if action not in [key.UP, key.DOWN, key.LEFT, key.RIGHT]:
+                analyst_choice_debug_out = action
+            else:
+                if action == key.UP:
+                    analyst_choice_debug_out = 'Up'
+                if action == key.DOWN:
+                    analyst_choice_debug_out = 'Down'
+                if action == key.LEFT:
+                    analyst_choice_debug_out = 'Left'
+                if action == key.RIGHT:
+                    analyst_choice_debug_out = 'Right'
 
             if action == "o" and offered:
                 log('DEBUG', f'User chose Offered solution: "{offered}"', prefix="SENSITIVITY")
                 result = re.sub(sensitive_term, offered, record.get(field_name), flags=re.IGNORECASE)
                 record.set(field_name, result)
-            elif action == "e":
+            elif action == "e" or action == key.UP:
                 edited_term = tui.invoke_editor(record.get(field_name))
                 log('DEBUG', f'User chose to edit and set: "{edited_term}"', prefix="SENSITIVITY")
                 result = re.sub(sensitive_term, edited_term, record.get(field_name), flags=re.IGNORECASE)
                 record.set(field_name, result)
-            elif action == "k":
+            elif action == "k" or action == key.DOWN:
                 log("WARN", "User chose to Keep field as is", prefix="SENSITIVITY")
                 continue
 
