@@ -151,6 +151,7 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
 
             # get the expected type once for future efforts
             expected_type_str = get_type_as_str(field.type)
+            log('DEBUG', f'Data type is expected to be: {expected_type_str}', prefix='TUI')
 
             left_value: Any = getattr(finding_pair.get('left'), field.name,
                                            blank_for_type(get_type_as_str(field.type)))
@@ -167,7 +168,7 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
 
             tui.render_diff_single_field(left_value, right_value, auto_value, auto_side, title=f"Field diff for {field.name}")
 
-            analyst_options = ['Keep Left and Right intact (▲ key)', 'Left only (◀️ key)', 'Right only (▶️ key)', 'Merge Left + Right together']
+            analyst_options = ['Keep Left and Right intact (▲ key)', 'Left only (◀️ key)', 'Right only (▶️ key)']
 
             # Establish which option should be highlighted as the default.
             default_choice = ''
@@ -182,15 +183,18 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
                     analyst_options.append(f'Offered (spacebar)')
                 default_choice: str = 'o'
 
+            if 'str' in expected_type_str:
+                analyst_options.append('Merge Left + Right together')
+
             # If the field is permitted to be blank, add this as an option
             is_optional = is_optional_field(expected_type_str)
-            enable_right_key = False
+            enable_down_key = False
             if is_optional:
                 analyst_options.append(f'Blank (▼ key)')
-                enable_right_key = True
+                enable_down_key = True
 
             analyst_choice = tui.render_user_choice('Choose:', analyst_options, default_choice, f"Field-level resolution",
-                                                    arrows_enabled={'UP': True, 'DOWN': True, 'LEFT': True, 'RIGHT': enable_right_key})
+                                                    arrows_enabled={'UP': True, 'DOWN': enable_down_key, 'LEFT': True, 'RIGHT': True})
 
             analyst_choice_debug_out = None
             if analyst_choice not in [key.UP, key.DOWN, key.LEFT, key.RIGHT]:
@@ -215,7 +219,7 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
             if (analyst_choice == "b" or analyst_choice == key.DOWN) and is_optional:
                 finding_pair['left'].set(field.name, blank_for_type(expected_type_str))
                 finding_pair['right'].set(field.name, blank_for_type(expected_type_str))
-            if analyst_choice == "k" or analyst_choice == key.UP:
+            elif analyst_choice == "k" or analyst_choice == key.UP:
                 finding_pair['left'].set(field.name, left_value)
                 finding_pair['right'].set(field.name, right_value)
             elif analyst_choice == "l" or analyst_choice == key.LEFT:
