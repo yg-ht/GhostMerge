@@ -140,8 +140,7 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
 def fuzzy_match_findings(
     list_Left: List[Finding],
     list_Right: List[Finding],
-    threshold: float,
-    next_id: int
+    threshold: float
 ) -> Tuple[List[Dict[str,Finding|str]], List[Finding], List[Finding]]:
     """
     Matches findings from two lists using fuzzy scoring.

@@ -11,7 +11,7 @@ tui = TUI()
 from utils import load_config, log, load_json, write_json, return_ASCII_art, Aborting
 from model import Finding
 from matching import fuzzy_match_findings
-from merge import merge_main
+from merge import merge_main, renumber_findings
 from sensitivity import sensitivities_checker_single_record, load_sensitive_terms
 
 # run the app
@@ -79,26 +79,24 @@ def ghostmerge(
     file_out_search_reversed = '.json'[::-1]
     default_output_append_reversed = CONFIG['default_output_filename_append'][::-1]
     if file_out_left is None:
-        file_in_left_reversed = findings_left[::-1]
+        file_in_left_reversed = str(file_in_left)[::-1]
         file_out_left_reversed = str(file_in_left_reversed).replace(file_out_search_reversed, default_output_append_reversed, 1)
         file_out_left = file_out_left_reversed[::-1]
 
     if file_out_right is None:
-        file_in_right_reversed = findings_right[::-1]
+        file_in_right_reversed = str(file_in_right)[::-1]
         file_out_right_reversed = str(file_in_right_reversed).replace(file_out_search_reversed, default_output_append_reversed, 1)
         file_out_right = file_out_right_reversed[::-1]
 
     matches: List[Dict[str,Finding|float]] = []
     unmatched_left = findings_left
     unmatched_right = findings_right
-    next_id = 1
     for fuzzy_threshold in CONFIG['fuzzy_match_threshold']:
         log('INFO', f'Performing fuzzy matching at {fuzzy_threshold}% match threshold','CLI')
-        new_matches, unmatched_left, unmatched_right = fuzzy_match_findings(unmatched_left, unmatched_right, fuzzy_threshold, next_id=next_id)
+        new_matches, unmatched_left, unmatched_right = fuzzy_match_findings(unmatched_left, unmatched_right, fuzzy_threshold)
         log('DEBUG', f'Updating matches dictionary with any new matches', 'CLI')
         matches.extend(new_matches)
         log('DEBUG', f'Matches dictionary now contains {len(matches)}', 'CLI')
-        next_id = next_id + len(matches)
 
     log("INFO", f"After all fuzzy matching there are {len(unmatched_left)} unmatched findings from left", prefix="CLI")
     log("INFO", f"After all fuzzy matching there are {len(unmatched_right)} unmatched findings from right", prefix="CLI")
@@ -127,6 +125,9 @@ def ghostmerge(
         merged_right.append(unmatched_right_record)
         unmatched_records_appended += 1
     log("INFO", f"Successfully appended {unmatched_records_appended} unmatched records to both Left and Right", prefix="CLI")
+
+    log ("INFO", "Re-sequencing all Finding IDs", prefix="CLI")
+    merged_left, merged_right = renumber_findings(merged_left, merged_right, start_id=1)
 
     final_left, final_right = [], []
     # Sensitivity check inline per field for all records

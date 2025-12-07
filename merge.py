@@ -1,5 +1,5 @@
 # external module imports
-from imports import (Any, auto, Dict, fields, Enum, Tuple, key)
+from imports import (Any, auto, Dict, Enum, fields, key, List, Tuple)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -90,6 +90,30 @@ def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Find
 
     log("DEBUG", f"Gathered the auto-complete values for Left (ID #{finding_from_left.id}) and Right (ID #{finding_from_right.id})", prefix="MERGE")
     return auto_fields_values, auto_fields_winner
+
+def renumber_findings(
+    left_findings: List[Finding],
+    right_findings: List[Finding],
+    start_id: int = 1,
+) -> tuple[List[Finding], List[Finding]]:
+    """
+    Reassign IDs so that each pair of left/right findings share a new, unique ID.
+    IDs are allocated sequentially starting at start_id.
+    """
+    if len(left_findings) != len(right_findings):
+        # This really should not happen with your current merge logic
+        raise ValueError(
+            f"Cannot renumber findings, length mismatch: "
+            f"left={len(left_findings)} right={len(right_findings)}"
+        )
+
+    current = start_id
+    for left, right in zip(left_findings, right_findings):
+        left.id = current
+        right.id = current
+        current += 1
+
+    return left_findings, right_findings
 
 # ── Main merge logic ───────────────────────────────────────────────────
 def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinner]]) -> Tuple[Finding,Finding]:
