@@ -22,7 +22,6 @@ def load_sensitive_terms(filename: str, filepath: str) -> Dict[str, Optional[str
         try:
             with open(sensitive_terms_filepath) as f:
                 sensitive_terms_file = sensitive_terms_filepath
-                f.close()
         except FileNotFoundError:
             log('DEBUG', f'No sensitive terms file found at {sensitive_terms_filepath}', prefix="SENSITIVITY")
     if sensitive_terms_file is None:

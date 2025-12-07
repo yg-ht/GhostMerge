@@ -76,11 +76,17 @@ def ghostmerge(
         if finding_right_temp is not None:
             findings_right.append(finding_right_temp)
 
+    file_out_search_reversed = '.json'[::-1]
+    default_output_append_reversed = CONFIG['default_output_filename_append'][::-1]
     if file_out_left is None:
-        file_out_left = str(file_in_left).replace('.json', CONFIG['default_output_filename_append'])
+        file_in_left_reversed = findings_left[::-1]
+        file_out_left_reversed = str(file_in_left_reversed).replace(file_out_search_reversed, default_output_append_reversed, 1)
+        file_out_left = file_out_left_reversed[::-1]
 
     if file_out_right is None:
-        file_out_right = str(file_in_right).replace('.json', CONFIG['default_output_filename_append'])
+        file_in_right_reversed = findings_right[::-1]
+        file_out_right_reversed = str(file_in_right_reversed).replace(file_out_search_reversed, default_output_append_reversed, 1)
+        file_out_right = file_out_right_reversed[::-1]
 
     matches: List[Dict[str,Finding|float]] = []
     unmatched_left = findings_left
