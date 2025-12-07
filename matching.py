@@ -158,14 +158,14 @@ def fuzzy_match_findings(
     matched_indices_right = set()
 
     for idx_left, finding_left in enumerate(list_Left):
-        log("DEBUG", f"Searching match for Left#{idx_left} (ID: {finding_left.id})", prefix="MATCHING")
+        log("DEBUG", f"Searching match for Left #{idx_left} (ID: {finding_left.id})", prefix="MATCHING")
         best_match = None
         best_score = 0
         best_idx_right = -1
 
         for idx_right, finding_right in enumerate(list_Right):
             if idx_right in matched_indices_right:
-                log("DEBUG", f"Skipping Right#{idx_right} (already matched)", prefix="MATCHING")
+                log("DEBUG", f"Skipping Right #{idx_right} (already matched)", prefix="MATCHING")
                 continue
 
             score = score_finding_similarity(finding_left, finding_right)
@@ -184,7 +184,7 @@ def fuzzy_match_findings(
         if best_score >= threshold and best_match:
             matches.extend([{"left": finding_left, "right": best_match, "score": best_score}])
             matched_indices_right.add(best_idx_right)
-            log("INFO", f"Matched Left#{idx_left} (ID: {finding_left.id}) with Right#{best_idx_right} (ID: {best_match.id}) at {best_score:.2f}", prefix="MATCHING")
+            log("INFO", f"Matched Left #{idx_left} (ID: {finding_left.id}) with Right #{best_idx_right} (ID: {best_match.id}) at {best_score:.2f}", prefix="MATCHING")
         else:
             unmatched_left.append(finding_left)
             log("DEBUG", f"No match found for Left#{idx_left} (best was {best_score:.2f})", prefix="MATCHING")

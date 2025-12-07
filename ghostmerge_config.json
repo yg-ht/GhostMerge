@@ -25,9 +25,14 @@
   "allowed_severities": ["Informational", "Low", "Medium", "High", "Critical"],
   "tui_refresh_rate": 4.0,
   "field_level_diff_highlight_style": "bold blue",
-  "field_level_diff_nolight_style": "bold white",
+  "field_level_diff_nolight_style": "white",
   "field_level_diff_max_width": 114,
+  "field_level_diff_max_data_lines": 30,
   "num_lines_messages": 8,
   "num_lines_input": 4,
-  "max_chars_field_render": 600
+  "max_chars_field_render": 600,
+  "padding_config_top": 0,
+  "padding_config_right": 1,
+  "padding_config_bottom": 0,
+  "padding_config_left": 1
 }

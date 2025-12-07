@@ -27,6 +27,7 @@ from bs4 import BeautifulSoup
 from json import dumps
 from rapidfuzz import fuzz
 from typing import Any, Dict, List, Tuple, Optional, Union, get_origin, get_args, get_type_hints
+from enum import Enum, auto
 
 # ── Interface related ────────────────────────────────────────────────
 import typer
@@ -66,6 +67,7 @@ __all__ = [
 
     # ── Third-party ──
     "Any",
+    "auto",
     "BeautifulSoup",
     "Columns",
     "Console",
@@ -78,6 +80,7 @@ __all__ = [
     "key",
     "Layout",
     "List",
+    "Enum",
     "Live",
     "MarkupError",
     "Optional",

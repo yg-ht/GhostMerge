@@ -1,14 +1,12 @@
 # external module imports
-import typing
 from types import NoneType
-from xmlrpc.client import Boolean
 
-from imports import ast, dataclass, field, Any, Dict, List, Optional, Union, re, json, get_origin, get_args, get_type_hints
+from imports import dataclass, field, fields, Any, Dict, List, Optional, Union, re, json, get_origin, get_args, get_type_hints
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, is_blank, is_optional_field, blank_for_type, get_type_as_str, load_json
+from utils import log, is_blank, is_optional_field, blank_for_type, get_type_as_str
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -19,7 +17,7 @@ class Finding:
     """
     Represents a single GhostWriter finding with all defined fields and helpers.
     """
-    id: int
+    id: Optional[int] = None
     severity: Optional[str] = None
     cvss_score: Optional[float] = None
     cvss_vector: Optional[str] = None
@@ -51,7 +49,8 @@ class Finding:
             # Resolve annotations once so we do not see unevaluated strings or typing artefacts
             hints = get_type_hints(cls)
 
-            for field_name, field in cls.__dataclass_fields__.items():
+            for field_def in fields(Finding):
+                field_name = field_def.name
                 # Use the resolved hint, not field.type
                 field_type = hints.get(field_name, Any)
                 expected_type_str = get_type_as_str(field_type)
@@ -105,11 +104,11 @@ class Finding:
                             f"Field '{field_name}' expected {expected_type_str} but got type {get_type_as_str(type(raw_value))}: \"{raw_value}\" error is:\n{e}",
                             prefix="MODEL")
                         tui.render_single_partial_dict_record(data)
-                        correction = prompt_user_to_fix_field(field_name, field_type, raw_value)
-                        if correction[0] == 0:
+                        correction_status, correction_data = prompt_user_to_fix_field(field_name, field_type, raw_value)
+                        if correction_status == 0:
                             log('DEBUG', f"User prompt to resolve successful", prefix="MODEL")
-                            coerced_data[field_name] = correction[1]
-                        elif correction[0] == 1:
+                            coerced_data[field_name] = correction_data
+                        elif correction_status == 1:
                             log('INFO', f"User prompt to resolve not successful", prefix="MODEL")
                             return None
                         else:
@@ -156,6 +155,20 @@ class Finding:
             "tags": self.tags,
             "extra_fields": self.extra_fields,
         }
+
+    def __getitem__(self, key: str) -> Any:
+        value = self.get(key, default=None)
+        if value is None and not hasattr(self, key) and key not in (self.extra_fields or {}):
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        ok = self.set(key, value)
+        if not ok:
+            # push unknowns into extra_fields
+            if self.extra_fields is None:
+                self.extra_fields = {}
+            self.extra_fields[key] = value
 
     def get(self, key: str, default: Any = None) -> Any:
         """
@@ -204,20 +217,21 @@ def prompt_user_to_fix_field(field_name: str, expected_type: type, current_value
     if action == "b" and is_optional:
         log("DEBUG", f"User chose to use blank value for optional field '{field_name}'", prefix="MODEL")
         blank_return_type = blank_for_type(expected_type_str)
-        return [0, blank_return_type]
+        return 0, blank_return_type
     elif action == "f":
         new_value = tui.render_user_choice(f"Enter corrected value for [bold]{field_name}[/bold]", multi_char=True)
         # this should result in it being recursive until a valid value is provided or skipped
         try:
             casted = coerce_value(new_value, expected_type, field_name)
-            return [0, casted]
+            return 0, casted
         except (ValueError, TypeError):
             return prompt_user_to_fix_field(field_name, expected_type, new_value)
     elif action == "s":
         log("WARN", f"User skipped this whole finding", prefix="MODEL")
-        return [1, None]
+        return 1, None
 
-    return None
+    # We shouldn't ever get to this, so the return statement below is belt and braces
+    return 1, None
 
 def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = None) -> Any:
     """

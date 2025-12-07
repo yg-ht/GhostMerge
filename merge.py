@@ -1,6 +1,5 @@
 # external module imports
-import model
-from imports import (Any, Dict, fields, Tuple, key)
+from imports import (Any, auto, Dict, fields, Enum, Tuple, key)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -8,83 +7,92 @@ CONFIG = get_config()
 from utils import log, normalise_tags, is_blank, blank_for_type
 from model import Finding, is_optional_field, get_type_as_str
 
+class ResolvedWinner(Enum):
+    NONE = auto()
+    LEFT = auto()
+    RIGHT = auto()
+
 # ── Conflict Resolution ─────────────────────────────────────────────
-def resolve_conflict(value_from_left, value_from_right) -> str:
+def resolve_conflict(value_from_left, value_from_right) -> Tuple[ResolvedWinner, str | None]:
     """
     Resolves a conflict between two versions of a field.
     Preference is given to non-empty values, and if both are present,
     selects the one with more tokens, or the longer value if tied.
     """
     if is_blank(value_from_left) and is_blank(value_from_right):
-        return None
+        return ResolvedWinner.NONE,None
     if is_blank(value_from_left):
-        return value_from_right
+        return ResolvedWinner.RIGHT,value_from_right
     if is_blank(value_from_right):
-        return value_from_left
+        return ResolvedWinner.LEFT,value_from_left
 
     len_left, len_right = len(str(value_from_left)), len(str(value_from_right))
     tok_left, tok_right = len(str(value_from_left).split()), len(str(value_from_right).split())
 
     if tok_left > tok_right:
-        return value_from_left
+        return ResolvedWinner.LEFT,value_from_left
     elif tok_right > tok_left:
-        return value_from_right
+        return ResolvedWinner.RIGHT,value_from_right
+    elif len_left >= len_right:
+        return ResolvedWinner.LEFT,value_from_left
     else:
-        return value_from_left if len_left >= len_right else value_from_right
+        return ResolvedWinner.RIGHT,value_from_right
 
 # ── Finding Merge ───────────────────────────────────────────────────
-def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Finding) -> Finding:
+def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Finding) -> Tuple[Finding, dict[str, ResolvedWinner]]:
     """
     Performs a detailed, field-by-field selection process of two Finding objects to determine an auto-suggest value.
     """
     log("INFO", f"Determining auto-value for findings: {finding_from_left.id} (Left) <-> {finding_from_right.id} (Right)", prefix="MERGE")
 
-    auto_fields = {}
-
-    # Define all fields that must be considered for auto-value
-    finding_fields_to_get_auto_value = [
-        "severity", "cvss_score", "cvss_vector", "finding_type", "title", "description",
-        "impact", "mitigation", "replication_steps", "host_detection_techniques",
-        "network_detection_techniques", "references", "finding_guidance", "tags", "extra_fields"
-    ] # TODO: change this logic to iterate over the model not a List
+    auto_fields_values = Finding()
+    auto_fields_winner = dict[str, ResolvedWinner | dict[str, ResolvedWinner]]()
 
     # Get auto-value for each field
-    for field_name in finding_fields_to_get_auto_value:
+    for field_def in fields(Finding):
+        field_name = field_def.name
+        auto_fields_values[field_name] = {}
         value_from_left = getattr(finding_from_left, field_name, None)
         value_from_right = getattr(finding_from_right, field_name, None)
 
         if field_name == "tags":
             normalised_tags_left = normalise_tags(" ".join(value_from_left or []))
             normalised_tags_right = normalise_tags(" ".join(value_from_right or []))
-            auto_fields["tags"] = list(set(normalised_tags_left + normalised_tags_right))
+            auto_fields_values["tags"] = list(set(normalised_tags_left + normalised_tags_right))
             log("DEBUG", f"Tags normalised and combined for auto-value", prefix="MERGE")
 
         elif field_name == "extra_fields":
             if not value_from_left or not value_from_right:
                 if value_from_left:
-                    auto_fields["extra_fields"] = value_from_left
+                    auto_fields_winner["extra_fields"] = ResolvedWinner.LEFT
+                    auto_fields_values["extra_fields"] = value_from_left
                 else:
-                    auto_fields["extra_fields"] = value_from_right
+                    auto_fields_winner["extra_fields"] = ResolvedWinner.RIGHT
+                    auto_fields_values["extra_fields"] = value_from_right
                 continue
 
             resolved_extra_fields = {}
+            resolved_extra_winner = {}
             combined_keys = set((value_from_left or {}).keys()) | set((value_from_right or {}).keys())
             for key in combined_keys:
-                resolved_value = resolve_conflict((value_from_left or {}).get(key), (value_from_right or {}).get(key))
+                resolved_side, resolved_value = resolve_conflict((value_from_left or {}).get(key), (value_from_right or {}).get(key))
+                resolved_extra_winner[key] = resolved_side
                 resolved_extra_fields[key] = resolved_value
-                log("DEBUG", f"Resolved extra field '{key}' → Left:{(value_from_left or {}).get(key)} | Right:{(value_from_right or {}).get(key)} → '{resolved_value}'", prefix="MERGE")
-            auto_fields["extra_fields"] = resolved_extra_fields
+                log("DEBUG", f"Resolved extra field '{key}' → Left:{(value_from_left or {}).get(key)} | Right:{(value_from_right or {}).get(key)} → '{resolved_side}'", prefix="MERGE")
+            auto_fields_values["extra_fields"] = resolved_extra_fields
+            auto_fields_winner["extra_fields"] = resolved_extra_winner
 
         else: # all str / int etc fields should resolve using the resolve_conflict function
-            resolved_value = resolve_conflict(value_from_left, value_from_right)
-            auto_fields[field_name] = resolved_value
+            resolved_side, resolved_value = resolve_conflict(value_from_left, value_from_right)
+            auto_fields_winner[field_name] = resolved_side
+            auto_fields_values[field_name] = resolved_value
             log("DEBUG", f"Resolved field '{field_name}' → Left:{value_from_left} | Right:{value_from_right} → '{resolved_value}'", prefix="MERGE")
 
     log("DEBUG", f"Gathered the auto-complete values for Left (ID #{finding_from_left.id}) and Right (ID #{finding_from_right.id})", prefix="MERGE")
-    return Finding.from_dict(auto_fields)
+    return auto_fields_values, auto_fields_winner
 
 # ── Main merge logic ───────────────────────────────────────────────────
-def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Finding]:
+def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinner]]) -> Tuple[Finding,Finding]:
     """Run automatic merge then solicit human confirmation/overrides.
 
     finding_record_pair has this structure:
@@ -102,8 +110,11 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
 
     log("INFO", f"Starting merge_main for: {finding_pair['left'].id} ↔ {finding_pair['right'].id}", prefix="MERGE")
 
-    # Step 1 – Generate the auto-offered suggestions
-    finding_pair.update({'auto': get_auto_suggest_values(finding_pair['left'], finding_pair['right'])})
+    # Generate the auto-offered suggestions
+    auto_suggest_values, auto_suggest_winner = get_auto_suggest_values(finding_pair['left'], finding_pair['right'])
+    # Update the finding pair to make it a trio
+    finding_pair.update({'auto_value': auto_suggest_values})
+    finding_pair.update({'auto_side': auto_suggest_winner})
 
     different_fields = ' | '
     # Iterate deterministically over field names to identify differences
@@ -115,17 +126,18 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
         # get the expected type once for future efforts
         expected_type_str = get_type_as_str(field.type)
 
-        value_from_left: Any = getattr(finding_pair.get('left'), field.name, blank_for_type(get_type_as_str(field.type)))
-        value_from_right: Any = getattr(finding_pair.get('right'), field.name, blank_for_type(get_type_as_str(field.type)))
-        auto_value: Any = finding_pair.get('auto').get(field.name)
+        left_value: Any = getattr(finding_pair.get('left'), field.name, blank_for_type(expected_type_str))
+        right_value: Any = getattr(finding_pair.get('right'), field.name, blank_for_type(expected_type_str))
+        auto_value: Any = finding_pair.get('auto_value')
+        auto_side: dict[str, ResolvedWinner] = finding_pair.get('auto_side')
 
-        log("DEBUG",f"Field '{field.name}': Left={value_from_left!r} "
-                    f"| Right={value_from_right!r} | Auto={auto_value!r}",prefix="MERGE",)
+        log("DEBUG",f"Field '{field.name}': Left={left_value!r} "
+                    f"| Right={right_value!r} | Auto={auto_side!r}",prefix="MERGE",)
 
         # Fast‑path when both sides agree and match the offered suggestion.
-        if (value_from_left == value_from_right):
-            finding_pair['left'].set(field.name, auto_value)
-            finding_pair['right'].set(field.name, auto_value)
+        if left_value == right_value:
+            finding_pair['left'].set(field.name, auto_value.get(field.name))
+            finding_pair['right'].set(field.name, auto_value.get(field.name))
             log("DEBUG",f"Field '{field.name}' identical across both sides – auto‑accepted.",prefix="MERGE",)
             continue
         else:
@@ -140,11 +152,12 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
             # get the expected type once for future efforts
             expected_type_str = get_type_as_str(field.type)
 
-            value_from_left: Any = getattr(finding_pair.get('left'), field.name,
+            left_value: Any = getattr(finding_pair.get('left'), field.name,
                                            blank_for_type(get_type_as_str(field.type)))
-            value_from_right: Any = getattr(finding_pair.get('right'), field.name,
+            right_value: Any = getattr(finding_pair.get('right'), field.name,
                                             blank_for_type(get_type_as_str(field.type)))
-            auto_value: Any = finding_pair.get('auto').get(field.name)
+            auto_value: Any = finding_pair.get('auto_value').get(field.name)
+            auto_side: Any = finding_pair.get('auto_side').get(field.name)
 
             # ── Interactive resolution ──────────────────────────────────────────
             tui.render_left_and_right_whole_finding_record(finding_pair, different_fields)
@@ -152,9 +165,9 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
 
             tui.render_user_choice('Waiting for user to complete data review')
 
-            tui.render_diff_single_field(value_from_left, value_from_right, auto_value, title=f"Field diff for {field.name}")
+            tui.render_diff_single_field(left_value, right_value, auto_value, auto_side, title=f"Field diff for {field.name}")
 
-            analyst_options = ['Keep Left and Right intact (▲ key)', 'Left only (◀️ key)', 'Right only (▶️ key)', 'Merge Left + Right together (▼ key)']
+            analyst_options = ['Keep Left and Right intact (▲ key)', 'Left only (◀️ key)', 'Right only (▶️ key)', 'Merge Left + Right together']
 
             # Establish which option should be highlighted as the default.
             default_choice = ''
@@ -171,11 +184,13 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
 
             # If the field is permitted to be blank, add this as an option
             is_optional = is_optional_field(expected_type_str)
+            enable_right_key = False
             if is_optional:
                 analyst_options.append(f'Blank (▼ key)')
+                enable_right_key = True
 
             analyst_choice = tui.render_user_choice('Choose:', analyst_options, default_choice, f"Field-level resolution",
-                                                    arrows_enabled={'UP': True, 'DOWN': True, 'LEFT': True, 'RIGHT': True})
+                                                    arrows_enabled={'UP': True, 'DOWN': True, 'LEFT': True, 'RIGHT': enable_right_key})
 
             analyst_choice_debug_out = None
             if analyst_choice not in [key.UP, key.DOWN, key.LEFT, key.RIGHT]:
@@ -197,24 +212,24 @@ def merge_main(finding_pair: Dict[str, Finding | float]) -> Tuple[Finding,Findin
             )
 
             # Commit the chosen value into the merged record.
-            if analyst_choice == "b" and is_optional:
+            if (analyst_choice == "b" or analyst_choice == key.DOWN) and is_optional:
                 finding_pair['left'].set(field.name, blank_for_type(expected_type_str))
                 finding_pair['right'].set(field.name, blank_for_type(expected_type_str))
             if analyst_choice == "k" or analyst_choice == key.UP:
-                finding_pair['left'].set(field.name, value_from_left)
-                finding_pair['right'].set(field.name, value_from_right)
+                finding_pair['left'].set(field.name, left_value)
+                finding_pair['right'].set(field.name, right_value)
             elif analyst_choice == "l" or analyst_choice == key.LEFT:
-                finding_pair['left'].set(field.name, value_from_left)
-                finding_pair['right'].set(field.name, value_from_left)
-            elif analyst_choice == "m" or analyst_choice == key.DOWN:
-                finding_pair['left'].set(field.name, f"{value_from_left} {value_from_right}")
-                finding_pair['right'].set(field.name, f"{value_from_left} {value_from_right}")
+                finding_pair['left'].set(field.name, left_value)
+                finding_pair['right'].set(field.name, left_value)
+            elif analyst_choice == "m":
+                finding_pair['left'].set(field.name, f"{left_value} {right_value}")
+                finding_pair['right'].set(field.name, f"{left_value} {right_value}")
             elif analyst_choice == "r" or analyst_choice == key.RIGHT:
-                finding_pair['left'].set(field.name, value_from_right)
-                finding_pair['right'].set(field.name, value_from_right)
+                finding_pair['left'].set(field.name, right_value)
+                finding_pair['right'].set(field.name, right_value)
             elif analyst_choice == "o" and auto_value:
                 finding_pair['left'].set(field.name, auto_value)
                 finding_pair['right'].set(field.name, auto_value)
 
     log("INFO", "This record's merge is finalised.", prefix="MERGE")
-    return tuple([finding_pair['left'], finding_pair['right']])
+    return finding_pair['left'], finding_pair['right']
