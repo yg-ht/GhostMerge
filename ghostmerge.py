@@ -150,6 +150,6 @@ if __name__ == "__main__":
     try:
         app()
     except Aborting:
-        log("INFO", "User aborted via TUI", prefix="MAIN")
+        log("INFO", "Caught abort signal... exiting!", prefix="MAIN")
     finally:
         tui.stop()
