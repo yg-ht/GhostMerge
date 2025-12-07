@@ -8,7 +8,7 @@ CONFIG = get_config()
 from tui import TUI
 tui = TUI()
 # local module imports
-from utils import load_config, log, load_json, write_json, return_ASCII_art, setup_signal_handlers
+from utils import load_config, log, load_json, write_json, return_ASCII_art, Aborting
 from model import Finding
 from matching import fuzzy_match_findings
 from merge import merge_main
@@ -144,6 +144,12 @@ def ghostmerge(
     log("INFO", "## Processing complete ##", prefix="CLI")
     log("INFO", "#########################", prefix="CLI")
     log("INFO", "", prefix="CLI")
+    get_tui().stop()
 
 if __name__ == "__main__":
-    app()
+    try:
+        app()
+    except Aborting:
+        log("INFO", "User aborted via TUI", prefix="MAIN")
+    finally:
+        tui.stop()

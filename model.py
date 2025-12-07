@@ -6,7 +6,7 @@ from imports import dataclass, field, fields, Any, Dict, List, Optional, Union, 
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, is_blank, is_optional_field, blank_for_type, get_type_as_str
+from utils import log, is_blank, is_optional_field, blank_for_type, get_type_as_str, Aborting
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -97,7 +97,7 @@ class Finding:
                         coerced_data[field_name] = coerced
                     except TypeError as e:
                         log('ERROR', f"Encountered unexpected required type, aborting", prefix="MODEL")
-                        exit()
+                        raise Aborting()
                     except ValueError as e:
                         log('WARN', f'Failed to coerce {field_name} to {expected_type_str}', prefix='MODEL')
                         log("DEBUG",
@@ -114,7 +114,7 @@ class Finding:
                         else:
                             log('ERROR', f"User prompt to resolve field type mismatch not successful for "
                                          f"unknown reason - aborting", prefix="MODEL")
-                            exit()
+                            raise Aborting()
 
             # Validate severity
             allowed_severities = CONFIG.get("allowed_severities")
@@ -129,7 +129,7 @@ class Finding:
 
         except Exception as e:
             log("ERROR", f"Failed to parse finding from dict", prefix="MODEL", exception=e)
-            exit()
+            raise Aborting()
 
 
     def to_dict(self) -> dict:

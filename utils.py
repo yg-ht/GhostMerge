@@ -10,6 +10,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 # ── Config & Logging ────────────────────────────────────────────────
 LEVEL_ORDER = ["DEBUG", "INFO", "WARN", "ERROR"]
 
+class Aborting(Exception):
+    pass
+
 def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"):
     try:
         with open(config_path, 'r', encoding='utf-8') as f:

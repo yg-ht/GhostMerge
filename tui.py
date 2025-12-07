@@ -5,6 +5,7 @@ from imports import (difflib, escape, fields, os, subprocess, tempfile, threadin
 from globals import get_config, set_tui
 from model import Finding, get_type_as_str
 from merge import ResolvedWinner
+from utils import Aborting
 
 CONFIG = get_config()
 
@@ -76,9 +77,14 @@ class TUI:
 
     def stop(self):
         """Stop the live rendering loop."""
+        log("INFO", f"Stopping TUI...", prefix="TUI")
         self._running = False
         if self._thread:
             self._thread.join()
+        try:
+            self.console.show_cursor()
+        except Exception as e:
+            log("WARN", f"Failed to show cursor on stop: {e}", prefix="TUI")
 
     def blank_data(self):
         self.update_data('')
@@ -250,7 +256,7 @@ class TUI:
 
         if choice == 'a' and not multi_char and options:
             log("ERROR", "User aborted.", prefix="TUI")
-            exit()
+            raise Aborting()
 
         self.blank_input()
         return choice
