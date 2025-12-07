@@ -1,5 +1,4 @@
 # external module imports
-from os import close
 
 from imports import (Dict, fields, key, List, os, re, Tuple, Optional)
 # get global state objects (CONFIG and TUI)
@@ -53,7 +52,7 @@ def load_sensitive_terms(filename: str, filepath: str) -> Dict[str, Optional[str
     return terms
 
 def check_for_sensitivities(field, terms) -> List[Tuple[str, Optional[str]]]:
-    """Returns List of [(found_term, optional suggested_replacement)...] if sensitivities are found, else None."""
+    """Returns List of [(found_term, optional suggested_replacement)...] if sensitivities are found, else []."""
 
     results = []
     stringified_field = stringify_field(field)
@@ -107,12 +106,14 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
 
             if action == "o" and offered:
                 log('DEBUG', f'User chose Offered solution: "{offered}"', prefix="SENSITIVITY")
-                result = re.sub(sensitive_term, offered, record.get(field_name), flags=re.IGNORECASE)
+                sensitive_pattern = re.escape(sensitive_term)
+                result = re.sub(sensitive_pattern, offered, record.get(field_name), flags=re.IGNORECASE)
                 record.set(field_name, result)
             elif action == "e" or action == key.UP:
                 edited_term = tui.invoke_editor(record.get(field_name))
+                sensitive_pattern = re.escape(sensitive_term)
                 log('DEBUG', f'User chose to edit and set: "{edited_term}"', prefix="SENSITIVITY")
-                result = re.sub(sensitive_term, edited_term, record.get(field_name), flags=re.IGNORECASE)
+                result = re.sub(sensitive_pattern, edited_term, record.get(field_name), flags=re.IGNORECASE)
                 record.set(field_name, result)
             elif action == "k" or action == key.DOWN:
                 log("WARN", "User chose to Keep field as is", prefix="SENSITIVITY")
@@ -133,6 +134,6 @@ def sensitivities_checker_single_record(record: Finding, field_side: str, terms:
                 result_sensitivities = sensitivities_checker_single_field(field.name, record, field_side, terms)
                 if result_sensitivities:
                     log('DEBUG', f'Sensitivity check of "{field.name}" resulted in: "{str(result_sensitivities.get(field.name))[:30]}"', prefix="SENSITIVITY")
-                record.set(field.name, result_sensitivities.get(field.name))
+                # record.set(field.name, result_sensitivities.get(field.name)) # this is apparently duplicated effort, commenting out in case this is not true
 
     return record
