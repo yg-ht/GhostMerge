@@ -42,13 +42,13 @@ def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"
         log('ERROR', f"Failed to load config from {config_path}: {e}", prefix="UTILS")
 
 
-def is_path_writable(path: str) -> bool:
+def is_path_writable(path: str | Path) -> bool:
     """Return True if the given file path is writable (or can be created)."""
     if isinstance(path, str):
         path_as_Path = Path(path)
     elif isinstance(path, Path):
         path_as_Path = path
-        path = str(Path)
+        path = str(path)
     else:
         # path isn't a path
         return False
@@ -172,7 +172,7 @@ def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
             print(f"{exception_text}")
 
     if level == 'ERROR':
-        exit(2)
+        raise Aborting
 
 
 # ── IO Utilities ────────────────────────────────────────────────────
