@@ -283,8 +283,8 @@ def remove_pointless_html_tags(input_string: str) -> str:
 def normalise_line_endings(input_string: str) -> str:
     non_normal_line_ending_found = False
     result = input_string
-    if ">\r\n<" in input_string:
-        log("DEBUG", f"Found line endings outside of tags that need to be normalised", prefix="UTILS")
+    if ">\n<" in input_string:
+        log("DEBUG", f"Found Linux line endings outside of tags that need to be normalised", prefix="UTILS")
         result = result.replace(">\r\n<", "\n")
         non_normal_line_ending_found = True
     if "\r\n" in input_string:
