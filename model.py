@@ -137,10 +137,40 @@ class Finding:
         Serialises this Finding instance back into a dictionary suitable for JSON output.
         """
         log("DEBUG", f"Serialising finding ID {self.id} to dict", prefix="MODEL")
+
+        # The original JSON has several fields such as "extra_fields" as a stringified and escaped JSON blob or as a str
+        # when it naturally would be an int etc.
+        # To process it, we have converted all to a proper typed value which is then not compatible with re-importing
+        # back it into GhostWriter.  So therefore we need to re-stringify, escape etc again...
+        id_as_str = str(self.id)
+
+        if self.cvss_score is None:
+            cvss_score_as_str = ''
+        else:
+            cvss_score_as_str = str(self.cvss_score)
+
+        if self.extra_fields in (None, {}):
+            serialised_extra = None
+        elif isinstance(self.extra_fields, str):
+            # Already a string, trust caller not to double-encode
+            serialised_extra = self.extra_fields
+        else:
+            # Dict or other structure: JSON-encode it to match original schema
+            serialised_extra = json.dumps(self.extra_fields)
+
+        if self.tags in (None, []):
+            serialised_tags = ''
+        elif isinstance(self.tags, str):
+            # Already a string, trust caller not to double-encode
+            serialised_tags = self.tags
+        else:
+            # Join list of tags with a comma and space
+            serialised_tags = ", ".join(str(t) for t in self.tags)
+
         return {
-            "id": self.id,
+            "id": id_as_str,
             "severity": self.severity,
-            "cvss_score": self.cvss_score,
+            "cvss_score": cvss_score_as_str,
             "cvss_vector": self.cvss_vector,
             "finding_type": self.finding_type,
             "title": self.title,
@@ -152,8 +182,8 @@ class Finding:
             "network_detection_techniques": self.network_detection_techniques,
             "references": self.references,
             "finding_guidance": self.finding_guidance,
-            "tags": self.tags,
-            "extra_fields": self.extra_fields,
+            "tags": serialised_tags,
+            "extra_fields": serialised_extra,
         }
 
     def __getitem__(self, key: str) -> Any:
