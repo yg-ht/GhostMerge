@@ -64,9 +64,6 @@ def ghostmerge(
 
     log("INFO", "Starting merge operation", prefix="CLI")
 
-    #findings_left = [Finding.from_dict(f) for f in load_json(file_in_left)]
-    #findings_right = [Finding.from_dict(f) for f in load_json(file_in_right)]
-
     findings_left = []
     json_left = load_json(file_in_left)
     for finding_json_blob in json_left:
@@ -162,6 +159,6 @@ if __name__ == "__main__":
     try:
         app()
     except Aborting:
-        log("INFO", "Caught abort signal... exiting!", prefix="MAIN")
+        log("INFO", "Caught abort signal... exiting!", prefix="CLI")
     finally:
         tui.stop()

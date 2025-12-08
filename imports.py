@@ -25,6 +25,7 @@ from time import sleep
 # ── Third-party libraries ───────────────────────────────────────────
 from readchar import readchar, readkey, key
 from bs4 import BeautifulSoup
+from bs4.element import NavigableString
 from json import dumps
 from rapidfuzz import fuzz
 from typing import Any, Dict, List, Tuple, Optional, Union, get_origin, get_args, get_type_hints
@@ -74,6 +75,7 @@ __all__ = [
     "Columns",
     "Console",
     "Dict",
+    "Enum",
     "escape",
     "fuzz",
     "get_origin",
@@ -82,9 +84,9 @@ __all__ = [
     "key",
     "Layout",
     "List",
-    "Enum",
     "Live",
     "MarkupError",
+    "NavigableString",
     "Optional",
     "Panel",
     "readchar",

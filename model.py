@@ -6,7 +6,7 @@ from imports import dataclass, field, fields, Any, Dict, List, Optional, Union, 
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, is_blank, is_optional_field, blank_for_type, get_type_as_str, Aborting
+from utils import log, is_blank, is_optional_field, blank_for_type, get_type_as_str, Aborting, remove_double_spaces_from_string, remove_pointless_html_tags
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -17,7 +17,7 @@ class Finding:
     """
     Represents a single GhostWriter finding with all defined fields and helpers.
     """
-    id: Optional[int] = None
+    id: int = 0
     severity: Optional[str] = None
     cvss_score: Optional[float] = None
     cvss_vector: Optional[str] = None
@@ -56,6 +56,14 @@ class Finding:
                 expected_type_str = get_type_as_str(field_type)
                 raw_value = data.get(field_name, None)
 
+                if isinstance(raw_value, str):
+                    if CONFIG['remove_double_spaces']:
+                        raw_value = remove_double_spaces_from_string(raw_value)
+                    if CONFIG['remove_lead_and_trail_whitespace']:
+                        raw_value = raw_value.strip()
+                    if CONFIG['remove_pointless_html_tags']:
+                        raw_value = remove_pointless_html_tags(raw_value)
+
                 log('DEBUG', f'Checking "{field_name}" if data type is as expected. '
                              f'Currently {type(raw_value)}', prefix='MODEL')
 
@@ -92,8 +100,6 @@ class Finding:
                     try:
                         log('DEBUG', f'Attempting to coerce {field_name} to {expected_type_str}', prefix='MODEL')
                         coerced = coerce_value(raw_value, field_type, field_name)
-                        if isinstance(coerced, str):
-                            coerced = coerced.strip()
                         coerced_data[field_name] = coerced
                     except TypeError as e:
                         log('ERROR', f"Encountered unexpected required type, aborting", prefix="MODEL")

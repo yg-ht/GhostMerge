@@ -144,7 +144,7 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
     # Iterate deterministically over field names to identify differences
     for field in fields(Finding):
         if field.name == "id":
-            # we retain these IDs so can just skip
+            # we don't care about IDs so can just skip
             continue
 
         # get the expected type once for future efforts
@@ -171,6 +171,9 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
 
     # Iterate deterministically over field names to process differences
     for field in fields(Finding):
+        if field.name == "id":
+            # we don't care about IDs so can just skip
+            continue
         if field.name in different_fields:
             # get the expected type once for future efforts
             expected_type_str = get_type_as_str(field.type)

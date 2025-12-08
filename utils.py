@@ -1,7 +1,7 @@
 # external module imports
 from soupsieve.util import lower
 
-from imports import dumps, escape, traceback, os, random, b64decode, sys, signal, get_origin, get_args, textwrap, datetime, json, Any, Path, Text, Union
+from imports import Any, b64decode, BeautifulSoup, datetime, dumps, escape, get_origin, get_args, json, NavigableString, os, Path, random, re, signal, sys, textwrap, Text, traceback, Union
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -12,6 +12,7 @@ LEVEL_ORDER = ["DEBUG", "INFO", "WARN", "ERROR"]
 
 class Aborting(Exception):
     pass
+
 
 def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"):
     try:
@@ -63,6 +64,7 @@ def is_path_writable(path: str | Path) -> bool:
             return os.access(parent_dir, os.W_OK)
     except OSError:
         return False
+
 
 def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
     # set defaults
@@ -215,15 +217,67 @@ def setup_signal_handlers():
     signal.signal(signal.SIGTERM, handle_exit)
 
 # ── Data Utilities ──────────────────────────────────────────────────
-'''def strip_html(html: str) -> str:
-    try:
-        text = BeautifulSoup(html, "html.parser").get_text(separator=" ", strip=True)
-        log("DEBUG", "HTML stripped successfully", prefix="UTILS")
-        return text
-    except Exception as e:
-        log("ERROR", "HTML stripping failed", prefix="UTILS", exception=e)
-        raise
-'''
+def remove_double_spaces_from_string(input_string: str) -> str:
+    result = re.sub(r'\s{2,}', ' ', input_string)
+    if result != input_string:
+        log("DEBUG", "Whitespace runs collapsed", prefix="UTILS")
+    else:
+        log("DEBUG", "No whitespace runs to collapse", prefix="UTILS")
+    return result
+
+
+def remove_pointless_html_tags(input_string: str) -> str:
+    """
+       Remove pointless empty HTML wrappers such as:
+         - <span></span>
+         - <p></p>
+         - <p>   </p>
+         - <span>&nbsp;</span>
+       anywhere in the string.
+
+       A tag is removed if:
+         - it has no child tags, and
+         - all its text content is whitespace only (including non breaking spaces).
+
+       Structural void elements (br, img, hr, etc.) are never removed.
+       """
+    soup = BeautifulSoup(input_string, "html.parser")
+
+    # Process children first so parents see already cleaned content
+    all_tags = soup.find_all(True)  # True means "any tag"
+    void_elements = {
+        "br", "img", "hr", "input", "meta", "link", "source",
+        "area", "embed", "col", "track", "wbr"
+    }
+
+    for tag in reversed(all_tags):
+        # Never treat void elements as pointless
+        if tag.name in void_elements:
+            continue
+
+        # If the tag has any child elements, it is not considered pointless
+        # We only want to kill wrappers with no nested tags and no real text
+        child_tags = [c for c in tag.children if not isinstance(c, NavigableString)]
+        if child_tags:
+            continue
+
+        # Inspect text-only content
+        has_meaningful_text = False
+        for child in tag.children:
+            if tag.attrs:
+                has_meaningful_text = True
+            if isinstance(child, NavigableString):
+                text = str(child).replace("\xa0", " ")
+                if text.strip():
+                    has_meaningful_text = True
+                    break
+
+        if not has_meaningful_text:
+            # No nested tags and no non whitespace text: pointless wrapper
+            tag.decompose()
+
+    # Normalise leading and trailing whitespace on the whole string
+    return str(soup).strip()
 
 def normalise_tags(tag_str: str) -> list[str]:
     tags = list({tag.strip().lower() for tag in tag_str.replace(',', ' ').split() if tag.strip()})

@@ -52,7 +52,6 @@ def load_sensitive_terms(filename: str, filepath: str) -> Dict[str, Optional[str
 
 def check_for_sensitivities(field, terms) -> List[Tuple[str, Optional[str]]]:
     """Returns List of [(found_term, optional suggested_replacement)...] if sensitivities are found, else []."""
-
     results = []
     stringified_field = stringify_field(field)
     log("DEBUG", f'Checking content starting: "{stringified_field[:50]}" for sensitive content', prefix="SENSITIVITY")
