@@ -22,7 +22,7 @@
 
 ## Style normalisation
 - [ ] Depluralisation
-- [ ] Removal of double spaces
+- [X] Removal of double spaces
 - [ ] Title case normalising
 - [ ] Control or advise on use of parenthesis
 - [ ] Enforce the presence of reference URLs (configurable)
@@ -30,6 +30,8 @@
 - [ ] Integration with LLM for grammar etc support (configurable)
 - [ ] Identify regional use of spellings ("s" vs "z" for example)
 - [ ] Alert on long sentences
+- [x] Normalise line endings
+- [x] Remove pointless HTML tags
 
 ## Automatic Merge Engine and supporting functions
 - [x] Refactor such that we use "left" and "right" instead of A and B (in progress)
@@ -58,10 +60,11 @@
 - [ ] Improve UX for interactive handling of extra_fields
 - [ ] Improve UX for interactive handling of tags
 - [ ] Pause / Resume functionality for large merges
+- [ ] Integrate a CVSS checker to check the severity levels match the score / vector
 
 ##  Sensitive Content Checker
 - [x] Load sensitivity list from file
 - [x] Scan selected fields (e.g. impact, description)
 - [x] Suggest redaction or replacement
 - [x] Allow override per field/output file
-- [ ] Redact from left, but retain in right (or vice versa)
+- [X] Redact from left, but retain in right (or vice versa)
