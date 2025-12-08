@@ -26,6 +26,7 @@
   "remove_double_spaces": true,
   "remove_lead_and_trail_whitespace": true,
   "remove_pointless_html_tags": true,
+  "normalise_line_endings": true,
   "tui_refresh_rate": 4.0,
   "field_level_diff_highlight_style": "bold blue",
   "field_level_diff_nolight_style": "white",
