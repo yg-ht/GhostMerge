@@ -55,6 +55,8 @@
 - [ ] Allow manual matching of unmatched findings
 - [x] Implement config file `threshold` override to adjust sensitivity of fuzzy matching
 - [ ] Preview merged record before final write and prompt for acceptance 
+- [ ] Improve UX for interactive handling of extra_fields
+- [ ] Improve UX for interactive handling of tags
 
 ##  Sensitive Content Checker
 - [x] Load sensitivity list from file
