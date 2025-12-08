@@ -18,6 +18,7 @@ import threading
 import traceback
 from base64 import b64decode
 from dataclasses import dataclass, field, fields
+from hashlib import md5
 from pathlib import Path
 from time import sleep
 
@@ -52,6 +53,7 @@ __all__ = [
     "field",
     "fields",
     "json",
+    "md5",
     "os",
     "Path",
     "random",

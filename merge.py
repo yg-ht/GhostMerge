@@ -1,5 +1,5 @@
 # external module imports
-from imports import (Any, auto, Dict, Enum, fields, key, List, Tuple)
+from imports import (Any, auto, Dict, Enum, fields, key, List, md5, Tuple)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -162,7 +162,7 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
         if left_value == right_value:
             finding_pair['left'].set(field.name, auto_value.get(field.name))
             finding_pair['right'].set(field.name, auto_value.get(field.name))
-            log("DEBUG",f"Field '{field.name}' identical across both sides – auto‑accepted.",prefix="MERGE",)
+            log("DEBUG",f"Field '{field.name}' identical across both sides – auto‑accepted.",prefix="MERGE")
             continue
         else:
             different_fields = different_fields + field.name + ' | '
@@ -172,7 +172,6 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
     # Iterate deterministically over field names to process differences
     for field in fields(Finding):
         if field.name in different_fields:
-
             # get the expected type once for future efforts
             expected_type_str = get_type_as_str(field.type)
             log('DEBUG', f'Data type is expected to be: {expected_type_str}', prefix='TUI')
@@ -183,6 +182,12 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
                                             blank_for_type(get_type_as_str(field.type)))
             auto_value: Any = finding_pair.get('auto_value').get(field.name)
             auto_side: Any = finding_pair.get('auto_side').get(field.name)
+
+            left_hash = md5(left_value).hexdigest()
+            right_hash = md5(right_value).hexdigest()
+
+            log('DEBUG', f'Field: {field.name} with hashes | Left: {left_hash} | Right: {right_hash}', prefix='TUI')
+
 
             # ── Interactive resolution ──────────────────────────────────────────
             if CONFIG['interactive_mode'] or not auto_value or not auto_side:

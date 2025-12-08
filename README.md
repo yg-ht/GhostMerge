@@ -1,48 +1,41 @@
 # 🧰 GhostMerge
 
-A command-line tool for merging and deduplicating GhostWriter finding libraries with human-in-the-loop decision making and robust data hygiene features.
+GhostMerge is an interactive bidirectional merge engine for security finding templates from the GhostWriter report writing tool.
+
+It accepts two JSON files, validates and normalises their contents, performs fuzzy matching to identify equivalent findings, guides the user through field-level conflict resolution, applies optional sensitivity scanning, performs deterministic ID renumbering, and finally outputs two aligned, schema-compatible JSON files suitable for ingestion by legacy systems.
+
+GhostMerge is designed for situations where multiple environments produce overlapping, inconsistent, or partially conflicting Finding templates.
 
 ---
 
-## 📦 Project Structure
+## Features
 
-### 🔧 Core Scripts
+The intended process works along these lines:
+- Two input json files
+- Two output json files
+- Data is coerced into proper types and checked against the (inferred) requirements of the data model
+- Data is output back into the loose data types that actually get used
+- The system fuzzy matches Findings and then presents the user with Finding records that differ
+- The records that differ are then interactively processed field-by-field with highlighting to show differences
+- Where possible the system makes a guess at which option (Left or Right) would be most likely chosen
+- Finding records that are missing from either side are added
+- The fields of all records are then checked for sensitive (and other unwanted) terms
+- Finally, the `id` for each record is then renumbered such that there are no conflicts
 
-- **`ghostmerge.py`** – CLI entry point powered by Typer.
-- **`models.py`** – Data models (e.g., `Finding`) and safe parsing/validation.
-- **`utils.py`** – Consolidated utilities for logging, I/O, HTML stripping, and signals.
-- **`matching.py`** – Fuzzy matching and scoring logic using title, type, and description.
-- **`sensitivity.py`** – Sensitive term detection system, with optional replacements.
+Other features:
+- The system logs to file as well as onscreen
+- Log verbosity is configured per module within the configuration file
+- Strongly typed across all actions to ensure that errors are identified early
+- The user can escape the TUI to the default text editor for a single field before returning to the workflow
 
-### ⚙️ Configuration
-
-- **`ghostmerge_config.json`** – Global settings including:
-  - Logging verbosity and output path
-  - Interactive mode toggle
-  - Sensitivity checker toggle
-  - Matching weights (title, description, finding_type)
-
-### 🧪 Test Fixtures
-
-- **`test_data_left.json`** and **`test_data_right.json`**
-  - Simulated datasets (18 entries each) covering:
-    - Unique and shared entries
-    - Conflicts in fields like title and type
-    - Identical entries (no merge needed)
-    - Duplicates, invalid types (e.g. `cvss_score` as string)
-    - Fuzzy match edge cases
-
-- **`sensitive_terms.txt`**
-  - File used by the sensitivity checker.
-  - Format: one term per line, optionally with `=> replacement`.
-
-### 📝 Supporting Docs
-
-- **`TODO.md`**
-  - Development roadmap and checklist, with completed items and future tasks.
-
-- **`README.md`**
-  - You're reading it.
+Detailed configuration options:
+- Logging & verbosity
+- Sensitivity & content checking
+- Matching & scoring
+- Output & filenames
+- Interaction & mode control
+- Severity & filtering
+- TUI rendering & layout
 
 ---
 
@@ -50,27 +43,19 @@ A command-line tool for merging and deduplicating GhostWriter finding libraries 
 
 Basic invocation:
 ```bash
-python ghostmerge.py merge test_data_left.json test_data_right.json
-```
-
-With automated merging and no sensitive term checks:
-```bash
-python ghostmerge.py merge test_data_left.json test_data_right.json --automated --no-sensitivities-check
+python ghostmerge.py -left test_data_left.json -right test_data_right.json
 ```
 
 ---
 
-## 🔍 Development Notes
+## 🔍 Configuration
 
-- Code uses rich logging to both console and file.
-- Type hints and structured exceptions used throughout.
-- Config is loaded automatically from `ghostmerge_config.json`.
+Config is loaded automatically from `ghostmerge_config.json` unless overriden.
+Similarly `sensitive_terms.txt` is loaded unless overriden. If there is a `ghostmerge_config.json.local` or 
+`sensitive_terms.txt.local` present, these will overwrite their non-`.local` counterparts.
 
 ---
 
 ## 🧼 Still to Implement
 
-See `TODO.md` for upcoming features including:
-- Merge engine orchestration
-- Interactive resolution prompts
-- Unit test harness and validation
+See `TODO.md` for (potentially) upcoming features

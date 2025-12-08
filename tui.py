@@ -533,6 +533,6 @@ class TUI:
                 expand=True,
             )
 
-        log('INFO', f'Ready to render single field diff output!', prefix="TUI")
+        log('DEBUG', f'Ready to render single field diff output!', prefix="TUI")
         self.update_data(field_diff, title=title)
 

@@ -57,6 +57,7 @@
 - [ ] Preview merged record before final write and prompt for acceptance 
 - [ ] Improve UX for interactive handling of extra_fields
 - [ ] Improve UX for interactive handling of tags
+- [ ] Pause / Resume functionality for large merges
 
 ##  Sensitive Content Checker
 - [x] Load sensitivity list from file
