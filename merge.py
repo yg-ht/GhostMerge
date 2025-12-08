@@ -183,10 +183,10 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
             auto_value: Any = finding_pair.get('auto_value').get(field.name)
             auto_side: Any = finding_pair.get('auto_side').get(field.name)
 
-            left_hash = md5(left_value).hexdigest()
-            right_hash = md5(right_value).hexdigest()
+            left_hash = md5(str(left_value).encode("utf-8")).hexdigest()
+            right_hash = md5(str(right_value).encode("utf-8")).hexdigest()
 
-            log('DEBUG', f'Field: {field.name} with hashes | Left: {left_hash} | Right: {right_hash}', prefix='TUI')
+            log('INFO', f'Field: {field.name} with hashes | Left: {left_hash} | Right: {right_hash}', prefix='TUI')
 
 
             # ── Interactive resolution ──────────────────────────────────────────

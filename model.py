@@ -56,8 +56,8 @@ class Finding:
                 expected_type_str = get_type_as_str(field_type)
                 raw_value = data.get(field_name, None)
 
-                log('DEBUG', f'Checking "{field_name}" if data type is as expected. Currently {type(raw_value)}',
-                    prefix='MODEL')
+                log('DEBUG', f'Checking "{field_name}" if data type is as expected. '
+                             f'Currently {type(raw_value)}', prefix='MODEL')
 
                 # Decide if the raw value already matches at a shallow level
                 matches = False
@@ -101,8 +101,8 @@ class Finding:
                     except ValueError as e:
                         log('WARN', f'Failed to coerce {field_name} to {expected_type_str}', prefix='MODEL')
                         log("DEBUG",
-                            f"Field '{field_name}' expected {expected_type_str} but got type {get_type_as_str(type(raw_value))}: \"{raw_value}\" error is:\n{e}",
-                            prefix="MODEL")
+                            f"Field '{field_name}' expected {expected_type_str} but got type "
+                            f"{get_type_as_str(type(raw_value))}: \"{raw_value}\" error is:\n{e}", prefix="MODEL")
                         tui.render_single_partial_dict_record(data)
                         correction_status, correction_data = prompt_user_to_fix_field(field_name, field_type, raw_value)
                         if correction_status == 0:
