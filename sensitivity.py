@@ -75,48 +75,57 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
     if len(sensitivity_hits) > 0:
         action_choices = ['Edit (▲ key)', 'Keep (▼ key)']
         for sensitive_term, offered in sensitivity_hits:
-            tui.blank_data()
-            tui.render_single_whole_finding_record(record, sensitive_term, field_name)
-            prompt = (f"Sensitive term [bold red]{sensitive_term}[/bold red] in [bold yellow]{field_name}[/bold yellow]"
-                      f" field [bold]{record.get(field_name)[:25]}[/bold] on {field_side} record set\n\n")
-            default_choice = ''
-            if offered:
-                prompt += f"Offered: [bold red]{sensitive_term}[/bold red] → [green]{offered}[/green]"
-                action_choices.append('Offered (spacebar)')
-                default_choice: str = 'o'
+            if CONFIG['interactive_mode'] or not offered:
+                tui.blank_data()
+                tui.render_single_whole_finding_record(record, sensitive_term, field_name)
+                prompt = (f"Sensitive term [bold red]{sensitive_term}[/bold red] in [bold yellow]{field_name}[/bold yellow]"
+                          f" field [bold]{record.get(field_name)[:25]}[/bold] on {field_side} record set\n\n")
+                default_choice = ''
+                if offered:
+                    prompt += f"Offered: [bold red]{sensitive_term}[/bold red] → [green]{offered}[/green]"
+                    action_choices.append('Offered (spacebar)')
+                    default_choice: str = 'o'
 
-            action = tui.render_user_choice(prompt, options=action_choices,
-                                            title=f"Field-level sensitive term resolution: {field_name}",
-                                            default=default_choice,
-                                            arrows_enabled={'UP': True, 'DOWN': True, 'LEFT': False, 'RIGHT': False})
+                action = tui.render_user_choice(prompt, options=action_choices,
+                                                title=f"Field-level sensitive term resolution: {field_name}",
+                                                default=default_choice,
+                                                arrows_enabled={'UP': True, 'DOWN': True, 'LEFT': False, 'RIGHT': False})
 
-            analyst_choice_debug_out = None
-            if action not in [key.UP, key.DOWN, key.LEFT, key.RIGHT]:
-                analyst_choice_debug_out = action
+                analyst_choice_debug_out = None
+                if action not in [key.UP, key.DOWN, key.LEFT, key.RIGHT]:
+                    analyst_choice_debug_out = action
+                else:
+                    if action == key.UP:
+                        analyst_choice_debug_out = 'Up'
+                    if action == key.DOWN:
+                        analyst_choice_debug_out = 'Down'
+                    if action == key.LEFT:
+                        analyst_choice_debug_out = 'Left'
+                    if action == key.RIGHT:
+                        analyst_choice_debug_out = 'Right'
+
+                if action == "o" and offered:
+                    log('DEBUG', f'User chose Offered solution: "{offered}"', prefix="SENSITIVITY")
+                    sensitive_pattern = re.escape(sensitive_term)
+                    result = re.sub(sensitive_pattern, offered, record.get(field_name), flags=re.IGNORECASE)
+                    record.set(field_name, result)
+                elif action == "e" or action == key.UP:
+                    edited_term = tui.invoke_editor(record.get(field_name))
+                    sensitive_pattern = re.escape(sensitive_term)
+                    log('DEBUG', f'User chose to edit and set: "{edited_term}"', prefix="SENSITIVITY")
+                    result = re.sub(sensitive_pattern, edited_term, record.get(field_name), flags=re.IGNORECASE)
+                    record.set(field_name, result)
+                elif action == "k" or action == key.DOWN:
+                    log("WARN", "User chose to Keep field as is", prefix="SENSITIVITY")
+                    continue
             else:
-                if action == key.UP:
-                    analyst_choice_debug_out = 'Up'
-                if action == key.DOWN:
-                    analyst_choice_debug_out = 'Down'
-                if action == key.LEFT:
-                    analyst_choice_debug_out = 'Left'
-                if action == key.RIGHT:
-                    analyst_choice_debug_out = 'Right'
-
-            if action == "o" and offered:
-                log('DEBUG', f'User chose Offered solution: "{offered}"', prefix="SENSITIVITY")
+                # We are auto-accepting the auto-offered values if we are configured not to use interactive mode and
+                # the offered variable is populated.  This is perfectly valid, but will result in "best
+                # guess" scenarios that will likely not be as desired.
+                log('DEBUG', f'Auto-accepted Offered solution: "{offered}"', prefix="SENSITIVITY")
                 sensitive_pattern = re.escape(sensitive_term)
                 result = re.sub(sensitive_pattern, offered, record.get(field_name), flags=re.IGNORECASE)
                 record.set(field_name, result)
-            elif action == "e" or action == key.UP:
-                edited_term = tui.invoke_editor(record.get(field_name))
-                sensitive_pattern = re.escape(sensitive_term)
-                log('DEBUG', f'User chose to edit and set: "{edited_term}"', prefix="SENSITIVITY")
-                result = re.sub(sensitive_pattern, edited_term, record.get(field_name), flags=re.IGNORECASE)
-                record.set(field_name, result)
-            elif action == "k" or action == key.DOWN:
-                log("WARN", "User chose to Keep field as is", prefix="SENSITIVITY")
-                continue
 
     return record
 

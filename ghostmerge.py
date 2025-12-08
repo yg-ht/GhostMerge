@@ -57,6 +57,11 @@ def ghostmerge(
                  f"     config={config}",
         prefix="CLI")
 
+    if not CONFIG['interactive_mode']:
+        tui.render_user_choice('GhostMerge is configured to auto-accept any auto-offered conflict resolutions. '
+                               'This is not recommended! It will result in "best-guess" results and will not work '
+                               '100% of the time!')
+
     log("INFO", "Starting merge operation", prefix="CLI")
 
     #findings_left = [Finding.from_dict(f) for f in load_json(file_in_left)]

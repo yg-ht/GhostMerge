@@ -185,77 +185,84 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
             auto_side: Any = finding_pair.get('auto_side').get(field.name)
 
             # ── Interactive resolution ──────────────────────────────────────────
-            tui.render_left_and_right_whole_finding_record(finding_pair, different_fields)
-            log('WARN', 'Please review above, ready for merge actions', 'MERGE')
+            if CONFIG['interactive_mode'] or not auto_value or not auto_side:
+                tui.render_left_and_right_whole_finding_record(finding_pair, different_fields)
+                log('WARN', 'Please review above, ready for merge actions', 'MERGE')
 
-            tui.render_user_choice('Waiting for user to complete data review')
+                tui.render_user_choice('Waiting for user to complete data review')
 
-            tui.render_diff_single_field(left_value, right_value, auto_value, auto_side, title=f"Field diff for {field.name}")
+                tui.render_diff_single_field(left_value, right_value, auto_value, auto_side, title=f"Field diff for {field.name}")
 
-            analyst_options = ['Keep Left and Right intact (▲ key)', 'Left only (◀️ key)', 'Right only (▶️ key)']
+                analyst_options = ['Keep Left and Right intact (▲ key)', 'Left only (◀️ key)', 'Right only (▶️ key)']
 
-            # Establish which option should be highlighted as the default.
-            default_choice = ''
-            if not auto_value:
-                log("DEBUG", "Offered / auto_value is blank, not adding option")
-            else:
-                if field.name == 'tags':
-                    analyst_options.append(f'Offered (spacebar) (combine all tags)')
-                elif field.name == 'extra_fields':
-                    analyst_options.append(f'Offered (spacebar) (combine all fields)')
+                # Establish which option should be highlighted as the default.
+                default_choice = ''
+                if not auto_value:
+                    log("DEBUG", "Offered / auto_value is blank, not adding option")
                 else:
-                    analyst_options.append(f'Offered (spacebar)')
-                default_choice: str = 'o'
+                    if field.name == 'tags':
+                        analyst_options.append(f'Offered (spacebar) (combine all tags)')
+                    elif field.name == 'extra_fields':
+                        analyst_options.append(f'Offered (spacebar) (combine all fields)')
+                    else:
+                        analyst_options.append(f'Offered (spacebar)')
+                    default_choice: str = 'o'
 
-            if 'str' in expected_type_str:
-                analyst_options.append('Merge Left + Right together')
+                if 'str' in expected_type_str:
+                    analyst_options.append('Merge Left + Right together')
 
-            # If the field is permitted to be blank, add this as an option
-            is_optional = is_optional_field(expected_type_str)
-            enable_down_key = False
-            if is_optional:
-                analyst_options.append(f'Blank (▼ key)')
-                enable_down_key = True
+                # If the field is permitted to be blank, add this as an option
+                is_optional = is_optional_field(expected_type_str)
+                enable_down_key = False
+                if is_optional:
+                    analyst_options.append(f'Blank (▼ key)')
+                    enable_down_key = True
 
-            analyst_choice = tui.render_user_choice('Choose:', analyst_options, default_choice, f"Field-level resolution",
-                                                    arrows_enabled={'UP': True, 'DOWN': enable_down_key, 'LEFT': True, 'RIGHT': True})
+                analyst_choice = tui.render_user_choice('Choose:', analyst_options, default_choice, f"Field-level resolution",
+                                                        arrows_enabled={'UP': True, 'DOWN': enable_down_key, 'LEFT': True, 'RIGHT': True})
 
-            analyst_choice_debug_out = None
-            if analyst_choice not in [key.UP, key.DOWN, key.LEFT, key.RIGHT]:
-                analyst_choice_debug_out = analyst_choice
+                analyst_choice_debug_out = None
+                if analyst_choice not in [key.UP, key.DOWN, key.LEFT, key.RIGHT]:
+                    analyst_choice_debug_out = analyst_choice
+                else:
+                    if analyst_choice == key.UP:
+                        analyst_choice_debug_out = 'Up'
+                    if analyst_choice == key.DOWN:
+                        analyst_choice_debug_out = 'Down'
+                    if analyst_choice == key.LEFT:
+                        analyst_choice_debug_out = 'Left'
+                    if analyst_choice == key.RIGHT:
+                        analyst_choice_debug_out = 'Right'
+
+                log(
+                    "DEBUG",
+                    f"User selection for '{field.name}' → {analyst_choice_debug_out.upper()}",
+                    prefix="MERGE",
+                )
+
+                # Commit the chosen value into the merged record.
+                if (analyst_choice == "b" or analyst_choice == key.DOWN) and is_optional:
+                    finding_pair['left'].set(field.name, blank_for_type(expected_type_str))
+                    finding_pair['right'].set(field.name, blank_for_type(expected_type_str))
+                elif analyst_choice == "k" or analyst_choice == key.UP:
+                    finding_pair['left'].set(field.name, left_value)
+                    finding_pair['right'].set(field.name, right_value)
+                elif analyst_choice == "l" or analyst_choice == key.LEFT:
+                    finding_pair['left'].set(field.name, left_value)
+                    finding_pair['right'].set(field.name, left_value)
+                elif analyst_choice == "m":
+                    finding_pair['left'].set(field.name, f"{left_value} {right_value}")
+                    finding_pair['right'].set(field.name, f"{left_value} {right_value}")
+                elif analyst_choice == "r" or analyst_choice == key.RIGHT:
+                    finding_pair['left'].set(field.name, right_value)
+                    finding_pair['right'].set(field.name, right_value)
+                elif analyst_choice == "o" and auto_value:
+                    finding_pair['left'].set(field.name, auto_value)
+                    finding_pair['right'].set(field.name, auto_value)
             else:
-                if analyst_choice == key.UP:
-                    analyst_choice_debug_out = 'Up'
-                if analyst_choice == key.DOWN:
-                    analyst_choice_debug_out = 'Down'
-                if analyst_choice == key.LEFT:
-                    analyst_choice_debug_out = 'Left'
-                if analyst_choice == key.RIGHT:
-                    analyst_choice_debug_out = 'Right'
-
-            log(
-                "DEBUG",
-                f"User selection for '{field.name}' → {analyst_choice_debug_out.upper()}",
-                prefix="MERGE",
-            )
-
-            # Commit the chosen value into the merged record.
-            if (analyst_choice == "b" or analyst_choice == key.DOWN) and is_optional:
-                finding_pair['left'].set(field.name, blank_for_type(expected_type_str))
-                finding_pair['right'].set(field.name, blank_for_type(expected_type_str))
-            elif analyst_choice == "k" or analyst_choice == key.UP:
-                finding_pair['left'].set(field.name, left_value)
-                finding_pair['right'].set(field.name, right_value)
-            elif analyst_choice == "l" or analyst_choice == key.LEFT:
-                finding_pair['left'].set(field.name, left_value)
-                finding_pair['right'].set(field.name, left_value)
-            elif analyst_choice == "m":
-                finding_pair['left'].set(field.name, f"{left_value} {right_value}")
-                finding_pair['right'].set(field.name, f"{left_value} {right_value}")
-            elif analyst_choice == "r" or analyst_choice == key.RIGHT:
-                finding_pair['left'].set(field.name, right_value)
-                finding_pair['right'].set(field.name, right_value)
-            elif analyst_choice == "o" and auto_value:
+                # We are auto-accepting the auto-offered values if we are configured not to use interactive mode and
+                # the auto-value / auto-side variables are populated.  This is perfectly valid, but will result in "best
+                # guess" scenarios that will likely not be as desired.
                 finding_pair['left'].set(field.name, auto_value)
                 finding_pair['right'].set(field.name, auto_value)
 
