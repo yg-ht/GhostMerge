@@ -6,7 +6,8 @@ from imports import dataclass, field, fields, Any, Dict, List, Optional, Union, 
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, is_blank, is_optional_field, blank_for_type, get_type_as_str, Aborting, remove_double_spaces_from_string, remove_pointless_html_tags
+from utils import (log, is_blank, is_optional_field, blank_for_type, get_type_as_str, Aborting,
+                   remove_double_spaces_from_string, remove_pointless_html_tags, normalise_line_endings)
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -63,6 +64,8 @@ class Finding:
                         raw_value = raw_value.strip()
                     if CONFIG['remove_pointless_html_tags']:
                         raw_value = remove_pointless_html_tags(raw_value)
+                    if CONFIG['normalise_line_endings']:
+                        raw_value = normalise_line_endings(raw_value)
 
                 log('DEBUG', f'Checking "{field_name}" if data type is as expected. '
                              f'Currently {type(raw_value)}', prefix='MODEL')

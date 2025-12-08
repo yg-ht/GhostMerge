@@ -279,6 +279,14 @@ def remove_pointless_html_tags(input_string: str) -> str:
     # Normalise leading and trailing whitespace on the whole string
     return str(soup).strip()
 
+
+def normalise_line_endings(input_string: str) -> str:
+    result = input_string.replace("\r\n", "\n")
+    # Then collapse any lone CR (old Mac) to LF
+    result = result.replace("\r", "\n")
+    return result
+
+
 def normalise_tags(tag_str: str) -> list[str]:
     tags = list({tag.strip().lower() for tag in tag_str.replace(',', ' ').split() if tag.strip()})
     log("DEBUG", f"Normalised tags: {tags}", prefix="UTILS")
