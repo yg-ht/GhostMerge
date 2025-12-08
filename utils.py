@@ -285,7 +285,11 @@ def normalise_line_endings(input_string: str) -> str:
     result = input_string
     if ">\n<" in input_string:
         log("DEBUG", f"Found Linux line endings outside of tags that need to be normalised", prefix="UTILS")
-        result = result.replace(">\r\n<", "\n")
+        result = result.replace(">\n<", "><")
+        non_normal_line_ending_found = True
+    if "> <" in input_string:
+        log("DEBUG", f"Found single space char outside of tags that need to be normalised", prefix="UTILS")
+        result = result.replace(">\n<", "><")
         non_normal_line_ending_found = True
     if "\r\n" in input_string:
         log("DEBUG", f"Found Windows line endings that need to be normalised", prefix="UTILS")
