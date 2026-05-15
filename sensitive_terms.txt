@@ -8,3 +8,5 @@ secret sauce => proprietary technique
 xmlns="http://www.w3.org/1999/xhtml" =>
 {{.evidence}} => &ltEVIDENCE&gt
 <p > => <p>
+<ul > => <ul
+style="text-align: justify;> =>
