@@ -17,7 +17,7 @@ from sensitivity import sensitivities_checker_single_record, load_sensitive_term
 # run the app
 app = typer.Typer()
 
-@app.command()
+@app.command(no_args_is_help=True)
 def ghostmerge(
     file_in_left: Path = typer.Option(..., "--file-left", "-l", exists=True, file_okay=True, dir_okay=False, help="Input JSON file Left"),
     file_in_right: Path = typer.Option(..., "--file-right", "-r", exists=True, file_okay=True, dir_okay=False, help="Input JSON file Right"),
@@ -165,4 +165,5 @@ if __name__ == "__main__":
     except Aborting:
         log("INFO", "Caught abort signal... exiting!", prefix="CLI")
     finally:
-        tui.stop()
+        if getattr(tui, "_running", False):
+            tui.stop()

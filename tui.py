@@ -20,6 +20,7 @@ __all__ = ["tui"]
 
 class TUI:
     def __init__(self, refresh_rate: float = CONFIG['tui_refresh_rate']):
+        self._running = False
         log('DEBUG', 'Entered __init__', 'TUI')
         self.console = Console()
         log('DEBUG', 'Started console', 'TUI')
