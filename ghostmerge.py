@@ -57,9 +57,10 @@ def ghostmerge(
                  f"     config={config}",
         prefix="CLI")
 
-    # Output will always show these - these are for "Click" support.
+    # Output may show these:
     # --install-completion  Install completion for bash/zsh
     # --show-completion     Show completion for current shell
+    # this is expected where the system is capable of running auto-completion
 
     if not CONFIG['interactive_mode']:
         tui.render_user_choice('GhostMerge is configured to auto-accept any auto-offered conflict resolutions. '
@@ -68,12 +69,15 @@ def ghostmerge(
 
     log("INFO", "Starting merge operation", prefix="CLI")
 
-    findings_left = []
-    json_left = load_json(file_in_left)
-    for finding_json_blob in json_left:
-        finding_left_temp = Finding.from_dict(finding_json_blob)
-        if finding_left_temp is not None:
-            findings_left.append(finding_left_temp)
+    if file_in_left is None:
+        log('ERROR', 'Command line argument missing: --file-in-left', prefix='CLI')
+    else:
+        findings_left = []
+        json_left = load_json(file_in_left)
+        for finding_json_blob in json_left:
+            finding_left_temp = Finding.from_dict(finding_json_blob)
+            if finding_left_temp is not None:
+                findings_left.append(finding_left_temp)
 
     findings_right = []
     json_right = load_json(file_in_right)
