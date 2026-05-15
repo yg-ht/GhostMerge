@@ -6,11 +6,13 @@ P4ssw0rd! => [REDACTED]
 zero-day => 0-day
 secret sauce => proprietary technique
 <p xmlns="http://www.w3.org/1999/xhtml" style="text-align: justify;"> => <p>
+<p style="text-align: justify;" xmlns="http://www.w3.org/1999/xhtml"> => <p>
 <p xmlns="http://www.w3.org/1999/xhtml"> => <p>
 <p xmlns="http://www.w3.org/1999/xhtml" > => <p>
 <p style="text-align: justify"> => <p>
 <p style="text-align: justify" > => <p>
 <p xmlns=\"http://www.w3.org/1999/xhtml\" style=\"text-align: justify;\"> => <p>
+<p style=\"text-align: justify;\" xmlns=\"http://www.w3.org/1999/xhtml\"> => <p>
 <p xmlns=\"http://www.w3.org/1999/xhtml\"> => <p>
 <p xmlns=\"http://www.w3.org/1999/xhtml\" > => <p>
 <p style=\"text-align: justify\"> => <p>
@@ -18,8 +20,10 @@ secret sauce => proprietary technique
 {{.evidence}} => &ltEVIDENCE&gt
 <ul xmlns="http://www.w3.org/1999/xhtml"> => <ul>
 <pre xmlns="http://www.w3.org/1999/xhtml" spellcheck="false"> => <pre spellcheck="false">
+<pre spellcheck="false" xmlns="http://www.w3.org/1999/xhtml"> => <pre spellcheck="false">
 <ul xmlns=\"http://www.w3.org/1999/xhtml\"> => <ul>
 <pre xmlns=\"http://www.w3.org/1999/xhtml\" spellcheck=\"false\"> => <pre spellcheck=\"false\">
+<pre spellcheck=\"false\" xmlns=\"http://www.w3.org/1999/xhtml\"> => <pre spellcheck=\"false\">
 <p  > => <p>
 <p > => <p>
 <ul > => <ul
