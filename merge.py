@@ -39,6 +39,26 @@ def resolve_conflict(value_from_left, value_from_right) -> Tuple[ResolvedWinner,
         return ResolvedWinner.RIGHT,value_from_right
 
 # ── Finding Merge ───────────────────────────────────────────────────
+def get_single_sided_content_choice(value_from_left, value_from_right) -> Tuple[bool, ResolvedWinner, Any]:
+    """
+    Detects the common low-risk case where only one side has meaningful content.
+
+    Returns:
+        tuple[bool, ResolvedWinner, Any]:
+            - whether the field can be auto-accepted
+            - which side supplied the content
+            - the value to copy to both findings
+    """
+    left_is_blank = is_blank(value_from_left)
+    right_is_blank = is_blank(value_from_right)
+
+    if left_is_blank and not right_is_blank:
+        return True, ResolvedWinner.RIGHT, value_from_right
+    if right_is_blank and not left_is_blank:
+        return True, ResolvedWinner.LEFT, value_from_left
+
+    return False, ResolvedWinner.NONE, None
+
 def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Finding) -> Tuple[Finding, dict[str, ResolvedWinner]]:
     """
     Performs a detailed, field-by-field selection process of two Finding objects to determine an auto-suggest value.
@@ -191,6 +211,17 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
 
             log('INFO', f'Field: {field.name} with hashes | Left: {left_hash} | Right: {right_hash}', prefix='TUI')
 
+            should_auto_accept, populated_side, populated_value = get_single_sided_content_choice(left_value,
+                                                                                                  right_value)
+            if CONFIG.get('auto_accept_single_sided_content', False) and should_auto_accept:
+                finding_pair['left'].set(field.name, populated_value)
+                finding_pair['right'].set(field.name, populated_value)
+                log(
+                    'INFO',
+                    f"Field '{field.name}' auto-accepted from {populated_side.name.lower()} because the other side was blank.",
+                    prefix='MERGE',
+                )
+                continue
 
             # ── Interactive resolution ──────────────────────────────────────────
             if CONFIG['interactive_mode'] or not auto_value or not auto_side:
