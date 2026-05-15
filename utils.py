@@ -1,7 +1,5 @@
 # external module imports
-from soupsieve.util import lower
-
-from imports import Any, b64decode, BeautifulSoup, datetime, dumps, escape, get_origin, get_args, json, NavigableString, os, Path, random, re, signal, sys, textwrap, Text, traceback, Union
+from imports import Any, b64decode, BeautifulSoup, datetime, dumps, escape, fields, get_origin, get_args, json, lower, NavigableString, os, Path, random, re, signal, sys, textwrap, Text, traceback, Union
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -85,7 +83,7 @@ def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
     try:
         TUI = get_tui()
     except RuntimeError as e:
-        if (e != "TUI is not initialised") and (prefix != "TUI"):
+        if (str(e) != "TUI is not initialised") and (prefix != "TUI"):
             print(f"!!!!!! ERROR !!!!!!    Its all gone wrong:\n"
                   f"LEVEL: {level}\n"
                   f"MESSAGE: {msg}\n"
@@ -225,6 +223,40 @@ def remove_double_spaces_from_string(input_string: str) -> str:
         log("DEBUG", "No whitespace runs to collapse", prefix="UTILS")
     return result
 
+def normalise_finding_record(record: Any) -> Any:
+    """Apply configured normalisation to every field on a Finding-like dataclass.
+
+    Prefer Finding.normalise_strings() when available. The fallback keeps merge,
+    matching and sensitivity code safe when an older Finding class is imported
+    without that helper method.
+    """
+    if record is None:
+        return record
+
+    normalise_method = getattr(record, "normalise_strings", None)
+    if callable(normalise_method):
+        return normalise_method()
+
+    try:
+        record_fields = fields(record)
+    except TypeError:
+        log(
+            "WARN",
+            f"Cannot normalise non-dataclass record of type {type(record).__name__}",
+            prefix="UTILS",
+        )
+        return record
+
+    record_id = getattr(record, "id", "unknown")
+    for field_def in record_fields:
+        field_name = field_def.name
+        value = getattr(record, field_name, None)
+        normalised_value = apply_configured_normalisation(value)
+        if normalised_value != value:
+            log("DEBUG", f'Normalised field "{field_name}" on Finding ID {record_id}', prefix="UTILS")
+            setattr(record, field_name, normalised_value)
+
+    return record
 
 def remove_pointless_html_tags(input_string: str) -> str:
     """

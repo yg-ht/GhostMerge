@@ -4,7 +4,7 @@ from imports import (Any, auto, Dict, Enum, fields, key, List, md5, Tuple)
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, normalise_tags, is_blank, blank_for_type
+from utils import log, normalise_tags, normalise_finding_record, is_blank, blank_for_type
 from model import Finding, is_optional_field, get_type_as_str
 
 class ResolvedWinner(Enum):
@@ -140,12 +140,12 @@ def normalise_merge_pair(finding_pair: Dict[str, Finding | float | Dict[str, Res
     for side in ("left", "right"):
         finding = finding_pair.get(side)
         if isinstance(finding, Finding):
-            finding.normalise_strings()
+            normalise_finding_record(finding)
             log("DEBUG", f"Normalised {side} finding before merge boundary", prefix="MERGE")
 
     auto_value = finding_pair.get("auto_value")
     if isinstance(auto_value, Finding):
-        auto_value.normalise_strings()
+        normalise_finding_record(auto_value)
         log("DEBUG", "Normalised offered merge value before display", prefix="MERGE")
 
     return finding_pair

@@ -30,6 +30,7 @@ from json import dumps
 from rapidfuzz import fuzz
 from typing import Any, Dict, List, Tuple, Optional, Union, get_origin, get_args, get_type_hints
 from enum import Enum, auto
+from soupsieve.util import lower
 
 # ── Interface related ────────────────────────────────────────────────
 import typer
