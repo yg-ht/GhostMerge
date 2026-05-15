@@ -5,10 +5,13 @@ acme-corp => [REDACTED COMPANY]
 P4ssw0rd! => [REDACTED]
 zero-day => 0-day
 secret sauce => proprietary technique
+<p xmlns="http://www.w3.org/1999/xhtml"> => <p>
 <p xmlns="http://www.w3.org/1999/xhtml" > => <p>
 <p style="text-align: justify"> => <p>
+<p style="text-align: justify" > => <p>
 {{.evidence}} => &ltEVIDENCE&gt
+<ul xmlns="http://www.w3.org/1999/xhtml"> => <ul>
 <p > => <p>
 <ul > => <ul
-style="text-align: justify; =>
- xmlns="http://www.w3.org/1999/xhtml"> => >
+style="text-align: justify;" =>
+xmlns="http://www.w3.org/1999/xhtml"> => >
