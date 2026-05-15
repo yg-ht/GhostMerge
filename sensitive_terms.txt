@@ -1,8 +1,8 @@
 # Example sensitive terms for testing
-confidential
+secret organisational information
 internal use only => internal reference
 acme-corp => [REDACTED COMPANY]
-password => [REDACTED]
+P4ssw0rd! => [REDACTED]
 zero-day => 0-day
 secret sauce => proprietary technique
 xmlns="http://www.w3.org/1999/xhtml" =>
