@@ -6,6 +6,7 @@ P4ssw0rd! => [REDACTED]
 zero-day => 0-day
 secret sauce => proprietary technique
 <span style="font-weight: 400;"> =>
+<span style="font-weight: 400"> =>
 <span class="highlight" style="background-color: yellow;"> => <mark>
 <span class="highlight" style="background-color: yellow"> => <mark>
 <mark><span data-color="#f00" style="color: #f00"> => <mark>
