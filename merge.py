@@ -135,6 +135,21 @@ def renumber_findings(
 
     return left_findings, right_findings
 
+def normalise_merge_pair(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinner]]) -> Dict[str, Finding | float | Dict[str, ResolvedWinner]]:
+    """Normalise both sides of a matched pair in-place before merge comparison or display."""
+    for side in ("left", "right"):
+        finding = finding_pair.get(side)
+        if isinstance(finding, Finding):
+            finding.normalise_strings()
+            log("DEBUG", f"Normalised {side} finding before merge boundary", prefix="MERGE")
+
+    auto_value = finding_pair.get("auto_value")
+    if isinstance(auto_value, Finding):
+        auto_value.normalise_strings()
+        log("DEBUG", "Normalised offered merge value before display", prefix="MERGE")
+
+    return finding_pair
+
 # ── Main merge logic ───────────────────────────────────────────────────
 def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinner]]) -> Tuple[Finding,Finding]:
     """Run automatic merge then solicit human confirmation/overrides.
@@ -154,11 +169,15 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
 
     log("INFO", f"Starting merge_main for: {finding_pair['left'].id} ↔ {finding_pair['right'].id}", prefix="MERGE")
 
+    normalise_merge_pair(finding_pair)
+
     # Generate the auto-offered suggestions
     auto_suggest_values, auto_suggest_winner = get_auto_suggest_values(finding_pair['left'], finding_pair['right'])
     # Update the finding pair to make it a trio
     finding_pair.update({'auto_value': auto_suggest_values})
     finding_pair.update({'auto_side': auto_suggest_winner})
+
+    normalise_merge_pair(finding_pair)
 
     different_fields = ' | '
     # Iterate deterministically over field names to identify differences

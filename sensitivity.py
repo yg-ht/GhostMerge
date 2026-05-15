@@ -373,6 +373,7 @@ def apply_configured_string_normalisation(input_string: str) -> str:
 def check_for_sensitivities(field, terms) -> List[Tuple[str, Optional[str]]]:
     """Returns List of [(found_term, optional suggested_replacement)...] if sensitivities are found, else []."""
     results = []
+    field = apply_configured_normalisation(field)
     stringified_field = stringify_field(field)
     log("DEBUG", f'Checking content starting: "{stringified_field[:50]}" for sensitive content', prefix="SENSITIVITY")
     if not stringified_field or not isinstance(stringified_field, str):
