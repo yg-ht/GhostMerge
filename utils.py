@@ -218,7 +218,7 @@ def setup_signal_handlers():
 
 # ── Data Utilities ──────────────────────────────────────────────────
 def remove_double_spaces_from_string(input_string: str) -> str:
-    result = re.sub(r'\s{2,}', ' ', input_string)
+    result = re.sub(r' {2,}', ' ', input_string)
     if result != input_string:
         log("DEBUG", "Whitespace runs collapsed", prefix="UTILS")
     else:
@@ -289,7 +289,7 @@ def normalise_line_endings(input_string: str) -> str:
         non_normal_line_ending_found = True
     if "> <" in input_string:
         log("DEBUG", f"Found single space char outside of tags that need to be normalised", prefix="UTILS")
-        result = result.replace(">\n<", "><")
+        result = result.replace("> <", "><")
         non_normal_line_ending_found = True
     if "\r\n" in input_string:
         log("DEBUG", f"Found Windows line endings that need to be normalised", prefix="UTILS")
