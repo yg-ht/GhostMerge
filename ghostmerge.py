@@ -19,8 +19,8 @@ app = typer.Typer()
 
 @app.command()
 def ghostmerge(
-    file_in_left: Path = typer.Option(..., "--file-left", "-left", exists=True, required=True, help="Input JSON file Left"),
-    file_in_right: Path = typer.Option(..., "--file-right", "-right", exists=True, required=True, help="Input JSON file Right"),
+    file_in_left: Path = typer.Option(..., "--file-left", "-l", exists=True, file_okay=True, dir_okay=False, help="Input JSON file Left"),
+    file_in_right: Path = typer.Option(..., "--file-right", "-r", exists=True, file_okay=True, dir_okay=False, help="Input JSON file Right"),
     file_out_left: Path = typer.Option(None, "--out-left", help="Output JSON file Left"),
     file_out_right: Path = typer.Option(None, "--out-right", help="Output JSON file Right"),
     config: Optional[Path] = typer.Option(None, "--config", help="Override config file path"),
