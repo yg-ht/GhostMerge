@@ -74,13 +74,13 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
     if len(sensitivity_hits) > 0:
         action_choices = ['Edit (▲ key)', 'Keep (▼ key)']
         for sensitive_term, offered in sensitivity_hits:
-            if CONFIG['interactive_mode'] or not offered:
+            if CONFIG['interactive_mode'] or offered is None:
                 tui.blank_data()
                 tui.render_single_whole_finding_record(record, sensitive_term, field_name)
                 prompt = (f"Sensitive term [bold red]{sensitive_term}[/bold red] in [bold yellow]{field_name}[/bold yellow]"
                           f" field [bold]{record.get(field_name)[:25]}[/bold] on {field_side} record set\n\n")
                 default_choice = ''
-                if offered:
+                if offered is not None:
                     prompt += f"Offered: [bold red]{sensitive_term}[/bold red] → [green]{offered}[/green]"
                     action_choices.append('Offered (spacebar)')
                     default_choice: str = 'o'
