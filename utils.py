@@ -1,6 +1,7 @@
 # external module imports
 from imports import Any, b64decode, BeautifulSoup, datetime, dumps, escape, fields, get_origin, get_args, json, lower, NavigableString, os, Path, random, re, signal, sys, textwrap, Text, traceback, Union
 # get global state objects (CONFIG and TUI)
+from sensitivity import apply_configured_normalisation
 from globals import get_config, get_tui
 CONFIG = get_config()
 SCRIPT_DIR = Path(__file__).resolve().parent
