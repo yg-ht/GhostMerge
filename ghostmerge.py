@@ -12,7 +12,7 @@ from utils import load_config, log, load_json, write_json, return_ASCII_art, Abo
 from model import Finding
 from matching import fuzzy_match_findings
 from merge import merge_main, renumber_findings
-from sensitivity import sensitivities_checker_single_record, load_sensitive_terms
+from sensitivity import sensitivities_checker_single_record, load_sensitive_terms, sensitivities_checker_records
 
 # run the app
 app = typer.Typer()
@@ -101,6 +101,31 @@ def ghostmerge(
         file_out_right_reversed = str(file_in_right_reversed).replace(file_out_search_reversed, default_output_append_reversed, 1)
         file_out_right = file_out_right_reversed[::-1]
 
+    terms = None
+    if CONFIG['sensitivity_check_enabled']:
+        terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"], CONFIG["script_dir"])
+
+        if CONFIG.get('sensitivity_check_before_matching', False) and terms:
+            log(
+                "INFO",
+                "Applying explicit sensitive-term replacements before fuzzy matching",
+                prefix="CLI",
+            )
+            findings_left = sensitivities_checker_records(
+                findings_left,
+                'Left',
+                terms,
+                interactive_override=False,
+                prompt_for_flag_only=False,
+            )
+            findings_right = sensitivities_checker_records(
+                findings_right,
+                'Right',
+                terms,
+                interactive_override=False,
+                prompt_for_flag_only=False,
+            )
+
     matches: List[Dict[str,Finding|float]] = []
     unmatched_left = findings_left
     unmatched_right = findings_right
@@ -144,8 +169,7 @@ def ghostmerge(
 
     final_left, final_right = [], []
     # Sensitivity check inline per field for all records
-    if CONFIG['sensitivity_check_enabled']:
-        terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"], CONFIG["script_dir"])
+    if CONFIG['sensitivity_check_enabled'] and terms:
         for record in merged_left:
             final_left.append(sensitivities_checker_single_record(record, 'Left', terms))
         for record in merged_right:

@@ -13,6 +13,7 @@
   "default_output_filename_append": "-out.json",
   "interactive_mode": true,
   "sensitivity_check_enabled": true,
+  "sensitivity_check_before_matching": true,
   "sensitivity_check_terms_file": "sensitive_terms.txt",
   "fuzzy_match_threshold": [100,90,80,70],
   "match_weight_common": 0.05,
