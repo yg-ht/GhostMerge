@@ -19,8 +19,8 @@ app = typer.Typer()
 
 @app.command()
 def ghostmerge(
-    file_in_left: Path = typer.Option(..., "--file-left", "-left", exists=True, help="Input JSON file Left"),
-    file_in_right: Path = typer.Option(..., "--file-right", "-right", exists=True, help="Input JSON file Right"),
+    file_in_left: Path = typer.Option(..., "--file-left", "-left", exists=True, required=True, help="Input JSON file Left"),
+    file_in_right: Path = typer.Option(..., "--file-right", "-right", exists=True, required=True, help="Input JSON file Right"),
     file_out_left: Path = typer.Option(None, "--out-left", help="Output JSON file Left"),
     file_out_right: Path = typer.Option(None, "--out-right", help="Output JSON file Right"),
     config: Optional[Path] = typer.Option(None, "--config", help="Override config file path"),
@@ -56,6 +56,10 @@ def ghostmerge(
                  f"     file_out_right={file_out_right},\n"
                  f"     config={config}",
         prefix="CLI")
+
+    # Output will always show these - these are for "Click" support.
+    # --install-completion  Install completion for bash/zsh
+    # --show-completion     Show completion for current shell
 
     if not CONFIG['interactive_mode']:
         tui.render_user_choice('GhostMerge is configured to auto-accept any auto-offered conflict resolutions. '
