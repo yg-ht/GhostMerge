@@ -79,12 +79,15 @@ def ghostmerge(
             if finding_left_temp is not None:
                 findings_left.append(finding_left_temp)
 
-    findings_right = []
-    json_right = load_json(file_in_right)
-    for finding_json_blob in json_right:
-        finding_right_temp = Finding.from_dict(finding_json_blob)
-        if finding_right_temp is not None:
-            findings_right.append(finding_right_temp)
+    if file_in_right is None:
+        log('ERROR', 'Command line argument missing: --file-in-right', prefix='CLI')
+    else:
+        findings_right = []
+        json_right = load_json(file_in_right)
+        for finding_json_blob in json_right:
+            finding_right_temp = Finding.from_dict(finding_json_blob)
+            if finding_right_temp is not None:
+                findings_right.append(finding_right_temp)
 
     file_out_search_reversed = '.json'[::-1]
     default_output_append_reversed = CONFIG['default_output_filename_append'][::-1]
