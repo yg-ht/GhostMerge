@@ -4,7 +4,7 @@ from imports import (Any, BeautifulSoup, Dict, fields, key, List, NavigableStrin
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, stringify_field, apply_configured_normalisation, _replace_sensitive_opening_tag_with_closing_pair
+from utils import log, stringify_field, apply_configured_normalisation, _normalise_sensitive_term_for_matching, _replace_sensitive_opening_tag_with_closing_pair
 from model import Finding
 
 def load_sensitive_terms(filename: str, filepath: str) -> Dict[str, Optional[str]] | None:
@@ -36,13 +36,15 @@ def load_sensitive_terms(filename: str, filepath: str) -> Dict[str, Optional[str
                 if not original_line or original_line.startswith("#"):
                     log("DEBUG", f"Skipping comment/empty line {line_number}", prefix="SENSITIVITY")
                     continue
-                if "=>" in original_line:
-                    term, replacement = map(str.strip, original_line.split("=>", 1))
+                if " => " in original_line:
+                    term, replacement = map(str.strip, original_line.split(" => ", 1))
                     log("DEBUG", f"Parsed replacement line {line_number}: '{term}' => '{replacement}'", prefix="SENSITIVITY")
-                    terms[term.lower()] = replacement
+                    normalised_term = _normalise_sensitive_term_for_matching(term).lower()
+                    terms[normalised_term] = replacement
                 else:
                     log("DEBUG", f"Parsed flag-only line {line_number}: '{original_line}'", prefix="SENSITIVITY")
-                    terms[original_line.lower()] = None
+                    normalised_term = _normalise_sensitive_term_for_matching(original_line).lower()
+                    terms[normalised_term] = None
         log("DEBUG", f"Loaded {len(terms)} sensitive terms", prefix="SENSITIVITY")
     except Exception as e:
         log("ERROR", "Failed to load sensitive terms file, unable to continue", prefix="SENSITIVITY", exception=e)
@@ -82,6 +84,7 @@ def apply_sensitive_replacement(field_value: Any, sensitive_term: str, replaceme
     corresponding closing tag so replacements such as "<mark> =>" do not leave
     dangling "</mark>" fragments behind.
     """
+    field_value = apply_configured_normalisation(field_value)
     if not isinstance(field_value, str):
         log(
             "WARN",
