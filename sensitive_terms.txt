@@ -10,3 +10,4 @@ secret sauce => proprietary technique
 <p > => <p>
 <ul > => <ul
 style="text-align: justify; =>
+ xmlns="http://www.w3.org/1999/xhtml"> => >
