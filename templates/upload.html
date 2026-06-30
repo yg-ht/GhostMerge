@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Merge finding libraries</h1>
+{% if error %}<div class="panel error">{{ error }}</div>{% endif %}
+<form class="panel" action="{{ url_for('create_job_route') }}" method="post" enctype="multipart/form-data">
+  <div class="grid">
+    <div>
+      <label for="left_file">Left JSON</label>
+      <input id="left_file" name="left_file" type="file" accept="application/json,.json" required>
+    </div>
+    <div>
+      <label for="right_file">Right JSON</label>
+      <input id="right_file" name="right_file" type="file" accept="application/json,.json" required>
+    </div>
+  </div>
+  <p><button type="submit">Create merge job</button></p>
+</form>
+<section class="panel">
+  <h2>Previous merge jobs</h2>
+  {% if previous_jobs %}
+  <table class="record-table">
+    <thead>
+      <tr>
+        <th>Job</th>
+        <th>Phase</th>
+        <th>Review progress</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for previous in previous_jobs %}
+      <tr>
+        <td>{{ previous.job_id }}</td>
+        <td>{{ previous.phase }}</td>
+        <td>Matched pairs reviewed: {{ previous.completed_matches }} of {{ previous.matches }}</td>
+        <td class="actions">
+          <a class="button secondary" href="{{ url_for('summary', job_id=previous.job_id) }}">Open</a>
+          {% if previous.has_left_output %}
+          <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='left') }}">Left output</a>
+          {% endif %}
+          {% if previous.has_right_output %}
+          <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='right') }}">Right output</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No previous merge jobs found.</p>
+  {% endif %}
+</section>
+{% endblock %}

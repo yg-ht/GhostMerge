@@ -31,6 +31,8 @@ GhostMerge is a Python command-line tool. It has been written around these depen
 - RapidFuzz
 - Beautiful Soup
 - readchar
+- pytest, for the regression suite
+- Flask, for the optional web frontend
 
 The project currently includes `requirements.txt`. If you are setting up the project for regular use, prefer Pipenv so dependencies are isolated from your system Python.
 
@@ -62,6 +64,43 @@ be run without pytest when needed:
 The suite covers the current CLI-critical behaviours, including model coercion,
 normalisation, matching, merge helpers, sensitivity helpers, config loading, and
 a non-interactive CLI merge smoke test.
+
+## Web frontend
+
+GhostMerge also includes a small Flask frontend for local browser-based merge
+review. It uses the same finding model, matching, sensitivity, and output
+serialisation code as the CLI.
+
+From the repository root:
+
+```bash
+.venv/bin/python web_app.py
+```
+
+Then open the local URL printed by Flask. Uploaded files and in-progress job
+state are stored under `ghostmerge_web_jobs/` by default. Treat that directory as
+local working data and remove it when old merge jobs are no longer needed.
+
+The web review flow starts with a whole-record preview for each matched pair,
+then moves through field-level conflicts. Differing fields and field-level diffs
+are highlighted. Decision buttons can be clicked directly, and common CLI-style
+keyboard shortcuts are available during review:
+
+```text
+Left arrow   use left value
+Right arrow  use right value
+Up arrow     keep left and right intact
+Down arrow   blank optional field or keep sensitivity value
+Space        use offered/default value
+M            merge left and right text where available
+E            focus the custom edit field
+```
+
+On the whole-record preview page, select any changed fields whose offered values
+you want to accept, then apply them in one action. Remaining changed fields stay
+in the normal field-by-field review queue. The home page can also start a new
+merge or reopen previous local jobs and completed outputs from
+`ghostmerge_web_jobs/`.
 
 Run GhostMerge against the included sample files:
 

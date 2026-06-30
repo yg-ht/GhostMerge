@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Unable to continue</h1>
+<section class="panel error">{{ error }}</section>
+<p><a class="button secondary" href="{{ url_for('index') }}">Start again</a></p>
+{% endblock %}
