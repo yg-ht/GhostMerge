@@ -63,9 +63,13 @@ def ghostmerge(
     # this is expected where the system is capable of running auto-completion
 
     if not CONFIG['interactive_mode']:
-        tui.render_user_choice('GhostMerge is configured to auto-accept any auto-offered conflict resolutions. '
-                               'This is not recommended! It will result in "best-guess" results and will not work '
-                               '100% of the time!')
+        log(
+            "WARN",
+            'GhostMerge is configured to auto-accept any auto-offered conflict resolutions. '
+            'This is not recommended! It will result in "best-guess" results and will not work '
+            '100% of the time!',
+            prefix="CLI",
+        )
 
     log("INFO", "Starting merge operation", prefix="CLI")
 

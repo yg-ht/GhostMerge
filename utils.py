@@ -28,15 +28,15 @@ def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"
 
     # do it all again, but with the postfix ".local" so that Git actions don't get grumpy when updating
     try:
-        config_path = config_path + '.local'
-        with open(config_path, 'r', encoding='utf-8') as f:
+        local_config_path = Path(f"{config_path}.local")
+        with open(local_config_path, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
-            log('INFO', f'Loaded config from: {config_path}', prefix="UTILS")
+            log('INFO', f'Loaded config from: {local_config_path}', prefix="UTILS")
             log('DEBUG', f'Config is now: {json.dumps(user_config, indent=2)}', prefix="UTILS")
             CONFIG.update(user_config)
             CONFIG["config_loaded"] = True
     except FileNotFoundError:
-        log('DEBUG', f'No ".local" config file found at: {config_path}', prefix="UTILS")
+        log('DEBUG', f'No ".local" config file found at: {local_config_path}', prefix="UTILS")
     except Exception as e:
         log('ERROR', f"Failed to load config from {config_path}: {e}", prefix="UTILS")
 
