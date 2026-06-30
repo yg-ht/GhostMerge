@@ -49,7 +49,7 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/")
     def index():
-        return render_template("upload.html", previous_jobs=list_previous_jobs(jobs_dir))
+        return render_template("upload.html", previous_jobs=list_previous_jobs(jobs_dir), root_page=True)
 
     @app.post("/jobs")
     def create_job_route():
@@ -65,7 +65,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             save_job(job, jobs_dir)
             return redirect(url_for("summary", job_id=job.job_id))
         except (UnicodeDecodeError, WebMergeError) as exc:
-            return render_template("upload.html", error=str(exc), previous_jobs=list_previous_jobs(jobs_dir)), 400
+            return render_template("upload.html", error=str(exc), previous_jobs=list_previous_jobs(jobs_dir), root_page=True), 400
 
     @app.get("/jobs/<job_id>/summary")
     def summary(job_id: str):

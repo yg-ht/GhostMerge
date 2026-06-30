@@ -34,7 +34,7 @@
       header {
         background: var(--brand-black);
         color: white;
-        padding: 14px 24px;
+        padding: 6px 18px;
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -52,9 +52,48 @@
         font-weight: 750;
       }
       .brand img {
-        width: 72px;
-        height: 72px;
+        width: 144px;
+        height: 144px;
         object-fit: contain;
+      }
+      .root-logo-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        pointer-events: none;
+      }
+      .root-logo-overlay img {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: min(42vw, 420px);
+        height: min(42vw, 420px);
+        object-fit: contain;
+        transform: translate(-50%, -50%) scale(1);
+        filter: drop-shadow(0 18px 42px rgb(2 17 39 / 0.28));
+        animation: logo-swish-home 1s ease-in-out forwards;
+      }
+      @keyframes logo-swish-home {
+        0% {
+          opacity: 1;
+          transform: translate(-50%, -50%) scale(1);
+        }
+        65% {
+          opacity: 0.92;
+        }
+        100% {
+          top: 10px;
+          left: 18px;
+          width: 144px;
+          height: 144px;
+          opacity: 0;
+          transform: translate(0, 0) scale(1);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .root-logo-overlay {
+          display: none;
+        }
       }
       nav {
         display: flex;
@@ -234,6 +273,11 @@
     </style>
   </head>
   <body>
+    {% if root_page %}
+    <div class="root-logo-overlay" aria-hidden="true">
+      <img src="{{ url_for('static', filename='GhostMerge-logo.png') }}" alt="">
+    </div>
+    {% endif %}
     <header>
       <a class="brand" href="{{ url_for('index') }}">
         <img src="{{ url_for('static', filename='GhostMerge-logo.png') }}" alt="" aria-hidden="true">
