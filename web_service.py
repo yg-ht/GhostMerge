@@ -433,7 +433,7 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
                 job_id=job.job_id,
                 phase=str(progress["phase"]),
                 matches=int(progress["total_matches"]),
-                completed_matches=int(progress["completed_matches"]),
+                completed_matches=min(int(progress["completed_matches"]), int(progress["total_matches"])),
                 has_left_output=(job_dir / "left.json").exists(),
                 has_right_output=(job_dir / "right.json").exists(),
             )

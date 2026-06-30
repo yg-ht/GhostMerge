@@ -236,6 +236,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"GhostMerge-logo.png", response.data)
         self.assertIn(b"homejob123", response.data)
+        self.assertIn(b"Matched pairs reviewed", response.data)
 
     def test_upload_review_complete_and_download_outputs(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")

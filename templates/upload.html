@@ -23,7 +23,7 @@
       <tr>
         <th>Job</th>
         <th>Phase</th>
-        <th>Progress</th>
+        <th>Review progress</th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -32,7 +32,7 @@
       <tr>
         <td>{{ previous.job_id }}</td>
         <td>{{ previous.phase }}</td>
-        <td>{{ previous.completed_matches }} / {{ previous.matches }}</td>
+        <td>Matched pairs reviewed: {{ previous.completed_matches }} of {{ previous.matches }}</td>
         <td class="actions">
           <a class="button secondary" href="{{ url_for('summary', job_id=previous.job_id) }}">Open</a>
           {% if previous.has_left_output %}

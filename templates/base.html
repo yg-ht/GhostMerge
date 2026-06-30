@@ -10,10 +10,15 @@
         --bg: #f6f7f9;
         --panel: #ffffff;
         --line: #c8ced8;
-        --text: #17202c;
+        --text: #021127;
         --muted: #596579;
-        --accent: #126a5b;
-        --accent-soft: #e6f3ef;
+        --brand-black: #021127;
+        --brand-navy: #38389B;
+        --brand-purple: #4820a0;
+        --brand-green: #27FB6B;
+        --brand-blue: #446DF6;
+        --accent: #38389B;
+        --accent-soft: #eef0ff;
         --warn-soft: #fff2cc;
         --add: #dff3e7;
         --remove: #f8dfdf;
@@ -27,7 +32,7 @@
         font-size: 15px;
       }
       header {
-        background: #1f2937;
+        background: var(--brand-black);
         color: white;
         padding: 14px 24px;
         display: flex;
@@ -42,12 +47,13 @@
       .brand {
         display: inline-flex;
         align-items: center;
-        gap: 10px;
-        font-weight: 700;
+        gap: 14px;
+        font-size: 20px;
+        font-weight: 750;
       }
       .brand img {
-        width: 34px;
-        height: 34px;
+        width: 72px;
+        height: 72px;
         object-fit: contain;
       }
       nav {
@@ -105,7 +111,7 @@
         cursor: pointer;
       }
       .record-table tr.selected {
-        outline: 2px solid var(--accent);
+        outline: 2px solid var(--brand-blue);
         background: var(--accent-soft);
       }
       .select-cell {
@@ -127,7 +133,7 @@
       }
       .decision-button.default {
         background: var(--accent-soft);
-        border-color: var(--accent);
+        border-color: var(--brand-blue);
       }
       .shortcut {
         display: inline-block;
@@ -157,7 +163,8 @@
         background: var(--accent-soft);
       }
       mark {
-        background: #ffe066;
+        background: var(--brand-green);
+        color: var(--brand-black);
         padding: 0 2px;
       }
       .grid {
@@ -185,15 +192,17 @@
       button, .button {
         display: inline-block;
         width: auto;
-        background: var(--accent);
-        border-color: var(--accent);
-        color: white;
+        background: var(--brand-green);
+        border-color: var(--brand-green);
+        color: var(--brand-black);
+        font-weight: 700;
         cursor: pointer;
         text-decoration: none;
       }
       .secondary {
-        background: #495569;
-        border-color: #495569;
+        background: var(--brand-navy);
+        border-color: var(--brand-navy);
+        color: white;
       }
       .error {
         border-color: var(--danger);
