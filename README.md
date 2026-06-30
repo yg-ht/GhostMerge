@@ -31,6 +31,8 @@ GhostMerge is a Python command-line tool. It has been written around these depen
 - RapidFuzz
 - Beautiful Soup
 - readchar
+- pytest, for the regression suite
+- Flask, for the optional web frontend
 
 The project currently includes `requirements.txt`. If you are setting up the project for regular use, prefer Pipenv so dependencies are isolated from your system Python.
 
@@ -62,6 +64,22 @@ be run without pytest when needed:
 The suite covers the current CLI-critical behaviours, including model coercion,
 normalisation, matching, merge helpers, sensitivity helpers, config loading, and
 a non-interactive CLI merge smoke test.
+
+## Web frontend
+
+GhostMerge also includes a small Flask frontend for local browser-based merge
+review. It uses the same finding model, matching, sensitivity, and output
+serialisation code as the CLI.
+
+From the repository root:
+
+```bash
+.venv/bin/python web_app.py
+```
+
+Then open the local URL printed by Flask. Uploaded files and in-progress job
+state are stored under `ghostmerge_web_jobs/` by default. Treat that directory as
+local working data and remove it when old merge jobs are no longer needed.
 
 Run GhostMerge against the included sample files:
 

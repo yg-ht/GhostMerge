@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Merge finding libraries</h1>
+{% if error %}<div class="panel error">{{ error }}</div>{% endif %}
+<form class="panel" action="{{ url_for('create_job_route') }}" method="post" enctype="multipart/form-data">
+  <div class="grid">
+    <div>
+      <label for="left_file">Left JSON</label>
+      <input id="left_file" name="left_file" type="file" accept="application/json,.json" required>
+    </div>
+    <div>
+      <label for="right_file">Right JSON</label>
+      <input id="right_file" name="right_file" type="file" accept="application/json,.json" required>
+    </div>
+  </div>
+  <p><button type="submit">Create merge job</button></p>
+</form>
+{% endblock %}

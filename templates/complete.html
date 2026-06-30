@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Merge complete</h1>
+<section class="panel">
+  <p>The merged output files are ready.</p>
+  <div class="actions">
+    <a class="button" href="{{ url_for('download', job_id=job.job_id, side='left') }}">Download left JSON</a>
+    <a class="button secondary" href="{{ url_for('download', job_id=job.job_id, side='right') }}">Download right JSON</a>
+  </div>
+</section>
+{% endblock %}

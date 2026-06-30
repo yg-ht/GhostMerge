@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Merge summary</h1>
+<section class="panel">
+  <dl>
+    <dt>Job</dt><dd>{{ summary.job_id }}</dd>
+    <dt>Matched pairs</dt><dd>{{ summary.matches }}</dd>
+    <dt>Unmatched left</dt><dd>{{ summary.unmatched_left }}</dd>
+    <dt>Unmatched right</dt><dd>{{ summary.unmatched_right }}</dd>
+  </dl>
+  <p><a class="button" href="{{ url_for('conflicts', job_id=summary.job_id) }}">Review conflicts</a></p>
+</section>
+{% endblock %}
