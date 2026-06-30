@@ -8,6 +8,7 @@ from globals import get_config
 from web_app import create_app
 from web_service import (
     WebMergeError,
+    accept_offered_fields_for_current_match,
     apply_conflict_decision,
     apply_sensitivity_decision,
     build_field_diff,
@@ -18,7 +19,9 @@ from web_service import (
     get_next_sensitivity_item,
     load_job,
     load_records_from_json_text,
+    list_previous_jobs,
     save_job,
+    save_outputs,
 )
 
 
@@ -125,6 +128,20 @@ class WebServiceTests(unittest.TestCase):
         self.assertIn("added", [row["class"] for row in diff])
         self.assertIn("offered", [row["class"] for row in diff])
 
+    def test_preview_selected_offered_values_leave_remaining_fields_for_review(self):
+        job = create_merge_job(
+            [record(description="Left detail", impact="Left impact")],
+            [record(id="2", description="Right detail", impact="Right impact")],
+            job_id="select123",
+        )
+
+        applied = accept_offered_fields_for_current_match(job, ["description"])
+        item = get_next_conflict(job)
+
+        self.assertEqual(applied, 1)
+        self.assertEqual(job.matches[0]["left"].description, job.matches[0]["auto_value"].description)
+        self.assertEqual(item.field_name, "impact")
+
     def test_job_persistence_round_trips_review_state(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             job = create_merge_job(
@@ -140,6 +157,21 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(loaded.job_id, "persist123")
         self.assertEqual(loaded.match_index, job.match_index)
         self.assertEqual(loaded.field_index, job.field_index)
+
+    def test_previous_jobs_are_listed_from_job_store(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            job = create_merge_job([record()], [], job_id="oldjob123")
+            get_next_conflict(job)
+            result = finalise_job(job)
+            save_job(job, jobs_dir)
+            save_outputs(job, jobs_dir, result)
+
+            previous_jobs = list_previous_jobs(jobs_dir)
+
+        self.assertEqual(previous_jobs[0].job_id, "oldjob123")
+        self.assertTrue(previous_jobs[0].has_left_output)
+        self.assertTrue(previous_jobs[0].has_right_output)
 
     def test_sensitivity_review_can_apply_offered_replacement(self):
         configure_for_web_tests(sensitivity_check_enabled=True)
@@ -193,6 +225,18 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"Invalid JSON", response.data)
 
+    def test_home_shows_logo_and_previous_jobs(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record()], [], job_id="homejob123")
+        get_next_conflict(job)
+        save_job(job, jobs_dir)
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"GhostMerge-logo.png", response.data)
+        self.assertIn(b"homejob123", response.data)
+
     def test_upload_review_complete_and_download_outputs(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")
         right = json.dumps([record(id="2", description="Right detail")]).encode("utf-8")
@@ -218,6 +262,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(conflict.status_code, 200)
         self.assertIn(b"Record preview", conflict.data)
         self.assertIn(b"changed", conflict.data)
+        self.assertIn(b"Accept selected offered values", conflict.data)
 
         conflict = self.client.post(
             f"/jobs/{job_id}/conflicts",

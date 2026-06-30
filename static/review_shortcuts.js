@@ -26,4 +26,24 @@
       button.click();
     }
   });
+
+  document.querySelectorAll("[data-select-row]").forEach((row) => {
+    const checkbox = row.querySelector("input[type='checkbox']");
+    if (!checkbox) {
+      return;
+    }
+    function syncSelectedClass() {
+      row.classList.toggle("selected", checkbox.checked);
+    }
+    row.addEventListener("click", (event) => {
+      if (event.target === checkbox) {
+        syncSelectedClass();
+        return;
+      }
+      checkbox.checked = !checkbox.checked;
+      syncSelectedClass();
+    });
+    checkbox.addEventListener("change", syncSelectedClass);
+    syncSelectedClass();
+  });
 })();

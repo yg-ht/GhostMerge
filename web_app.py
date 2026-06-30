@@ -9,6 +9,7 @@ from sensitivity import load_sensitive_terms
 from utils import load_config
 from web_service import (
     WebMergeError,
+    accept_offered_fields_for_current_match,
     accept_offered_for_current_match,
     acknowledge_current_preview,
     apply_conflict_decision,
@@ -20,6 +21,7 @@ from web_service import (
     get_next_sensitivity_item,
     get_review_progress,
     job_summary,
+    list_previous_jobs,
     load_job,
     load_records_from_json_text,
     save_job,
@@ -47,7 +49,7 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/")
     def index():
-        return render_template("upload.html")
+        return render_template("upload.html", previous_jobs=list_previous_jobs(jobs_dir))
 
     @app.post("/jobs")
     def create_job_route():
@@ -63,7 +65,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             save_job(job, jobs_dir)
             return redirect(url_for("summary", job_id=job.job_id))
         except (UnicodeDecodeError, WebMergeError) as exc:
-            return render_template("upload.html", error=str(exc)), 400
+            return render_template("upload.html", error=str(exc), previous_jobs=list_previous_jobs(jobs_dir)), 400
 
     @app.get("/jobs/<job_id>/summary")
     def summary(job_id: str):
@@ -108,6 +110,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                 acknowledge_current_preview(job)
             elif request.form.get("preview_action") == "accept_offered":
                 accept_offered_for_current_match(job)
+            elif request.form.get("preview_action") == "accept_selected_offered":
+                accept_offered_fields_for_current_match(job, request.form.getlist("selected_fields"))
             else:
                 apply_conflict_decision(job, request.form.to_dict())
             save_job(job, jobs_dir)

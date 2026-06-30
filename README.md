@@ -96,6 +96,12 @@ M            merge left and right text where available
 E            focus the custom edit field
 ```
 
+On the whole-record preview page, select any changed fields whose offered values
+you want to accept, then apply them in one action. Remaining changed fields stay
+in the normal field-by-field review queue. The home page can also start a new
+merge or reopen previous local jobs and completed outputs from
+`ghostmerge_web_jobs/`.
+
 Run GhostMerge against the included sample files:
 
 ```bash

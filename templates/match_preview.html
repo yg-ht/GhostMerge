@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Record preview</h1>
-<section class="panel">
+<form class="panel" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
   <dl>
     <dt>Match</dt><dd>{{ preview.match_index + 1 }}</dd>
     <dt>Score</dt><dd>{{ "%.2f"|format(preview.score) }}%</dd>
@@ -9,6 +9,7 @@
   <table class="record-table">
     <thead>
       <tr>
+        <th class="select-cell">Use</th>
         <th>Field</th>
         <th>Left</th>
         <th>Right</th>
@@ -17,7 +18,12 @@
     </thead>
     <tbody>
       {% for row in preview.rows %}
-      <tr class="{{ 'changed' if row.different else '' }}">
+      <tr class="{{ 'changed selectable' if row.different and row.field_name != 'id' else '' }}" data-select-row>
+        <td class="select-cell">
+          {% if row.different and row.field_name != 'id' %}
+          <input type="checkbox" name="selected_fields" value="{{ row.field_name }}" aria-label="Accept offered {{ row.field_name }}">
+          {% endif %}
+        </td>
         <th>{{ row.field_name }}</th>
         <td><pre>{{ row.left_value }}</pre></td>
         <td><pre>{{ row.right_value }}</pre></td>
@@ -26,9 +32,10 @@
       {% endfor %}
     </tbody>
   </table>
-</section>
-<form class="panel actions" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
-  <button type="submit" name="preview_action" value="continue" data-shortcut="Enter">Review field conflicts</button>
-  <button class="secondary" type="submit" name="preview_action" value="accept_offered" data-shortcut=" ">Accept offered for this match</button>
+  <div class="actions">
+    <button type="submit" name="preview_action" value="accept_selected_offered">Accept selected offered values</button>
+    <button class="secondary" type="submit" name="preview_action" value="continue" data-shortcut="Enter">Review remaining fields</button>
+    <button class="secondary" type="submit" name="preview_action" value="accept_offered" data-shortcut=" ">Accept all offered for this match</button>
+  </div>
 </form>
 {% endblock %}

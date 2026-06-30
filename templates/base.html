@@ -30,6 +30,30 @@
         background: #1f2937;
         color: white;
         padding: 14px 24px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+      }
+      header a {
+        color: white;
+        text-decoration: none;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+      }
+      .brand img {
+        width: 34px;
+        height: 34px;
+        object-fit: contain;
+      }
+      nav {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
       }
       main {
         max-width: 1120px;
@@ -76,6 +100,17 @@
       }
       .record-table tr.changed {
         background: var(--warn-soft);
+      }
+      .record-table tr.selectable {
+        cursor: pointer;
+      }
+      .record-table tr.selected {
+        outline: 2px solid var(--accent);
+        background: var(--accent-soft);
+      }
+      .select-cell {
+        width: 44px;
+        text-align: center;
       }
       .decision-grid {
         display: grid;
@@ -190,7 +225,16 @@
     </style>
   </head>
   <body>
-    <header><strong>GhostMerge</strong></header>
+    <header>
+      <a class="brand" href="{{ url_for('index') }}">
+        <img src="{{ url_for('static', filename='GhostMerge-logo.png') }}" alt="" aria-hidden="true">
+        <span>GhostMerge</span>
+      </a>
+      <nav>
+        <a href="{{ url_for('index') }}">Home</a>
+        <a href="{{ url_for('index') }}">New merge</a>
+      </nav>
+    </header>
     <main>
       {% if progress %}
       <section class="progress" aria-label="Review progress">

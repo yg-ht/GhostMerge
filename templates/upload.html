@@ -15,4 +15,39 @@
   </div>
   <p><button type="submit">Create merge job</button></p>
 </form>
+<section class="panel">
+  <h2>Previous merge jobs</h2>
+  {% if previous_jobs %}
+  <table class="record-table">
+    <thead>
+      <tr>
+        <th>Job</th>
+        <th>Phase</th>
+        <th>Progress</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for previous in previous_jobs %}
+      <tr>
+        <td>{{ previous.job_id }}</td>
+        <td>{{ previous.phase }}</td>
+        <td>{{ previous.completed_matches }} / {{ previous.matches }}</td>
+        <td class="actions">
+          <a class="button secondary" href="{{ url_for('summary', job_id=previous.job_id) }}">Open</a>
+          {% if previous.has_left_output %}
+          <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='left') }}">Left output</a>
+          {% endif %}
+          {% if previous.has_right_output %}
+          <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='right') }}">Right output</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No previous merge jobs found.</p>
+  {% endif %}
+</section>
 {% endblock %}

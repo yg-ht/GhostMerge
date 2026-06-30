@@ -86,6 +86,16 @@ class MatchPreviewItem:
     rows: list[dict[str, Any]]
 
 
+@dataclass
+class PreviousJobItem:
+    job_id: str
+    phase: str
+    matches: int
+    completed_matches: int
+    has_left_output: bool
+    has_right_output: bool
+
+
 def load_records_from_json_text(json_text: str) -> list[dict[str, Any]]:
     """Parse uploaded JSON text and require the GhostMerge list-of-records shape."""
     try:
@@ -229,6 +239,31 @@ def accept_offered_for_current_match(job: MergeJob) -> None:
     job.match_index += 1
     job.field_index = 0
     job.preview_acknowledged = False
+
+
+def accept_offered_fields_for_current_match(job: MergeJob, field_names: list[str]) -> int:
+    """Apply offered values for selected preview fields, then continue field review."""
+    if job.conflict_phase_complete or job.match_index >= len(job.matches):
+        raise WebMergeError("There is no active match to update.")
+
+    selected = {name for name in field_names if name and name != "id"}
+    if not selected:
+        job.preview_acknowledged = True
+        return 0
+
+    match = job.matches[job.match_index]
+    valid_fields = {field_def.name for field_def in fields(Finding)}
+    applied = 0
+    for field_name in selected:
+        if field_name not in valid_fields:
+            raise WebMergeError(f"Unknown field selected: {field_name}")
+        offered_value = match["auto_value"].get(field_name)
+        match["left"].set(field_name, offered_value)
+        match["right"].set(field_name, offered_value)
+        applied += 1
+
+    job.preview_acknowledged = True
+    return applied
 
 
 def apply_conflict_decision(job: MergeJob, decision: dict[str, Any]) -> None:
@@ -378,6 +413,32 @@ def load_job(jobs_dir: Path, job_id: str) -> MergeJob:
     if not job_path.exists():
         raise WebMergeError("Job not found.")
     return job_from_dict(json.loads(job_path.read_text(encoding="utf-8")))
+
+
+def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
+    """Return persisted jobs that can be resumed or downloaded from the home page."""
+    if not jobs_dir.exists():
+        return []
+
+    jobs = []
+    for job_path in sorted(jobs_dir.glob("*/job.json"), key=lambda path: path.stat().st_mtime, reverse=True):
+        try:
+            job = job_from_dict(json.loads(job_path.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+        progress = get_review_progress(job)
+        job_dir = job_path.parent
+        jobs.append(
+            PreviousJobItem(
+                job_id=job.job_id,
+                phase=str(progress["phase"]),
+                matches=int(progress["total_matches"]),
+                completed_matches=int(progress["completed_matches"]),
+                has_left_output=(job_dir / "left.json").exists(),
+                has_right_output=(job_dir / "right.json").exists(),
+            )
+        )
+    return jobs
 
 
 def save_outputs(job: MergeJob, jobs_dir: Path, result: MergeResult) -> None:
