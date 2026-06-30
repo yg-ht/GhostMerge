@@ -42,7 +42,6 @@ class Finding:
         Convert a raw dict (e.g., from JSON) into a Finding instance, validating and coercing fields
         with interactive user prompting when mismatches occur.
         """
-        tui = get_tui()
         try:
             log("DEBUG", f"Parsing finding from data: {data}", prefix="MODEL")
             coerced_data = {}
@@ -112,6 +111,7 @@ class Finding:
                         log("DEBUG",
                             f"Field '{field_name}' expected {expected_type_str} but got type "
                             f"{get_type_as_str(type(raw_value))}: \"{raw_value}\" error is:\n{e}", prefix="MODEL")
+                        tui = get_tui()
                         tui.render_single_partial_dict_record(data)
                         correction_status, correction_data = prompt_user_to_fix_field(field_name, field_type, raw_value)
                         if correction_status == 0:

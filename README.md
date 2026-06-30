@@ -43,6 +43,19 @@ pipenv install -r requirements.txt
 pipenv run python ghostmerge.py --help
 ```
 
+## Running tests
+
+GhostMerge includes a standard-library regression suite under `tests/`. From the
+repository root, run it with the project virtual environment:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+The suite covers the current CLI-critical behaviours, including model coercion,
+normalisation, matching, merge helpers, sensitivity helpers, config loading, and
+a non-interactive CLI merge smoke test.
+
 Run GhostMerge against the included sample files:
 
 ```bash
