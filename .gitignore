@@ -1,0 +1,6 @@
+/.venv/
+.idea/
+__pycache__/
+ghostmerge.log
+/test_data_right-out.json
+/test_data_left-out.json
