@@ -9,7 +9,7 @@
     <dt>Term</dt><dd>{{ item.sensitive_term }}</dd>
     <dt>Offered</dt><dd>{{ item.offered or "None" }}</dd>
   </dl>
-  <pre>{{ item.field_value }}</pre>
+  <pre>{% for part in item.highlighted_parts %}{% if part.hit %}<mark>{{ part.text }}</mark>{% else %}{{ part.text }}{% endif %}{% endfor %}</pre>
 </section>
 <form class="panel" action="{{ url_for('apply_sensitivity', job_id=job.job_id) }}" method="post">
   <input type="hidden" name="side" value="{{ item.side }}">
@@ -17,14 +17,14 @@
   <input type="hidden" name="field_name" value="{{ item.field_name }}">
   <input type="hidden" name="sensitive_term" value="{{ item.sensitive_term }}">
   <input type="hidden" name="offered" value="{{ item.offered or "" }}">
-  <label for="action">Decision</label>
-  <select id="action" name="action">
-    {% if item.offered is not none %}<option value="offered">Use offered replacement</option>{% endif %}
-    <option value="keep">Keep value</option>
-    <option value="custom">Custom replacement</option>
-  </select>
+  <div class="decision-grid">
+    {% if item.offered is not none %}
+    <button class="decision-button default" type="submit" name="action" value="offered" data-shortcut=" "><span class="shortcut">Space</span>Use offered replacement</button>
+    {% endif %}
+    <button class="decision-button" type="submit" name="action" value="keep" data-shortcut="ArrowDown"><span class="shortcut">↓</span>Keep value</button>
+  </div>
   <label for="custom_value">Custom replacement</label>
   <textarea id="custom_value" name="custom_value">{{ item.offered or "" }}</textarea>
-  <p><button type="submit">Apply decision</button></p>
+  <p><button class="secondary" type="submit" name="action" value="custom">Apply custom replacement</button></p>
 </form>
 {% endblock %}

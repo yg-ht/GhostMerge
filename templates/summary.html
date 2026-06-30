@@ -7,7 +7,9 @@
     <dt>Matched pairs</dt><dd>{{ summary.matches }}</dd>
     <dt>Unmatched left</dt><dd>{{ summary.unmatched_left }}</dd>
     <dt>Unmatched right</dt><dd>{{ summary.unmatched_right }}</dd>
+    <dt>Current phase</dt><dd>{{ summary.phase }}</dd>
+    <dt>Completed matches</dt><dd>{{ summary.completed_matches }}</dd>
   </dl>
-  <p><a class="button" href="{{ url_for('conflicts', job_id=summary.job_id) }}">Review conflicts</a></p>
+  <p><a class="button" href="{{ url_for('conflicts', job_id=summary.job_id) }}">Resume review</a></p>
 </section>
 {% endblock %}

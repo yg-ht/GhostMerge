@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Record preview</h1>
+<section class="panel">
+  <dl>
+    <dt>Match</dt><dd>{{ preview.match_index + 1 }}</dd>
+    <dt>Score</dt><dd>{{ "%.2f"|format(preview.score) }}%</dd>
+  </dl>
+  <table class="record-table">
+    <thead>
+      <tr>
+        <th>Field</th>
+        <th>Left</th>
+        <th>Right</th>
+        <th>Offered</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in preview.rows %}
+      <tr class="{{ 'changed' if row.different else '' }}">
+        <th>{{ row.field_name }}</th>
+        <td><pre>{{ row.left_value }}</pre></td>
+        <td><pre>{{ row.right_value }}</pre></td>
+        <td><pre>{{ row.offered_value }}</pre></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<form class="panel actions" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
+  <button type="submit" name="preview_action" value="continue" data-shortcut="Enter">Review field conflicts</button>
+  <button class="secondary" type="submit" name="preview_action" value="accept_offered" data-shortcut=" ">Accept offered for this match</button>
+</form>
+{% endblock %}

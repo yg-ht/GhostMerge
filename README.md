@@ -81,6 +81,21 @@ Then open the local URL printed by Flask. Uploaded files and in-progress job
 state are stored under `ghostmerge_web_jobs/` by default. Treat that directory as
 local working data and remove it when old merge jobs are no longer needed.
 
+The web review flow starts with a whole-record preview for each matched pair,
+then moves through field-level conflicts. Differing fields and field-level diffs
+are highlighted. Decision buttons can be clicked directly, and common CLI-style
+keyboard shortcuts are available during review:
+
+```text
+Left arrow   use left value
+Right arrow  use right value
+Up arrow     keep left and right intact
+Down arrow   blank optional field or keep sensitivity value
+Space        use offered/default value
+M            merge left and right text where available
+E            focus the custom edit field
+```
+
 Run GhostMerge against the included sample files:
 
 ```bash

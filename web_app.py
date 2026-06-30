@@ -9,12 +9,16 @@ from sensitivity import load_sensitive_terms
 from utils import load_config
 from web_service import (
     WebMergeError,
+    accept_offered_for_current_match,
+    acknowledge_current_preview,
     apply_conflict_decision,
     apply_sensitivity_decision,
     create_merge_job,
     finalise_job,
+    get_current_match_preview,
     get_next_conflict,
     get_next_sensitivity_item,
+    get_review_progress,
     job_summary,
     load_job,
     load_records_from_json_text,
@@ -65,7 +69,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     def summary(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
-            return render_template("summary.html", summary=job_summary(job))
+            return render_template("summary.html", summary=job_summary(job), progress=get_review_progress(job))
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 404
 
@@ -73,11 +77,26 @@ def create_app(test_config: dict | None = None) -> Flask:
     def conflicts(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
+            if not job.preview_acknowledged:
+                preview = get_current_match_preview(job)
+                save_job(job, jobs_dir)
+                if preview is not None:
+                    return render_template(
+                        "match_preview.html",
+                        job=job,
+                        preview=preview,
+                        progress=get_review_progress(job),
+                    )
             item = get_next_conflict(job)
             save_job(job, jobs_dir)
             if item is None:
                 return redirect(url_for("sensitivity", job_id=job.job_id))
-            return render_template("conflict.html", job=job, item=item)
+            return render_template(
+                "conflict.html",
+                job=job,
+                item=item,
+                progress=get_review_progress(job),
+            )
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
@@ -85,7 +104,12 @@ def create_app(test_config: dict | None = None) -> Flask:
     def apply_conflict(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
-            apply_conflict_decision(job, request.form.to_dict())
+            if request.form.get("preview_action") == "continue":
+                acknowledge_current_preview(job)
+            elif request.form.get("preview_action") == "accept_offered":
+                accept_offered_for_current_match(job)
+            else:
+                apply_conflict_decision(job, request.form.to_dict())
             save_job(job, jobs_dir)
             return redirect(url_for("conflicts", job_id=job.job_id))
         except WebMergeError as exc:
@@ -99,7 +123,12 @@ def create_app(test_config: dict | None = None) -> Flask:
             save_job(job, jobs_dir)
             if item is None:
                 return redirect(url_for("complete", job_id=job.job_id))
-            return render_template("sensitivity.html", job=job, item=item)
+            return render_template(
+                "sensitivity.html",
+                job=job,
+                item=item,
+                progress=get_review_progress(job),
+            )
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
@@ -119,8 +148,9 @@ def create_app(test_config: dict | None = None) -> Flask:
             job = load_job(jobs_dir, job_id)
             result = finalise_job(job)
             save_outputs(job, jobs_dir, result)
+            job.sensitivity_phase_complete = True
             save_job(job, jobs_dir)
-            return render_template("complete.html", job=job)
+            return render_template("complete.html", job=job, progress=get_review_progress(job))
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 

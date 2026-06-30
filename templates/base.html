@@ -13,6 +13,10 @@
         --text: #17202c;
         --muted: #596579;
         --accent: #126a5b;
+        --accent-soft: #e6f3ef;
+        --warn-soft: #fff2cc;
+        --add: #dff3e7;
+        --remove: #f8dfdf;
         --danger: #a23333;
       }
       body {
@@ -42,6 +46,84 @@
         border-radius: 6px;
         padding: 18px;
         margin-bottom: 16px;
+      }
+      .progress {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      .metric {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+      }
+      .metric strong {
+        display: block;
+        font-size: 20px;
+      }
+      .record-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .record-table th,
+      .record-table td {
+        border-bottom: 1px solid var(--line);
+        padding: 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+      .record-table tr.changed {
+        background: var(--warn-soft);
+      }
+      .decision-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 10px;
+      }
+      .decision-button {
+        width: 100%;
+        min-height: 58px;
+        text-align: left;
+        background: var(--panel);
+        color: var(--text);
+        border-color: var(--line);
+      }
+      .decision-button.default {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+      }
+      .shortcut {
+        display: inline-block;
+        min-width: 24px;
+        margin-right: 8px;
+        padding: 2px 6px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        text-align: center;
+        color: var(--muted);
+        background: white;
+      }
+      .diff-line {
+        display: grid;
+        grid-template-columns: 72px 1fr;
+        gap: 8px;
+        border-bottom: 1px solid #e2e6ec;
+        padding: 6px 8px;
+      }
+      .diff-line.added {
+        background: var(--add);
+      }
+      .diff-line.removed {
+        background: var(--remove);
+      }
+      .diff-line.offered {
+        background: var(--accent-soft);
+      }
+      mark {
+        background: #ffe066;
+        padding: 0 2px;
       }
       .grid {
         display: grid;
@@ -109,6 +191,17 @@
   </head>
   <body>
     <header><strong>GhostMerge</strong></header>
-    <main>{% block content %}{% endblock %}</main>
+    <main>
+      {% if progress %}
+      <section class="progress" aria-label="Review progress">
+        <div class="metric"><span>Phase</span><strong>{{ progress.phase }}</strong></div>
+        <div class="metric"><span>Match</span><strong>{{ progress.current_match }} / {{ progress.total_matches }}</strong></div>
+        <div class="metric"><span>Completed</span><strong>{{ progress.completed_matches }}</strong></div>
+        <div class="metric"><span>Unmatched</span><strong>{{ progress.unmatched_left }} L / {{ progress.unmatched_right }} R</strong></div>
+      </section>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+    <script src="{{ url_for('static', filename='review_shortcuts.js') }}"></script>
   </body>
 </html>

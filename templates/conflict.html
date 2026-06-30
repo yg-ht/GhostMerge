@@ -23,22 +23,33 @@
     <pre>{{ item.offered_value }}</pre>
   </div>
 </section>
+<section class="panel">
+  <h2>Highlighted difference</h2>
+  {% for row in item.diff_rows %}
+  <div class="diff-line {{ row.class }}">
+    <strong>{{ row.side }}</strong>
+    <span>{{ row.text }}</span>
+  </div>
+  {% endfor %}
+</section>
 <form class="panel" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
   <input type="hidden" name="field_name" value="{{ item.field_name }}">
-  <label for="action">Decision</label>
-  <select id="action" name="action">
-    <option value="offered">Use offered value</option>
-    <option value="left">Use left value</option>
-    <option value="right">Use right value</option>
-    <option value="keep">Keep left and right intact</option>
-    {% if item.allow_merge %}<option value="merge">Merge left and right text</option>{% endif %}
-    {% if item.is_optional %}<option value="blank">Blank field</option>{% endif %}
-    {% if item.allow_merge %}<option value="custom">Custom text</option>{% endif %}
-  </select>
+  <div class="decision-grid">
+    <button class="decision-button default" type="submit" name="action" value="offered" data-shortcut=" "><span class="shortcut">Space</span>Use offered value</button>
+    <button class="decision-button" type="submit" name="action" value="left" data-shortcut="ArrowLeft"><span class="shortcut">←</span>Use left value</button>
+    <button class="decision-button" type="submit" name="action" value="right" data-shortcut="ArrowRight"><span class="shortcut">→</span>Use right value</button>
+    <button class="decision-button" type="submit" name="action" value="keep" data-shortcut="ArrowUp"><span class="shortcut">↑</span>Keep left/right intact</button>
+    {% if item.allow_merge %}
+    <button class="decision-button" type="submit" name="action" value="merge" data-shortcut="m"><span class="shortcut">M</span>Merge text</button>
+    {% endif %}
+    {% if item.is_optional %}
+    <button class="decision-button" type="submit" name="action" value="blank" data-shortcut="ArrowDown"><span class="shortcut">↓</span>Blank field</button>
+    {% endif %}
+  </div>
   {% if item.allow_merge %}
   <label for="custom_value">Custom text</label>
   <textarea id="custom_value" name="custom_value">{{ item.offered_value or "" }}</textarea>
+  <p><button class="secondary" type="submit" name="action" value="custom">Apply custom text</button></p>
   {% endif %}
-  <p><button type="submit">Apply decision</button></p>
 </form>
 {% endblock %}

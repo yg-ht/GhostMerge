@@ -10,8 +10,10 @@ from web_service import (
     WebMergeError,
     apply_conflict_decision,
     apply_sensitivity_decision,
+    build_field_diff,
     create_merge_job,
     finalise_job,
+    get_current_match_preview,
     get_next_conflict,
     get_next_sensitivity_item,
     load_job,
@@ -107,6 +109,22 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(result.left_records[0]["description"], "Right detail")
         self.assertEqual(result.right_records[0]["description"], "Right detail")
 
+    def test_preview_and_diff_expose_changed_fields_for_review(self):
+        job = create_merge_job(
+            [record(description="Left detail")],
+            [record(id="2", description="Right detail")],
+            job_id="preview123",
+        )
+
+        preview = get_current_match_preview(job)
+        diff = build_field_diff("Left detail", "Right detail", "Right detail")
+
+        self.assertIsNotNone(preview)
+        self.assertIn("description", [row["field_name"] for row in preview.rows if row["different"]])
+        self.assertIn("removed", [row["class"] for row in diff])
+        self.assertIn("added", [row["class"] for row in diff])
+        self.assertIn("offered", [row["class"] for row in diff])
+
     def test_job_persistence_round_trips_review_state(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             job = create_merge_job(
@@ -131,6 +149,7 @@ class WebServiceTests(unittest.TestCase):
         item = get_next_sensitivity_item(job, {"acme": "[CLIENT]"})
 
         self.assertIsNotNone(item)
+        self.assertTrue(any(part["hit"] for part in item.highlighted_parts))
         apply_sensitivity_decision(
             job,
             {
@@ -197,7 +216,18 @@ class FlaskRouteTests(unittest.TestCase):
 
         conflict = self.client.get(f"/jobs/{job_id}/conflicts")
         self.assertEqual(conflict.status_code, 200)
-        self.assertIn(b"description", conflict.data)
+        self.assertIn(b"Record preview", conflict.data)
+        self.assertIn(b"changed", conflict.data)
+
+        conflict = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data={"preview_action": "continue"},
+            follow_redirects=True,
+        )
+        self.assertEqual(conflict.status_code, 200)
+        self.assertIn(b"Conflict review", conflict.data)
+        self.assertIn(b"data-shortcut=\"ArrowLeft\"", conflict.data)
+        self.assertIn(b"Highlighted difference", conflict.data)
 
         completed = self.client.post(
             f"/jobs/{job_id}/conflicts",
@@ -214,3 +244,26 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(right_download.status_code, 200)
         self.assertEqual(left_download.get_json()[0]["description"], "Right detail")
         self.assertEqual(right_download.get_json()[0]["description"], "Right detail")
+
+    def test_preview_can_accept_offered_values_for_current_match(self):
+        left = json.dumps([record(description="Left detail")]).encode("utf-8")
+        right = json.dumps([record(id="2", description="Right detail")]).encode("utf-8")
+
+        upload = self.client.post(
+            "/jobs",
+            data={
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+        response = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data={"preview_action": "accept_offered"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Merge complete", response.data)

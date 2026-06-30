@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import difflib
 import json
 import uuid
 from dataclasses import asdict, dataclass, fields
@@ -18,7 +19,7 @@ from merge import (
 )
 from model import Finding, get_type_as_str, is_optional_field
 from sensitivity import apply_sensitive_replacement, check_for_sensitivities
-from utils import blank_for_type, normalise_finding_record
+from utils import blank_for_type, normalise_finding_record, stringify_field, wrap_string
 
 CONFIG = get_config()
 
@@ -38,6 +39,7 @@ class ConflictReviewItem:
     field_type: str
     is_optional: bool
     allow_merge: bool
+    diff_rows: list[dict[str, str]]
 
 
 @dataclass
@@ -48,6 +50,7 @@ class SensitivityReviewItem:
     field_value: Any
     sensitive_term: str
     offered: Optional[str]
+    highlighted_parts: list[dict[str, Any]]
 
 
 @dataclass
@@ -73,6 +76,14 @@ class MergeJob:
     sensitivity_field_index: int = 0
     final_left: Optional[list[Finding]] = None
     final_right: Optional[list[Finding]] = None
+    preview_acknowledged: bool = False
+
+
+@dataclass
+class MatchPreviewItem:
+    match_index: int
+    score: float
+    rows: list[dict[str, Any]]
 
 
 def load_records_from_json_text(json_text: str) -> list[dict[str, Any]]:
@@ -158,10 +169,66 @@ def get_next_conflict(job: MergeJob) -> Optional[ConflictReviewItem]:
         job.merged_right.append(match["right"])
         job.match_index += 1
         job.field_index = 0
+        job.preview_acknowledged = False
 
     _append_unmatched_records(job)
     job.conflict_phase_complete = True
     return None
+
+
+def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
+    """Return whole-record preview data for the current matched pair."""
+    if job.conflict_phase_complete or job.match_index >= len(job.matches):
+        return None
+
+    match = job.matches[job.match_index]
+    rows = []
+    for field_def in fields(Finding):
+        expected_type = get_type_as_str(field_def.type)
+        left_value = getattr(match["left"], field_def.name, blank_for_type(expected_type))
+        right_value = getattr(match["right"], field_def.name, blank_for_type(expected_type))
+        offered_value = match["auto_value"].get(field_def.name)
+        rows.append(
+            {
+                "field_name": field_def.name,
+                "left_value": stringify_field(left_value),
+                "right_value": stringify_field(right_value),
+                "offered_value": stringify_field(offered_value),
+                "different": left_value != right_value,
+            }
+        )
+
+    return MatchPreviewItem(
+        match_index=job.match_index,
+        score=float(match["score"]),
+        rows=rows,
+    )
+
+
+def acknowledge_current_preview(job: MergeJob) -> None:
+    if job.conflict_phase_complete or job.match_index >= len(job.matches):
+        raise WebMergeError("There is no active match preview.")
+    job.preview_acknowledged = True
+
+
+def accept_offered_for_current_match(job: MergeJob) -> None:
+    """Apply every offered value for the current matched pair and advance."""
+    if job.conflict_phase_complete or job.match_index >= len(job.matches):
+        raise WebMergeError("There is no active match to accept.")
+
+    match = job.matches[job.match_index]
+    for field_def in fields(Finding):
+        if field_def.name == "id":
+            continue
+        offered_value = match["auto_value"].get(field_def.name)
+        match["left"].set(field_def.name, offered_value)
+        match["right"].set(field_def.name, offered_value)
+
+    job.merged_left.append(match["left"])
+    job.merged_right.append(match["right"])
+    job.match_index += 1
+    job.field_index = 0
+    job.preview_acknowledged = False
 
 
 def apply_conflict_decision(job: MergeJob, decision: dict[str, Any]) -> None:
@@ -235,6 +302,7 @@ def get_next_sensitivity_item(
                         field_value=record.get(field_def.name),
                         sensitive_term=sensitive_term,
                         offered=offered,
+                        highlighted_parts=_highlight_term_parts(record.get(field_def.name), sensitive_term),
                     )
             job.sensitivity_field_index = 0
             job.sensitivity_record_index += 1
@@ -320,7 +388,8 @@ def save_outputs(job: MergeJob, jobs_dir: Path, result: MergeResult) -> None:
 
 
 def job_summary(job: MergeJob) -> dict[str, int | bool | str]:
-    return {
+    summary = get_review_progress(job)
+    summary.update({
         "job_id": job.job_id,
         "matches": len(job.matches),
         "unmatched_left": len(job.unmatched_left),
@@ -328,7 +397,49 @@ def job_summary(job: MergeJob) -> dict[str, int | bool | str]:
         "merged": len(job.merged_left),
         "conflict_phase_complete": job.conflict_phase_complete,
         "sensitivity_phase_complete": job.sensitivity_phase_complete,
+    })
+    return summary
+
+
+def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
+    phase = "conflicts"
+    if job.conflict_phase_complete and not job.sensitivity_phase_complete:
+        phase = "sensitivity"
+    elif job.conflict_phase_complete and job.sensitivity_phase_complete:
+        phase = "complete"
+
+    return {
+        "phase": phase,
+        "current_match": min(job.match_index + 1, len(job.matches)) if job.matches else 0,
+        "total_matches": len(job.matches),
+        "completed_matches": len(job.merged_left),
+        "current_field": job.field_index,
+        "total_fields": len(fields(Finding)),
+        "preview_acknowledged": job.preview_acknowledged,
+        "unmatched_left": len(job.unmatched_left),
+        "unmatched_right": len(job.unmatched_right),
     }
+
+
+def build_field_diff(left_value: Any, right_value: Any, offered_value: Any = None) -> list[dict[str, str]]:
+    """Build template-friendly diff rows for left, right, and offered field values."""
+    left_text = _wrap_for_web_diff(left_value)
+    right_text = _wrap_for_web_diff(right_value)
+    rows = []
+    for line in difflib.ndiff(left_text.splitlines(), right_text.splitlines()):
+        code = line[:2]
+        value = line[2:]
+        if code == "- ":
+            rows.append({"side": "left", "class": "removed", "text": value})
+        elif code == "+ ":
+            rows.append({"side": "right", "class": "added", "text": value})
+        elif code == "  ":
+            rows.append({"side": "both", "class": "same", "text": value})
+
+    if offered_value not in (None, ""):
+        rows.append({"side": "offered", "class": "offered", "text": _wrap_for_web_diff(offered_value)})
+
+    return rows
 
 
 def job_to_dict(job: MergeJob) -> dict[str, Any]:
@@ -375,6 +486,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         sensitivity_field_index=data["sensitivity_field_index"],
         final_left=None if data["final_left"] is None else [_finding_from_state(item) for item in data["final_left"]],
         final_right=None if data["final_right"] is None else [_finding_from_state(item) for item in data["final_right"]],
+        preview_acknowledged=data.get("preview_acknowledged", False),
     )
 
 
@@ -407,6 +519,7 @@ def _prepare_conflict_for_field(match_index: int, match: dict[str, Any], field_d
         field_type=expected_type,
         is_optional=is_optional_field(expected_type),
         allow_merge="str" in expected_type,
+        diff_rows=build_field_diff(left_value, right_value, offered_value),
     )
 
 
@@ -459,3 +572,31 @@ def _job_dir(jobs_dir: Path, job_id: str) -> Path:
     if not job_id or not job_id.isalnum():
         raise WebMergeError("Invalid job ID.")
     return jobs_dir / job_id
+
+
+def _wrap_for_web_diff(value: Any) -> str:
+    width = CONFIG.get("field_level_diff_max_width", 114)
+    return wrap_string(stringify_field(value), width)
+
+
+def _highlight_term_parts(value: Any, term: str) -> list[dict[str, Any]]:
+    text = stringify_field(value)
+    lowered = text.lower()
+    term_lowered = term.lower()
+    if not term_lowered:
+        return [{"text": text, "hit": False}]
+
+    parts = []
+    cursor = 0
+    while True:
+        index = lowered.find(term_lowered, cursor)
+        if index < 0:
+            break
+        if index > cursor:
+            parts.append({"text": text[cursor:index], "hit": False})
+        end = index + len(term)
+        parts.append({"text": text[index:end], "hit": True})
+        cursor = end
+    if cursor < len(text):
+        parts.append({"text": text[cursor:], "hit": False})
+    return parts or [{"text": text, "hit": False}]
