@@ -90,10 +90,20 @@ secret. The key is supplied on the first GET request with the configured query
 parameter, for example `/?api_key=...`; after a valid GET, the Flask session
 stays authenticated for later navigation and CSRF-protected form posts.
 
-The source IP check uses Flask's direct `request.remote_addr` value only. It
-does not trust `X-Forwarded-For` or other proxy headers, so any reverse proxy
-must connect from an explicitly allowed address or be handled by a separate
-deployment design.
+The source IP check defaults to Flask's direct `request.remote_addr` value. Set
+`source_ip_mode` to control which client address source is checked:
+
+| Mode | Behaviour |
+| --- | --- |
+| `direct` | Check only the directly observed peer address. This is the default. |
+| `trusted_header` | Check only `trusted_source_ip_header`, but only when the direct peer is in `trusted_proxy_ips`. |
+| `both` | Check the direct peer address and, when the peer is trusted, also check `trusted_source_ip_header`. |
+
+For Caddy or another reverse proxy, add the proxy's direct address or CIDR to
+`trusted_proxy_ips` before using a trusted header such as `X-Forwarded-For`.
+Header values from untrusted peers are ignored or rejected, depending on the
+selected mode, so a client cannot authorise itself by sending a spoofed
+forwarded header directly to Flask.
 
 When the web frontend is embedded in another application, keep `allow_framing`
 enabled and set `frame_ancestors` to the embedding origin where possible. The

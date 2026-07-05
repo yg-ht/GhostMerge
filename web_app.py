@@ -44,6 +44,7 @@ from web_service import (
 )
 
 CONFIG = get_config()
+SOURCE_IP_MODES = {"direct", "trusted_header", "both"}
 
 
 def create_app(test_config: dict | None = None) -> Flask:
@@ -345,11 +346,6 @@ def _require_allowed_source_ip():
     if not remote_addr:
         return render_template("error.html", error="Source IP address could not be determined."), 403
 
-    try:
-        client_ip = ipaddress.ip_address(remote_addr)
-    except ValueError:
-        return render_template("error.html", error=f"Source IP address {remote_addr} is invalid."), 403
-
     allowed_ranges = access_config.get("allowed_source_ips") or []
     if not allowed_ranges:
         return render_template(
@@ -358,17 +354,75 @@ def _require_allowed_source_ip():
         ), 403
 
     try:
-        for allowed_range in allowed_ranges:
-            # strict=False allows exact IP strings and CIDR networks through one parser.
-            if client_ip in ipaddress.ip_network(str(allowed_range), strict=False):
+        candidate_ips = _source_ip_candidates(access_config, remote_addr)
+        for source_label, candidate_ip in candidate_ips:
+            if _ip_is_allowed(candidate_ip, allowed_ranges):
                 return None
     except ValueError:
         return render_template(
             "error.html",
             error=f"Source IP restriction contains an invalid configured range. Your source IP is {remote_addr}.",
         ), 403
+    except WebAccessError as exc:
+        return render_template("error.html", error=str(exc)), 403
 
-    return render_template("error.html", error=f"Source IP address {remote_addr} is not allowed."), 403
+    checked_ips = ", ".join(f"{label} {candidate}" for label, candidate in candidate_ips)
+    return render_template("error.html", error=f"Source IP address is not allowed. Checked: {checked_ips}."), 403
+
+
+class WebAccessError(Exception):
+    pass
+
+
+def _source_ip_candidates(
+    access_config: dict,
+    remote_addr: str,
+) -> list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]]:
+    mode = str(access_config.get("source_ip_mode") or "direct")
+    if mode not in SOURCE_IP_MODES:
+        raise WebAccessError(f"Source IP restriction mode {mode!r} is not supported.")
+
+    candidates: list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] = []
+    direct_ip = _parse_source_ip(remote_addr, "direct source IP address")
+    if mode in {"direct", "both"}:
+        candidates.append(("direct", direct_ip))
+
+    if mode in {"trusted_header", "both"}:
+        # Header-derived client IPs are only trustworthy when the direct peer is a configured proxy.
+        if not _ip_is_allowed(direct_ip, access_config.get("trusted_proxy_ips") or []):
+            if mode == "both":
+                return candidates
+            raise WebAccessError(f"Direct source IP address {remote_addr} is not a trusted proxy.")
+        header_name = str(access_config.get("trusted_source_ip_header") or "X-Forwarded-For")
+        header_value = request.headers.get(header_name, "")
+        if not header_value:
+            if mode == "both":
+                return candidates
+            raise WebAccessError(f"Trusted source IP header {header_name} is missing.")
+        candidates.append(
+            (f"trusted header {header_name}", _parse_source_ip(_first_forwarded_ip(header_value), header_name))
+        )
+
+    return candidates
+
+
+def _parse_source_ip(raw_ip: str, source_label: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    try:
+        return ipaddress.ip_address(raw_ip)
+    except ValueError as exc:
+        raise WebAccessError(f"Source IP from {source_label} is invalid: {raw_ip}.") from exc
+
+
+def _ip_is_allowed(candidate_ip: ipaddress.IPv4Address | ipaddress.IPv6Address, allowed_ranges: list) -> bool:
+    for allowed_range in allowed_ranges:
+        # strict=False allows exact IP strings and CIDR networks through one parser.
+        if candidate_ip in ipaddress.ip_network(str(allowed_range), strict=False):
+            return True
+    return False
+
+
+def _first_forwarded_ip(header_value: str) -> str:
+    return header_value.split(",", 1)[0].strip()
 
 
 def _require_get_api_key_authentication():

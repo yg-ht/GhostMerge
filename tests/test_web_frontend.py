@@ -41,6 +41,9 @@ def web_access_enabled(**overrides):
     config = {
         "source_ip_restriction_enabled": True,
         "allowed_source_ips": ["127.0.0.1"],
+        "source_ip_mode": "direct",
+        "trusted_proxy_ips": [],
+        "trusted_source_ip_header": "X-Forwarded-For",
         "api_key_auth_enabled": True,
         "api_key_query_param": "api_key",
         "api_key": "test-web-key",
@@ -774,7 +777,8 @@ class WebAccessControlTests(unittest.TestCase):
         response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
 
         self.assertEqual(response.status_code, 403)
-        self.assertIn(b"Source IP address 127.0.0.1 is not allowed", response.data)
+        self.assertIn(b"Source IP address is not allowed", response.data)
+        self.assertIn(b"direct 127.0.0.1", response.data)
 
     def test_empty_allowed_source_ips_fail_closed(self):
         client, _app = self.make_client(web_access_enabled(allowed_source_ips=[]))
@@ -811,8 +815,131 @@ class WebAccessControlTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
-        self.assertIn(b"Source IP address 127.0.0.1 is not allowed", response.data)
+        self.assertIn(b"Source IP address is not allowed", response.data)
+        self.assertIn(b"direct 127.0.0.1", response.data)
         self.assertNotIn(b"203.0.113.10 is not allowed", response.data)
+
+    def test_trusted_header_mode_allows_header_ip_from_trusted_proxy(self):
+        client, _app = self.make_client(
+            web_access_enabled(
+                source_ip_mode="trusted_header",
+                allowed_source_ips=["203.0.113.10"],
+                trusted_proxy_ips=["127.0.0.1"],
+            )
+        )
+
+        response = client.get(
+            "/?api_key=test-web-key",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+            headers={"X-Forwarded-For": "203.0.113.10"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_trusted_header_mode_accepts_trusted_proxy_cidr(self):
+        client, _app = self.make_client(
+            web_access_enabled(
+                source_ip_mode="trusted_header",
+                allowed_source_ips=["203.0.113.10"],
+                trusted_proxy_ips=["127.0.0.0/24"],
+            )
+        )
+
+        response = client.get(
+            "/?api_key=test-web-key",
+            environ_base={"REMOTE_ADDR": "127.0.0.42"},
+            headers={"X-Forwarded-For": "203.0.113.10"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_trusted_header_mode_rejects_header_from_untrusted_proxy(self):
+        client, _app = self.make_client(
+            web_access_enabled(
+                source_ip_mode="trusted_header",
+                allowed_source_ips=["203.0.113.10"],
+                trusted_proxy_ips=["10.0.0.1"],
+            )
+        )
+
+        response = client.get(
+            "/?api_key=test-web-key",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+            headers={"X-Forwarded-For": "203.0.113.10"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b"127.0.0.1 is not a trusted proxy", response.data)
+
+    def test_trusted_header_mode_rejects_missing_header(self):
+        client, _app = self.make_client(
+            web_access_enabled(
+                source_ip_mode="trusted_header",
+                allowed_source_ips=["203.0.113.10"],
+                trusted_proxy_ips=["127.0.0.1"],
+            )
+        )
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b"Trusted source IP header X-Forwarded-For is missing", response.data)
+
+    def test_trusted_header_mode_rejects_invalid_header_ip(self):
+        client, _app = self.make_client(
+            web_access_enabled(
+                source_ip_mode="trusted_header",
+                allowed_source_ips=["203.0.113.10"],
+                trusted_proxy_ips=["127.0.0.1"],
+            )
+        )
+
+        response = client.get(
+            "/?api_key=test-web-key",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+            headers={"X-Forwarded-For": "not-an-ip"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b"Source IP from X-Forwarded-For is invalid", response.data)
+
+    def test_both_mode_allows_direct_ip_without_header(self):
+        client, _app = self.make_client(
+            web_access_enabled(
+                source_ip_mode="both",
+                allowed_source_ips=["127.0.0.1"],
+                trusted_proxy_ips=["127.0.0.1"],
+            )
+        )
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_both_mode_allows_trusted_header_ip_when_direct_ip_is_not_allowed(self):
+        client, _app = self.make_client(
+            web_access_enabled(
+                source_ip_mode="both",
+                allowed_source_ips=["203.0.113.10"],
+                trusted_proxy_ips=["127.0.0.1"],
+            )
+        )
+
+        response = client.get(
+            "/?api_key=test-web-key",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+            headers={"X-Forwarded-For": "203.0.113.10"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_unsupported_source_ip_mode_fails_closed(self):
+        client, _app = self.make_client(web_access_enabled(source_ip_mode="proxy_magic"))
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b"source ip restriction mode", response.data.lower())
 
     def test_framing_headers_and_session_cookie_policy_are_applied(self):
         client, app = self.make_client(web_access_enabled(frame_ancestors=["https://portal.example"]))

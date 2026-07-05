@@ -40,6 +40,9 @@
   "web_access": {
     "source_ip_restriction_enabled": true,
     "allowed_source_ips": ["203.0.113.10", "198.51.100.0/24"],
+    "source_ip_mode": "direct",
+    "trusted_proxy_ips": [],
+    "trusted_source_ip_header": "X-Forwarded-For",
     "api_key_auth_enabled": true,
     "api_key_query_param": "api_key",
     "api_key": "",
