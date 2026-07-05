@@ -217,6 +217,18 @@ class GhostwriterApiTests(unittest.TestCase):
             self.assertEqual(fake_client.tag_sets, [(101, ["web", "xss"])])
             self.assertEqual(list_backups(Path(tmp_dir))[0]["record_count"], 1)
 
+    def test_backups_created_in_same_second_have_unique_paths(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_client = FakeGraphQLClient()
+            api = GhostwriterApi(server_config(), client=fake_client)
+
+            first = api.create_backup(Path(tmp_dir))
+            second = api.create_backup(Path(tmp_dir))
+
+            self.assertNotEqual(first, second)
+            self.assertTrue(first.exists())
+            self.assertTrue(second.exists())
+
     def test_replace_all_validates_records_before_backup_or_delete(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             fake_client = FakeGraphQLClient()

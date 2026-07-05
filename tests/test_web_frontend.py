@@ -379,6 +379,41 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Records", response.data)
         self.assertIn(b">0<", response.data)
 
+    def test_backup_restore_rejects_mismatched_configured_target(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "mismatch.json"
+        backup_path.write_text(
+            json.dumps(
+                {
+                    "server_side": "left",
+                    "server_name": "Old Left",
+                    "graphql_url": "https://old.example/v1/graphql",
+                    "created_at": "20260705T000000Z",
+                    "record_count": 1,
+                    "raw_records": [{"record": {"id": 1}, "tags": []}],
+                    "normalised_records": [record()],
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = get_config()
+        config["ghostwriter_api"]["backup_dir"] = str(backup_root)
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "base_url": "https://new.example",
+                "graphql_endpoint": "/v1/graphql",
+                "bearer_token": "left-token",
+            }
+        )
+
+        response = self.client.post("/api-backups/left/mismatch.json/0/restore")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Backup target does not match", response.data)
+
     def test_config_debug_logging_redacts_bearer_token(self):
         from utils import load_config
 

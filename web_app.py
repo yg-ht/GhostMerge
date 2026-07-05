@@ -239,7 +239,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             backup_path = _safe_backup_path(side, filename)
             record = load_backup_record(backup_path, index)
-            api = GhostwriterApi(_server_for_side(side))
+            server = _server_for_side(side)
+            _require_backup_target_match(record["backup"], server)
+            api = GhostwriterApi(server)
             created_id = api.restore_backup_record(record)
             return render_template(
                 "api_restore_complete.html",
@@ -366,6 +368,15 @@ def _require_sync_not_active(job, side: str) -> None:
         raise WebMergeError(f"{side.title()} live API sync is already running.")
     if status == "done":
         raise WebMergeError(f"{side.title()} live API sync has already completed.")
+
+
+def _require_backup_target_match(backup: dict, server) -> None:
+    backup_url = backup.get("graphql_url")
+    if backup_url and backup_url != server.graphql_url:
+        raise WebMergeError(
+            "Backup target does not match the currently configured Ghostwriter server. "
+            "Refusing restore to avoid writing data to the wrong deployment."
+        )
 
 
 def _load_terms():

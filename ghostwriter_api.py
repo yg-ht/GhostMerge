@@ -5,6 +5,7 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -186,7 +187,7 @@ class GhostwriterApi:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup_dir = backup_root / self.server.side
         backup_dir.mkdir(parents=True, exist_ok=True)
-        backup_path = backup_dir / f"{timestamp}-{_slug(self.server.name)}.json"
+        backup_path = backup_dir / f"{timestamp}-{_slug(self.server.name)}-{uuid.uuid4().hex[:8]}.json"
         backup_data = {
             "server_side": self.server.side,
             "server_name": self.server.name,
@@ -196,7 +197,8 @@ class GhostwriterApi:
             "raw_records": raw_records,
             "normalised_records": normalised_records,
         }
-        backup_path.write_text(json.dumps(backup_data, indent=2), encoding="utf-8")
+        with backup_path.open("x", encoding="utf-8") as handle:
+            json.dump(backup_data, handle, indent=2)
         verify_backup(backup_path)
         self.progress(SyncEvent("backup", f"Backup written for {self.server.name}", len(raw_records), len(raw_records), "done"))
         return backup_path

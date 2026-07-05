@@ -15,17 +15,13 @@ class Aborting(Exception):
 def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"):
     config_path = Path(config_path)
     local_override_path = Path(f"{config_path}.local")
-    if not config_path.exists() and config_path.name == "ghostmerge_config.json":
-        example_config_path = config_path.with_name("ghostmerge_config.example.json")
-        if example_config_path.exists():
-            config_path = example_config_path
 
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
             log('INFO', f'Loaded config from: {config_path}', prefix="UTILS")
             log('DEBUG', f'Config is now: {json.dumps(redact_config_secrets(user_config), indent=2)}', prefix="UTILS")
-            CONFIG.update(user_config)
+            deep_merge_config(CONFIG, user_config)
             CONFIG["config_loaded"] = True
             CONFIG["script_dir"] = SCRIPT_DIR
     except FileNotFoundError:
@@ -40,12 +36,22 @@ def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"
             user_config = json.load(f)
             log('INFO', f'Loaded config from: {local_config_path}', prefix="UTILS")
             log('DEBUG', f'Config is now: {json.dumps(redact_config_secrets(user_config), indent=2)}', prefix="UTILS")
-            CONFIG.update(user_config)
+            deep_merge_config(CONFIG, user_config)
             CONFIG["config_loaded"] = True
     except FileNotFoundError:
         log('DEBUG', f'No ".local" config file found at: {local_config_path}', prefix="UTILS")
     except Exception as e:
         log('ERROR', f"Failed to load config from {config_path}: {e}", prefix="UTILS")
+
+
+def deep_merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Merge nested config dictionaries so `.local` files can override only secrets."""
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            deep_merge_config(base[key], value)
+        else:
+            base[key] = value
+    return base
 
 
 def redact_config_secrets(value: Any) -> Any:

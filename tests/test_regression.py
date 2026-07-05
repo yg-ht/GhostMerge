@@ -110,22 +110,54 @@ class ConfigRegressionTests(unittest.TestCase):
         self.assertFalse(get_config()["interactive_mode"])
         self.assertTrue(get_config()["config_loaded"])
 
-    def test_load_config_falls_back_to_example_but_keeps_local_override_name(self):
+    def test_load_config_deep_merges_local_override(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "ghostmerge_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "log_file_enabled": False,
+                        "ghostwriter_api": {
+                            "backup_dir": "backups",
+                            "servers": {
+                                "left": {
+                                    "enabled": True,
+                                    "base_url": "https://left.example",
+                                    "graphql_endpoint": "/v1/graphql",
+                                },
+                                "right": {
+                                    "enabled": False,
+                                },
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            Path(f"{config_path}.local").write_text(
+                json.dumps({"ghostwriter_api": {"servers": {"left": {"bearer_token": "local-token"}}}}),
+                encoding="utf-8",
+            )
+
+            load_config(config_path)
+
+        self.assertEqual(get_config()["ghostwriter_api"]["backup_dir"], "backups")
+        self.assertTrue(get_config()["ghostwriter_api"]["servers"]["left"]["enabled"])
+        self.assertEqual(get_config()["ghostwriter_api"]["servers"]["left"]["base_url"], "https://left.example")
+        self.assertEqual(get_config()["ghostwriter_api"]["servers"]["left"]["bearer_token"], "local-token")
+        self.assertIn("right", get_config()["ghostwriter_api"]["servers"])
+        self.assertTrue(get_config()["config_loaded"])
+
+    def test_load_config_requires_real_config_file_not_example_fallback(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "ghostmerge_config.json"
             config_path.with_name("ghostmerge_config.example.json").write_text(
                 json.dumps({"log_file_enabled": False, "interactive_mode": True}),
                 encoding="utf-8",
             )
-            Path(f"{config_path}.local").write_text(
-                json.dumps({"interactive_mode": False}),
-                encoding="utf-8",
-            )
 
-            load_config(config_path)
-
-        self.assertFalse(get_config()["interactive_mode"])
-        self.assertTrue(get_config()["config_loaded"])
+            with self.assertRaises(Aborting):
+                load_config(config_path)
 
 
 class FindingModelRegressionTests(unittest.TestCase):
