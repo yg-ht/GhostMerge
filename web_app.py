@@ -348,11 +348,14 @@ def _require_allowed_source_ip():
     try:
         client_ip = ipaddress.ip_address(remote_addr)
     except ValueError:
-        return render_template("error.html", error="Source IP address is invalid."), 403
+        return render_template("error.html", error=f"Source IP address {remote_addr} is invalid."), 403
 
     allowed_ranges = access_config.get("allowed_source_ips") or []
     if not allowed_ranges:
-        return render_template("error.html", error="Source IP restriction is enabled but no allowed IPs are configured."), 403
+        return render_template(
+            "error.html",
+            error=f"Source IP restriction is enabled but no allowed IPs are configured. Your source IP is {remote_addr}.",
+        ), 403
 
     try:
         for allowed_range in allowed_ranges:
@@ -360,9 +363,12 @@ def _require_allowed_source_ip():
             if client_ip in ipaddress.ip_network(str(allowed_range), strict=False):
                 return None
     except ValueError:
-        return render_template("error.html", error="Source IP restriction contains an invalid configured range."), 403
+        return render_template(
+            "error.html",
+            error=f"Source IP restriction contains an invalid configured range. Your source IP is {remote_addr}.",
+        ), 403
 
-    return render_template("error.html", error="Source IP address is not allowed."), 403
+    return render_template("error.html", error=f"Source IP address {remote_addr} is not allowed."), 403
 
 
 def _require_get_api_key_authentication():

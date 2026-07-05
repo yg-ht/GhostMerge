@@ -774,7 +774,7 @@ class WebAccessControlTests(unittest.TestCase):
         response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
 
         self.assertEqual(response.status_code, 403)
-        self.assertIn(b"Source IP address is not allowed", response.data)
+        self.assertIn(b"Source IP address 127.0.0.1 is not allowed", response.data)
 
     def test_empty_allowed_source_ips_fail_closed(self):
         client, _app = self.make_client(web_access_enabled(allowed_source_ips=[]))
@@ -783,6 +783,7 @@ class WebAccessControlTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertIn(b"no allowed IPs are configured", response.data)
+        self.assertIn(b"Your source IP is 127.0.0.1", response.data)
 
     def test_absent_web_access_config_fails_closed(self):
         client, _app = self.make_client(None)
@@ -791,6 +792,7 @@ class WebAccessControlTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertIn(b"no allowed IPs are configured", response.data)
+        self.assertIn(b"Your source IP is 127.0.0.1", response.data)
 
     def test_cidr_source_ip_range_is_allowed(self):
         client, _app = self.make_client(web_access_enabled(allowed_source_ips=["127.0.0.0/24"]))
@@ -809,7 +811,8 @@ class WebAccessControlTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
-        self.assertIn(b"Source IP address is not allowed", response.data)
+        self.assertIn(b"Source IP address 127.0.0.1 is not allowed", response.data)
+        self.assertNotIn(b"203.0.113.10 is not allowed", response.data)
 
     def test_framing_headers_and_session_cookie_policy_are_applied(self):
         client, app = self.make_client(web_access_enabled(frame_ancestors=["https://portal.example"]))
