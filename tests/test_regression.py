@@ -210,6 +210,15 @@ class FindingModelRegressionTests(unittest.TestCase):
             with self.assertRaises(Aborting):
                 Finding.from_dict(record)
 
+    def test_invalid_cvss_scores_abort_instead_of_silently_accepting(self):
+        for score in ("nan", "inf", "-inf", "-0.1", "10.1"):
+            with self.subTest(score=score):
+                record = finding(cvss_score=score, references="").to_dict()
+
+                with redirect_stdout(StringIO()):
+                    with self.assertRaises(Aborting):
+                        Finding.from_dict(record)
+
 
 class NormalisationRegressionTests(unittest.TestCase):
     def setUp(self):

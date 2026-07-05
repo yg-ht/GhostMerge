@@ -241,6 +241,33 @@ class GhostwriterApiTests(unittest.TestCase):
             self.assertEqual(fake_client.created_objects, [])
             self.assertEqual(list_backups(Path(tmp_dir)), [])
 
+    def test_replace_all_rejects_non_object_extra_fields_before_backup_or_delete(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_client = FakeGraphQLClient()
+            api = GhostwriterApi(server_config(), client=fake_client)
+
+            with self.assertRaises(GhostwriterApiError):
+                api.replace_all_findings([finding_record(extra_fields="[]")], Path(tmp_dir))
+
+            self.assertEqual(fake_client.deleted_ids, [])
+            self.assertEqual(fake_client.created_objects, [])
+            self.assertEqual(list_backups(Path(tmp_dir)), [])
+
+    def test_replace_all_rejects_invalid_cvss_before_backup_or_delete(self):
+        invalid_scores = ["nan", "inf", "-inf", "-0.1", "10.1"]
+        for score in invalid_scores:
+            with self.subTest(score=score):
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    fake_client = FakeGraphQLClient()
+                    api = GhostwriterApi(server_config(), client=fake_client)
+
+                    with self.assertRaises(GhostwriterApiError):
+                        api.replace_all_findings([finding_record(cvss_score=score)], Path(tmp_dir))
+
+                    self.assertEqual(fake_client.deleted_ids, [])
+                    self.assertEqual(fake_client.created_objects, [])
+                    self.assertEqual(list_backups(Path(tmp_dir)), [])
+
     def test_verify_backup_rejects_incomplete_backup(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "bad.json"

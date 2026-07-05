@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import ssl
 import time
 import urllib.error
@@ -485,7 +486,12 @@ def load_backup_record(path: Path, index: int) -> dict[str, Any]:
 def _optional_float(value: Any) -> Optional[float]:
     if value in (None, ""):
         return None
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        raise GhostwriterApiError("cvss_score must be finite.")
+    if number < 0.0 or number > 10.0:
+        raise GhostwriterApiError("cvss_score must be between 0.0 and 10.0.")
+    return number
 
 
 def _extra_fields(value: Any) -> dict[str, Any]:
@@ -494,7 +500,10 @@ def _extra_fields(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     if isinstance(value, str):
-        return json.loads(value)
+        parsed = json.loads(value)
+        if not isinstance(parsed, dict):
+            raise GhostwriterApiError("extra_fields must be a JSON object.")
+        return parsed
     raise GhostwriterApiError("extra_fields must be a JSON object.")
 
 

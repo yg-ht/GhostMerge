@@ -1,4 +1,5 @@
 # external module imports
+import math
 from types import NoneType
 
 from imports import dataclass, field, fields, Any, Dict, List, Optional, Union, re, json, get_origin, get_args, get_type_hints
@@ -131,6 +132,17 @@ class Finding:
             if severity not in allowed_severities:
                 log("ERROR", f"Invalid severity '{severity}'. Allowed: {allowed_severities}", prefix="MODEL")
                 raise ValueError(f"Invalid severity level '{severity}'.")
+
+            cvss_score = coerced_data.get("cvss_score")
+            if cvss_score is not None:
+                # Ghostwriter expects a finite CVSS score in the standard 0.0-10.0 range.
+                # Reject invalid values here so merge and API sync paths share the same guard.
+                if not math.isfinite(cvss_score):
+                    log("ERROR", f"Invalid non-finite CVSS score '{cvss_score}'.", prefix="MODEL")
+                    raise ValueError("CVSS score must be finite.")
+                if cvss_score < 0.0 or cvss_score > 10.0:
+                    log("ERROR", f"Invalid out-of-range CVSS score '{cvss_score}'.", prefix="MODEL")
+                    raise ValueError("CVSS score must be between 0.0 and 10.0.")
 
             finding = cls(**coerced_data)
             log("DEBUG", f"Created Finding object: {finding}", prefix="MODEL")
