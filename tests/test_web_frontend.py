@@ -257,6 +257,12 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"GhostMerge-logo.png", response.data)
         self.assertIn(b"root-logo-overlay", response.data)
+        self.assertIn(b"color-scheme: dark", response.data)
+        self.assertIn(b"data-theme-toggle", response.data)
+        self.assertIn(b"you-gotta-hack-that-icon.svg", response.data)
+        self.assertIn(b"A project by", response.data)
+        self.assertIn(b"You Gotta Hack That", response.data)
+        self.assertIn(b"https://yougottahackthat.com", response.data)
         self.assertIn(b"homejob123", response.data)
         self.assertIn(b"Matched pairs reviewed", response.data)
 
