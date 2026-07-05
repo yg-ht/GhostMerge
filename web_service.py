@@ -405,7 +405,7 @@ def save_job(job: MergeJob, jobs_dir: Path) -> Path:
     job_dir = _job_dir(jobs_dir, job.job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     job_path = job_dir / "job.json"
-    job_path.write_text(json.dumps(job_to_dict(job), indent=2), encoding="utf-8")
+    _write_json_atomic(job_path, job_to_dict(job))
     return job_path
 
 
@@ -416,7 +416,11 @@ def load_job(jobs_dir: Path, job_id: str) -> MergeJob:
     job_path = _job_dir(jobs_dir, job_id) / "job.json"
     if not job_path.exists():
         raise WebMergeError("Job not found.")
-    return job_from_dict(json.loads(job_path.read_text(encoding="utf-8")))
+    try:
+        data = json.loads(job_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WebMergeError("Job state could not be read. Please refresh and try again.") from exc
+    return job_from_dict(data)
 
 
 def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
@@ -639,6 +643,13 @@ def _job_dir(jobs_dir: Path, job_id: str) -> Path:
     if not job_id or not job_id.isalnum():
         raise WebMergeError("Invalid job ID.")
     return jobs_dir / job_id
+
+
+def _write_json_atomic(path: Path, data: Any) -> None:
+    """Write JSON via same-directory replace so readers never see partial state."""
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _wrap_for_web_diff(value: Any) -> str:

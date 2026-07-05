@@ -387,6 +387,19 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"already running", response.data)
 
+    def test_live_sync_status_handles_partial_job_state(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record()], [], job_id="partial123", input_sources={"left": "api", "right": "file"})
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+        (jobs_dir / "partial123" / "job.json").write_text("{partial", encoding="utf-8")
+
+        response = self.client.get("/jobs/partial123/sync/left/status")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"Job state could not be read", response.data)
+
     def test_live_sync_rejects_missing_csrf_token(self):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="csrf123", input_sources={"left": "api", "right": "file"})
@@ -431,6 +444,16 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"API import status", status.data)
         self.assertIn(b"Queued API import", status.data)
 
+    def test_api_import_status_handles_partial_import_state(self):
+        import_dir = Path(self.tmp_dir.name) / "api_imports"
+        import_dir.mkdir(parents=True)
+        (import_dir / "partialimport123.json").write_text("{partial", encoding="utf-8")
+
+        response = self.client.get("/imports/partialimport123/status")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"API import state could not be read", response.data)
+
     def test_api_import_worker_records_error_when_state_file_is_corrupt(self):
         import_dir = Path(self.tmp_dir.name) / "api_imports"
         import_dir.mkdir(parents=True)
@@ -441,7 +464,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         state = json.loads(import_path.read_text(encoding="utf-8"))
         self.assertEqual(state["status"], "error")
-        self.assertIn("Expecting property name", state["message"])
+        self.assertIn("API import state could not be read", state["message"])
 
     def test_backup_detail_allows_empty_backup(self):
         backup_root = Path(self.tmp_dir.name) / "backups"

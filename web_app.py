@@ -429,14 +429,19 @@ def _import_state_path(jobs_dir: Path, import_id: str) -> Path:
 def _save_import_state(jobs_dir: Path, import_id: str, state: dict) -> None:
     path = _import_state_path(jobs_dir, import_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _load_import_state(jobs_dir: Path, import_id: str) -> dict:
     path = _import_state_path(jobs_dir, import_id)
     if not path.exists():
         raise WebMergeError("API import not found.")
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WebMergeError("API import state could not be read. Please refresh and try again.") from exc
 
 
 def _server_for_side(side: str):
