@@ -276,6 +276,23 @@ class GhostwriterApiTests(unittest.TestCase):
             with self.assertRaises(GhostwriterApiError):
                 verify_backup(path)
 
+    def test_verify_backup_rejects_mismatched_raw_and_normalised_records(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "mismatched.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "record_count": 1,
+                        "raw_records": [{"record": {"id": 1}, "tags": []}],
+                        "normalised_records": [finding_record(), finding_record(id="2")],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(GhostwriterApiError, "raw and normalised record counts"):
+                verify_backup(path)
+
 
 if __name__ == "__main__":
     unittest.main()

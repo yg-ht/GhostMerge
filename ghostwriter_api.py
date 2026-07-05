@@ -445,6 +445,8 @@ def verify_backup(path: Path) -> dict[str, Any]:
         raise GhostwriterApiError("Backup does not contain normalised_records.")
     if data.get("record_count") != len(data["raw_records"]):
         raise GhostwriterApiError("Backup record count does not match its contents.")
+    if len(data["normalised_records"]) != len(data["raw_records"]):
+        raise GhostwriterApiError("Backup raw and normalised record counts do not match.")
     return data
 
 
