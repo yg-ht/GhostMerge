@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>API backups</h1>
+<section class="panel">
+  {% if backups %}
+  <table class="record-table">
+    <thead>
+      <tr>
+        <th>Server</th>
+        <th>Created</th>
+        <th>Records</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for backup in backups %}
+      <tr>
+        <td>{{ backup.server_name }}</td>
+        <td>{{ backup.created_at }}</td>
+        <td>{{ backup.record_count }}</td>
+        <td><a class="button secondary" href="{{ url_for('api_backup_detail', side=backup.side, filename=backup.filename) }}">Open</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No API backups found.</p>
+  {% endif %}
+</section>
+{% endblock %}

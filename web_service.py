@@ -4,7 +4,7 @@ import copy
 import difflib
 import json
 import uuid
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional
 
@@ -77,6 +77,8 @@ class MergeJob:
     final_left: Optional[list[Finding]] = None
     final_right: Optional[list[Finding]] = None
     preview_acknowledged: bool = False
+    input_sources: dict[str, str] = field(default_factory=lambda: {"left": "file", "right": "file"})
+    sync_results: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -127,6 +129,7 @@ def create_merge_job(
     left_records: list[dict[str, Any]],
     right_records: list[dict[str, Any]],
     job_id: Optional[str] = None,
+    input_sources: Optional[dict[str, str]] = None,
 ) -> MergeJob:
     """Create a merge job and run the existing fuzzy matching rounds."""
     findings_left = parse_findings(left_records)
@@ -156,6 +159,7 @@ def create_merge_job(
         unmatched_right=unmatched_right,
         merged_left=[],
         merged_right=[],
+        input_sources=input_sources or {"left": "file", "right": "file"},
     )
 
 
@@ -548,6 +552,8 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         final_left=None if data["final_left"] is None else [_finding_from_state(item) for item in data["final_left"]],
         final_right=None if data["final_right"] is None else [_finding_from_state(item) for item in data["final_right"]],
         preview_acknowledged=data.get("preview_acknowledged", False),
+        input_sources=data.get("input_sources", {"left": "file", "right": "file"}),
+        sync_results=data.get("sync_results", {}),
     )
 
 

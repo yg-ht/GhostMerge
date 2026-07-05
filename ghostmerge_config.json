@@ -37,6 +37,30 @@
   "num_lines_messages": 8,
   "num_lines_input": 4,
   "max_chars_field_render": 600,
+  "ghostwriter_api": {
+    "backup_dir": "ghostmerge_api_backups",
+    "default_rate_limit_per_second": 1.0,
+    "servers": {
+      "left": {
+        "enabled": false,
+        "name": "Left Ghostwriter",
+        "base_url": "",
+        "graphql_url": "",
+        "bearer_token": "",
+        "timeout_seconds": 30,
+        "verify_tls": true
+      },
+      "right": {
+        "enabled": false,
+        "name": "Right Ghostwriter",
+        "base_url": "",
+        "graphql_url": "",
+        "bearer_token": "",
+        "timeout_seconds": 30,
+        "verify_tls": true
+      }
+    }
+  },
   "padding_config_top": 0,
   "padding_config_right": 1,
   "padding_config_bottom": 0,

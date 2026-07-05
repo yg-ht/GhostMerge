@@ -73,6 +73,12 @@
       partial `merged_left`/`merged_right`; it should reject incomplete jobs or drive completion only
       when there are no unresolved conflict review items.
 
+## Ghostwriter API Sync
+- [ ] Define a standard `extra_fields` timestamp for the last update to each Finding Template.
+      Decide the exact key name, timestamp format, and whether GhostMerge or Ghostwriter should be
+      authoritative. Once agreed, populate that field during API sync and preserve it through file
+      import/export workflows.
+
 ##  Sensitive Content Checker
 - [x] Load sensitivity list from file
 - [x] Scan selected fields (e.g. impact, description)

@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from flask import Flask, redirect, render_template, request, send_file, url_for
 
+from ghostwriter_api import (
+    GhostwriterApi,
+    GhostwriterApiError,
+    backup_root_from_config,
+    configured_server_summary,
+    list_backups,
+    load_backup_record,
+    load_server_configs,
+)
 from globals import get_config
 from sensitivity import load_sensitive_terms
 from utils import load_config
@@ -49,23 +59,35 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/")
     def index():
-        return render_template("upload.html", previous_jobs=list_previous_jobs(jobs_dir), root_page=True)
+        return render_template(
+            "upload.html",
+            previous_jobs=list_previous_jobs(jobs_dir),
+            api_servers=configured_server_summary(CONFIG),
+            backups=list_backups(backup_root_from_config(CONFIG)),
+            root_page=True,
+        )
 
     @app.post("/jobs")
     def create_job_route():
         try:
-            left_file = request.files.get("left_file")
-            right_file = request.files.get("right_file")
-            if left_file is None or right_file is None:
-                raise WebMergeError("Both left and right JSON files are required.")
-
-            left_records = load_records_from_json_text(left_file.read().decode("utf-8"))
-            right_records = load_records_from_json_text(right_file.read().decode("utf-8"))
-            job = create_merge_job(left_records, right_records)
+            input_sources = {
+                "left": request.form.get("left_source", "file"),
+                "right": request.form.get("right_source", "file"),
+            }
+            left_records = _load_records_for_side("left", request.files.get("left_file"), input_sources["left"])
+            right_records = _load_records_for_side("right", request.files.get("right_file"), input_sources["right"])
+            job = create_merge_job(left_records, right_records, input_sources=input_sources)
             save_job(job, jobs_dir)
             return redirect(url_for("summary", job_id=job.job_id))
-        except (UnicodeDecodeError, WebMergeError) as exc:
-            return render_template("upload.html", error=str(exc), previous_jobs=list_previous_jobs(jobs_dir), root_page=True), 400
+        except (UnicodeDecodeError, WebMergeError, GhostwriterApiError) as exc:
+            return render_template(
+                "upload.html",
+                error=str(exc),
+                previous_jobs=list_previous_jobs(jobs_dir),
+                api_servers=configured_server_summary(CONFIG),
+                backups=list_backups(backup_root_from_config(CONFIG)),
+                root_page=True,
+            ), 400
 
     @app.get("/jobs/<job_id>/summary")
     def summary(job_id: str):
@@ -154,8 +176,77 @@ def create_app(test_config: dict | None = None) -> Flask:
             save_outputs(job, jobs_dir, result)
             job.sensitivity_phase_complete = True
             save_job(job, jobs_dir)
-            return render_template("complete.html", job=job, progress=get_review_progress(job))
+            return render_template(
+                "complete.html",
+                job=job,
+                progress=get_review_progress(job),
+                api_servers=configured_server_summary(CONFIG),
+            )
         except WebMergeError as exc:
+            return render_template("error.html", error=str(exc)), 400
+
+    @post_or_get(app, "/jobs/<job_id>/sync/<side>")
+    def sync_side(job_id: str, side: str):
+        if side not in {"left", "right"}:
+            return render_template("error.html", error="Unknown sync side."), 404
+        try:
+            job = load_job(jobs_dir, job_id)
+            _require_completed_review(job)
+            if request.method == "GET":
+                return render_template(
+                    "sync_confirm.html",
+                    job=job,
+                    side=side,
+                    server=_server_for_side(side),
+                    progress=get_review_progress(job),
+                )
+            _start_sync_thread(app, jobs_dir, job_id, side)
+            return redirect(url_for("sync_status", job_id=job_id, side=side))
+        except (WebMergeError, GhostwriterApiError) as exc:
+            return render_template("error.html", error=str(exc)), 400
+
+    @app.get("/jobs/<job_id>/sync/<side>/status")
+    def sync_status(job_id: str, side: str):
+        try:
+            job = load_job(jobs_dir, job_id)
+            return render_template(
+                "sync_status.html",
+                job=job,
+                side=side,
+                state=job.sync_results.get(side, {}),
+                progress=get_review_progress(job),
+            )
+        except WebMergeError as exc:
+            return render_template("error.html", error=str(exc)), 404
+
+    @app.get("/api-backups")
+    def api_backups():
+        return render_template("api_backups.html", backups=list_backups(backup_root_from_config(CONFIG)))
+
+    @app.get("/api-backups/<side>/<filename>")
+    def api_backup_detail(side: str, filename: str):
+        try:
+            backup_path = _safe_backup_path(side, filename)
+            data = load_backup_record(backup_path, 0)["backup"]
+            return render_template("api_backup_detail.html", backup=data, side=side, filename=filename)
+        except (GhostwriterApiError, ValueError) as exc:
+            return render_template("error.html", error=str(exc)), 400
+
+    @app.post("/api-backups/<side>/<filename>/<int:index>/restore")
+    def api_backup_restore(side: str, filename: str, index: int):
+        try:
+            backup_path = _safe_backup_path(side, filename)
+            record = load_backup_record(backup_path, index)
+            api = GhostwriterApi(_server_for_side(side))
+            created_id = api.restore_backup_record(record)
+            return render_template(
+                "api_restore_complete.html",
+                side=side,
+                filename=filename,
+                record=record["normalised_record"],
+                created_id=created_id,
+            )
+        except (GhostwriterApiError, ValueError) as exc:
             return render_template("error.html", error=str(exc)), 400
 
     @app.get("/jobs/<job_id>/download/<side>")
@@ -172,6 +263,91 @@ def create_app(test_config: dict | None = None) -> Flask:
         return send_file(path, as_attachment=True, download_name=f"ghostmerge-{side}.json")
 
     return app
+
+
+def post_or_get(app: Flask, rule: str):
+    return app.route(rule, methods=["GET", "POST"])
+
+
+def _load_records_for_side(side: str, uploaded_file, source: str) -> list[dict]:
+    if source == "api":
+        server = _server_for_side(side)
+        return GhostwriterApi(server).fetch_findings()
+    if uploaded_file is None or uploaded_file.filename == "":
+        raise WebMergeError(f"{side.title()} JSON file is required when that side is file-backed.")
+    return load_records_from_json_text(uploaded_file.read().decode("utf-8"))
+
+
+def _server_for_side(side: str):
+    server = load_server_configs(CONFIG).get(side)
+    if server is None:
+        raise GhostwriterApiError(f"{side.title()} Ghostwriter server is not configured for API sync.")
+    return server
+
+
+def _start_sync_thread(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
+    job = load_job(jobs_dir, job_id)
+    _require_completed_review(job)
+    job.sync_results[side] = {"status": "running", "stage": "queued", "message": "Queued", "complete": 0, "total": 0}
+    save_job(job, jobs_dir)
+    thread = threading.Thread(target=_sync_job_side, args=(app, jobs_dir, job_id, side), daemon=True)
+    thread.start()
+
+
+def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
+    with app.app_context():
+        def update(event):
+            current = load_job(jobs_dir, job_id)
+            current.sync_results[side] = {
+                "status": event.status,
+                "stage": event.stage,
+                "message": event.message,
+                "complete": event.complete,
+                "total": event.total,
+            }
+            save_job(current, jobs_dir)
+
+        try:
+            job = load_job(jobs_dir, job_id)
+            _require_completed_review(job)
+            result = finalise_job(job)
+            records = result.left_records if side == "left" else result.right_records
+            api = GhostwriterApi(_server_for_side(side), progress=update)
+            backup_path = api.replace_all_findings(records, backup_root_from_config(CONFIG))
+            job = load_job(jobs_dir, job_id)
+            job.sync_results[side] = {
+                "status": "done",
+                "stage": "complete",
+                "message": "Sync complete.",
+                "complete": len(records),
+                "total": len(records),
+                "backup_path": str(backup_path),
+            }
+            save_job(job, jobs_dir)
+        except Exception as exc:
+            job = load_job(jobs_dir, job_id)
+            job.sync_results[side] = {
+                "status": "error",
+                "stage": "error",
+                "message": str(exc),
+                "complete": 0,
+                "total": 0,
+            }
+            save_job(job, jobs_dir)
+
+
+def _safe_backup_path(side: str, filename: str) -> Path:
+    if side not in {"left", "right"} or "/" in filename or "\\" in filename or not filename.endswith(".json"):
+        raise ValueError("Invalid backup path.")
+    path = backup_root_from_config(CONFIG) / side / filename
+    if not path.exists():
+        raise ValueError("Backup not found.")
+    return path
+
+
+def _require_completed_review(job) -> None:
+    if not job.sensitivity_phase_complete:
+        raise WebMergeError("Live API sync is only available after the merge review is complete.")
 
 
 def _load_terms():

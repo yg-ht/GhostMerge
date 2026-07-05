@@ -5,16 +5,30 @@
 <form class="panel" action="{{ url_for('create_job_route') }}" method="post" enctype="multipart/form-data">
   <div class="grid">
     <div>
+      <label for="left_source">Left source</label>
+      <select id="left_source" name="left_source">
+        <option value="file">JSON file</option>
+        <option value="api" {% if not api_servers.left.configured %}disabled{% endif %}>{{ api_servers.left.name }} API{% if not api_servers.left.configured %} (not configured){% endif %}</option>
+      </select>
       <label for="left_file">Left JSON</label>
-      <input id="left_file" name="left_file" type="file" accept="application/json,.json" required>
+      <input id="left_file" name="left_file" type="file" accept="application/json,.json">
     </div>
     <div>
+      <label for="right_source">Right source</label>
+      <select id="right_source" name="right_source">
+        <option value="file">JSON file</option>
+        <option value="api" {% if not api_servers.right.configured %}disabled{% endif %}>{{ api_servers.right.name }} API{% if not api_servers.right.configured %} (not configured){% endif %}</option>
+      </select>
       <label for="right_file">Right JSON</label>
-      <input id="right_file" name="right_file" type="file" accept="application/json,.json" required>
+      <input id="right_file" name="right_file" type="file" accept="application/json,.json">
     </div>
   </div>
   <p><button type="submit">Create merge job</button></p>
 </form>
+<section class="panel">
+  <h2>API backups</h2>
+  <p><a class="button secondary" href="{{ url_for('api_backups') }}">Open backup browser</a></p>
+</section>
 <section class="panel">
   <h2>Previous merge jobs</h2>
   {% if previous_jobs %}

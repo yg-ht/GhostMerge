@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Backup detail</h1>
+<section class="panel">
+  <dl>
+    <dt>Server</dt><dd>{{ backup.server_name }}</dd>
+    <dt>Created</dt><dd>{{ backup.created_at }}</dd>
+    <dt>Records</dt><dd>{{ backup.record_count }}</dd>
+  </dl>
+</section>
+<section class="panel">
+  <h2>Backed-up findings</h2>
+  <table class="record-table">
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Severity</th>
+        <th>Type</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for record in backup.normalised_records %}
+      <tr>
+        <td>{{ record.title }}</td>
+        <td>{{ record.severity }}</td>
+        <td>{{ record.finding_type }}</td>
+        <td>
+          <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, index=loop.index0) }}">
+            <button type="submit">Restore this finding</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

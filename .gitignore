@@ -3,5 +3,6 @@
 __pycache__/
 ghostmerge.log
 ghostmerge_web_jobs/
+ghostmerge_api_backups/
 /test_data_right-out.json
 /test_data_left-out.json
