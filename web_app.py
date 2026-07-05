@@ -192,6 +192,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             job = load_job(jobs_dir, job_id)
             _require_completed_review(job)
+            _require_api_backed_side(job, side)
             if request.method == "GET":
                 return render_template(
                     "sync_confirm.html",
@@ -288,6 +289,7 @@ def _server_for_side(side: str):
 def _start_sync_thread(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
     job = load_job(jobs_dir, job_id)
     _require_completed_review(job)
+    _require_api_backed_side(job, side)
     job.sync_results[side] = {"status": "running", "stage": "queued", "message": "Queued", "complete": 0, "total": 0}
     save_job(job, jobs_dir)
     thread = threading.Thread(target=_sync_job_side, args=(app, jobs_dir, job_id, side), daemon=True)
@@ -310,6 +312,7 @@ def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
         try:
             job = load_job(jobs_dir, job_id)
             _require_completed_review(job)
+            _require_api_backed_side(job, side)
             result = finalise_job(job)
             records = result.left_records if side == "left" else result.right_records
             api = GhostwriterApi(_server_for_side(side), progress=update)
@@ -348,6 +351,11 @@ def _safe_backup_path(side: str, filename: str) -> Path:
 def _require_completed_review(job) -> None:
     if not job.sensitivity_phase_complete:
         raise WebMergeError("Live API sync is only available after the merge review is complete.")
+
+
+def _require_api_backed_side(job, side: str) -> None:
+    if job.input_sources.get(side) != "api":
+        raise WebMergeError(f"{side.title()} live API sync is only available for API-backed merge jobs.")
 
 
 def _load_terms():

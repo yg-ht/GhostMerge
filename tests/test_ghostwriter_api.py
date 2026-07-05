@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from ghostwriter_api import (
@@ -105,6 +106,17 @@ class FakeGraphQLClient:
         raise AssertionError(f"Unexpected query: {query}")
 
 
+class FakeUrlResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def read(self):
+        return b'{"data": {"ok": true}}'
+
+
 class GhostwriterApiTests(unittest.TestCase):
     def test_server_config_requires_enabled_url_and_token(self):
         config = {
@@ -148,6 +160,28 @@ class GhostwriterApiTests(unittest.TestCase):
         servers = load_server_configs(config)
 
         self.assertEqual(servers["left"].graphql_url, "https://api.example/v1/graphql")
+
+    def test_graphql_client_honours_disabled_tls_verification(self):
+        sentinel_context = object()
+        with patch("ghostwriter_api.ssl._create_unverified_context", return_value=sentinel_context), patch(
+            "ghostwriter_api.urllib.request.urlopen",
+            return_value=FakeUrlResponse(),
+        ) as urlopen:
+            from ghostwriter_api import GhostwriterGraphQLClient
+
+            client = GhostwriterGraphQLClient(server_config(verify_tls=False))
+            result = client.execute("query Test { ok }")
+
+        self.assertEqual(result, {"ok": True})
+        self.assertIs(urlopen.call_args.kwargs["context"], sentinel_context)
+
+    def test_graphql_client_uses_default_tls_verification_by_default(self):
+        with patch("ghostwriter_api.urllib.request.urlopen", return_value=FakeUrlResponse()) as urlopen:
+            from ghostwriter_api import GhostwriterGraphQLClient
+
+            GhostwriterGraphQLClient(server_config()).execute("query Test { ok }")
+
+        self.assertIsNone(urlopen.call_args.kwargs["context"])
 
     def test_backup_root_uses_configured_relative_path(self):
         root = backup_root_from_config({"script_dir": "/tmp/project", "ghostwriter_api": {"backup_dir": "backups"}})

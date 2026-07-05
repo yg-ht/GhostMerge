@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -96,7 +97,8 @@ class GhostwriterGraphQLClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.server.timeout_seconds) as response:
+            ssl_context = None if self.server.verify_tls else ssl._create_unverified_context()
+            with urllib.request.urlopen(request, timeout=self.server.timeout_seconds, context=ssl_context) as response:
                 response_body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")

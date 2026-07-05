@@ -314,3 +314,17 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Merge complete", response.data)
+
+    def test_live_sync_rejects_completed_file_backed_job(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record()], [], job_id="filebacked123")
+        self.assertIsNone(get_next_conflict(job))
+        result = finalise_job(job)
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+        save_outputs(job, jobs_dir, result)
+
+        response = self.client.get("/jobs/filebacked123/sync/left")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"only available for API-backed merge jobs", response.data)
