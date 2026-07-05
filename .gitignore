@@ -1,6 +1,7 @@
 /.venv/
 .idea/
 __pycache__/
+ghostmerge_config.json
 ghostmerge.log
 ghostmerge_web_jobs/
 ghostmerge_api_backups/

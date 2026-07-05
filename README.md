@@ -174,7 +174,7 @@ For best results, run GhostMerge in a normal terminal rather than inside a minim
 
 ## Configuration
 
-GhostMerge loads `ghostmerge_config.json` automatically from the project directory. You can override this with `--config`.
+GhostMerge loads `ghostmerge_config.json` automatically from the project directory. The repository includes `ghostmerge_config.example.json` as the committed template; copy it to `ghostmerge_config.json` for local use. The local config is gitignored so server URLs and bearer tokens are not committed. You can override the config path with `--config`.
 
 If a `.local` version exists, it is loaded after the base file and can override local settings without changing the committed defaults:
 
@@ -182,6 +182,8 @@ If a `.local` version exists, it is loaded after the base file and can override 
 ghostmerge_config.json.local
 sensitive_terms.txt.local
 ```
+
+For Ghostwriter API sync, set each server's `base_url` to the Ghostwriter site root, for example `https://ghostwriter.example`, and leave `graphql_endpoint` as `/v1/graphql` unless your deployment exposes GraphQL somewhere else. `graphql_endpoint` may also be a full URL if needed.
 
 Useful configuration areas include:
 
@@ -232,7 +234,8 @@ merge.py                  Conflict resolution and ID renumbering
 tui.py                    Rich-based terminal user interface
 sensitivity.py            Sensitive-term scanning and replacement flow
 utils.py                  Config, logging, JSON I/O, and normalisation helpers
-ghostmerge_config.json    Default configuration
+ghostmerge_config.example.json
+                           Example configuration template
 sensitive_terms.txt       Example sensitive-term rules
 test_data_left.json       Sample left input
 test_data_right.json      Sample right input

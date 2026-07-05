@@ -13,6 +13,13 @@ class Aborting(Exception):
 
 
 def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"):
+    config_path = Path(config_path)
+    local_override_path = Path(f"{config_path}.local")
+    if not config_path.exists() and config_path.name == "ghostmerge_config.json":
+        example_config_path = config_path.with_name("ghostmerge_config.example.json")
+        if example_config_path.exists():
+            config_path = example_config_path
+
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
@@ -28,7 +35,7 @@ def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"
 
     # do it all again, but with the postfix ".local" so that Git actions don't get grumpy when updating
     try:
-        local_config_path = Path(f"{config_path}.local")
+        local_config_path = local_override_path
         with open(local_config_path, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
             log('INFO', f'Loaded config from: {local_config_path}', prefix="UTILS")

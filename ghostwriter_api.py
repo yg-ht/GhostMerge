@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import urljoin
+from urllib.parse import urlparse
 
 
 FINDING_FIELDS = (
@@ -362,9 +363,10 @@ def load_server_configs(config: dict[str, Any]) -> dict[str, Optional[Ghostwrite
     for side in ("left", "right"):
         server = servers.get(side, {})
         graphql_url = str(server.get("graphql_url") or "")
+        graphql_endpoint = str(server.get("graphql_endpoint") or "")
         base_url = str(server.get("base_url") or "")
-        if not graphql_url and base_url:
-            graphql_url = urljoin(base_url.rstrip("/") + "/", "v1/graphql")
+        if not graphql_url:
+            graphql_url = _resolve_graphql_endpoint(base_url, graphql_endpoint)
         enabled = bool(server.get("enabled", False))
         token = str(server.get("bearer_token") or "")
         if not enabled or not graphql_url or not token:
@@ -380,6 +382,15 @@ def load_server_configs(config: dict[str, Any]) -> dict[str, Optional[Ghostwrite
             rate_limit_per_second=float(server.get("rate_limit_per_second", default_rate)),
         )
     return parsed
+
+
+def _resolve_graphql_endpoint(base_url: str, graphql_endpoint: str) -> str:
+    if graphql_endpoint and urlparse(graphql_endpoint).scheme:
+        return graphql_endpoint
+    if base_url:
+        endpoint = graphql_endpoint or "/v1/graphql"
+        return urljoin(base_url.rstrip("/") + "/", endpoint.lstrip("/"))
+    return ""
 
 
 def configured_server_summary(config: dict[str, Any]) -> dict[str, dict[str, Any]]:

@@ -39,7 +39,7 @@ from utils import (
 def configure_for_tests(**overrides):
     """Reset global config so each test starts from a predictable baseline."""
     config = get_config()
-    with (PROJECT_ROOT / "ghostmerge_config.json").open("r", encoding="utf-8") as handle:
+    with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
         baseline = json.load(handle)
 
     baseline.update(
@@ -97,6 +97,23 @@ class ConfigRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "ghostmerge_config.json"
             config_path.write_text(
+                json.dumps({"log_file_enabled": False, "interactive_mode": True}),
+                encoding="utf-8",
+            )
+            Path(f"{config_path}.local").write_text(
+                json.dumps({"interactive_mode": False}),
+                encoding="utf-8",
+            )
+
+            load_config(config_path)
+
+        self.assertFalse(get_config()["interactive_mode"])
+        self.assertTrue(get_config()["config_loaded"])
+
+    def test_load_config_falls_back_to_example_but_keeps_local_override_name(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "ghostmerge_config.json"
+            config_path.with_name("ghostmerge_config.example.json").write_text(
                 json.dumps({"log_file_enabled": False, "interactive_mode": True}),
                 encoding="utf-8",
             )
@@ -323,7 +340,7 @@ class CliRegressionTests(unittest.TestCase):
             left_path.write_text(json.dumps([left_record]), encoding="utf-8")
             right_path.write_text(json.dumps([right_record]), encoding="utf-8")
 
-            with (PROJECT_ROOT / "ghostmerge_config.json").open("r", encoding="utf-8") as handle:
+            with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
                 config = json.load(handle)
             config.update(
                 {

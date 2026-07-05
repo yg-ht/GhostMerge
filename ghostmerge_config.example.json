@@ -44,8 +44,8 @@
       "left": {
         "enabled": false,
         "name": "Left Ghostwriter",
-        "base_url": "",
-        "graphql_url": "",
+        "base_url": "https://left-ghostwriter.example",
+        "graphql_endpoint": "/v1/graphql",
         "bearer_token": "",
         "timeout_seconds": 30,
         "rate_limit_per_second": 1.0,
@@ -54,8 +54,8 @@
       "right": {
         "enabled": false,
         "name": "Right Ghostwriter",
-        "base_url": "",
-        "graphql_url": "",
+        "base_url": "https://right-ghostwriter.example",
+        "graphql_endpoint": "/v1/graphql",
         "bearer_token": "",
         "timeout_seconds": 30,
         "rate_limit_per_second": 1.0,

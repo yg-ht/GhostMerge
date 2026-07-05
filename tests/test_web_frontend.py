@@ -30,7 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def configure_for_web_tests(**overrides):
     config = get_config()
-    with (PROJECT_ROOT / "ghostmerge_config.json").open("r", encoding="utf-8") as handle:
+    with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
         baseline = json.load(handle)
     baseline.update(
         {
