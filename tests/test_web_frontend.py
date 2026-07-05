@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from globals import get_config
 from web_app import create_app
@@ -328,3 +329,93 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"only available for API-backed merge jobs", response.data)
+
+    def test_live_sync_rejects_duplicate_running_sync(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record()], [], job_id="running123", input_sources={"left": "api", "right": "file"})
+        self.assertIsNone(get_next_conflict(job))
+        result = finalise_job(job)
+        job.sensitivity_phase_complete = True
+        job.sync_results["left"] = {"status": "running"}
+        save_job(job, jobs_dir)
+        save_outputs(job, jobs_dir, result)
+
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+        response = self.client.post("/jobs/running123/sync/left")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"already running", response.data)
+
+    def test_backup_detail_allows_empty_backup(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "empty.json"
+        backup_path.write_text(
+            json.dumps(
+                {
+                    "server_side": "left",
+                    "server_name": "Left",
+                    "created_at": "20260705T000000Z",
+                    "record_count": 0,
+                    "raw_records": [],
+                    "normalised_records": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        get_config()["ghostwriter_api"]["backup_dir"] = str(backup_root)
+
+        response = self.client.get("/api-backups/left/empty.json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Records", response.data)
+        self.assertIn(b">0<", response.data)
+
+    def test_config_debug_logging_redacts_bearer_token(self):
+        from utils import load_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "ghostmerge_config.json"
+            log_path = Path(tmp_dir) / "ghostmerge.log"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "config_loaded": True,
+                        "log_file_enabled": True,
+                        "log_file_path": str(log_path),
+                        "log_verbosity": "DEBUG",
+                        "log_verbosity_utils": "DEBUG",
+                        "verbosity_decision_log_enabled": False,
+                        "ghostwriter_api": {
+                            "servers": {
+                                "left": {
+                                    "bearer_token": "super-secret-token",
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            current_config = get_config()
+            current_config["log_file_enabled"] = True
+            current_config["log_file_path"] = str(log_path)
+            current_config["log_verbosity"] = "DEBUG"
+            current_config["log_verbosity_utils"] = "DEBUG"
+            current_config["verbosity_decision_log_enabled"] = False
+            with patch("builtins.print"):
+                load_config(config_path)
+
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertIn("[REDACTED]", log_text)
+        self.assertNotIn("super-secret-token", log_text)

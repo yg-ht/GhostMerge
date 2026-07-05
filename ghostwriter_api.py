@@ -239,18 +239,35 @@ class GhostwriterApi:
         return raw_records
 
     def replace_all_findings(self, records: list[dict[str, Any]], backup_root: Path) -> Path:
+        lookups = self.fetch_lookup_ids()
+        prepared_records = self.prepare_records_for_reload(records, lookups)
         backup_path = self.create_backup(backup_root)
         existing_ids = self.fetch_finding_ids()
         for index, finding_id in enumerate(existing_ids, start=1):
             self.progress(SyncEvent("delete", f"Deleting existing findings from {self.server.name}", index, len(existing_ids)))
             self.delete_finding(finding_id)
-        lookups = self.fetch_lookup_ids()
-        for index, record in enumerate(records, start=1):
+        for index, prepared in enumerate(prepared_records, start=1):
             self.progress(SyncEvent("create", f"Creating reviewed findings on {self.server.name}", index, len(records)))
-            created_id = self.create_finding(record, lookups)
-            self.set_tags(created_id, _split_tags(record.get("tags")))
+            created_id = self.create_prepared_finding(prepared["api_record"])
+            self.set_tags(created_id, prepared["tags"])
         self.progress(SyncEvent("complete", f"Sync complete for {self.server.name}", len(records), len(records), "done"))
         return backup_path
+
+    def prepare_records_for_reload(
+        self,
+        records: list[dict[str, Any]],
+        lookups: dict[str, dict[str, int]],
+    ) -> list[dict[str, Any]]:
+        prepared_records = []
+        for index, record in enumerate(records, start=1):
+            try:
+                api_record = ghostmerge_record_to_api_input(record, lookups)
+                tags = _split_tags(record.get("tags"))
+            except Exception as exc:
+                title = record.get("title") or f"record {index}"
+                raise GhostwriterApiError(f"Cannot prepare Finding Template {index} ({title}) for reload: {exc}") from exc
+            prepared_records.append({"api_record": api_record, "tags": tags})
+        return prepared_records
 
     def fetch_finding_ids(self) -> list[int]:
         query = """
@@ -283,12 +300,14 @@ class GhostwriterApi:
         }
 
     def create_finding(self, record: dict[str, Any], lookups: dict[str, dict[str, int]]) -> int:
+        return self.create_prepared_finding(ghostmerge_record_to_api_input(record, lookups))
+
+    def create_prepared_finding(self, api_record: dict[str, Any]) -> int:
         mutation = """
         mutation CreateFinding($object: finding_insert_input!) {
           insert_finding_one(object: $object) { id }
         }
         """
-        api_record = ghostmerge_record_to_api_input(record, lookups)
         data = self.client.execute(mutation, {"object": api_record})
         created = data.get("insert_finding_one")
         if not created:

@@ -13,6 +13,7 @@ from ghostwriter_api import (
     list_backups,
     load_backup_record,
     load_server_configs,
+    verify_backup,
 )
 from globals import get_config
 from sensitivity import load_sensitive_terms
@@ -228,7 +229,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     def api_backup_detail(side: str, filename: str):
         try:
             backup_path = _safe_backup_path(side, filename)
-            data = load_backup_record(backup_path, 0)["backup"]
+            data = verify_backup(backup_path)
             return render_template("api_backup_detail.html", backup=data, side=side, filename=filename)
         except (GhostwriterApiError, ValueError) as exc:
             return render_template("error.html", error=str(exc)), 400
@@ -290,6 +291,7 @@ def _start_sync_thread(app: Flask, jobs_dir: Path, job_id: str, side: str) -> No
     job = load_job(jobs_dir, job_id)
     _require_completed_review(job)
     _require_api_backed_side(job, side)
+    _require_sync_not_active(job, side)
     job.sync_results[side] = {"status": "running", "stage": "queued", "message": "Queued", "complete": 0, "total": 0}
     save_job(job, jobs_dir)
     thread = threading.Thread(target=_sync_job_side, args=(app, jobs_dir, job_id, side), daemon=True)
@@ -356,6 +358,14 @@ def _require_completed_review(job) -> None:
 def _require_api_backed_side(job, side: str) -> None:
     if job.input_sources.get(side) != "api":
         raise WebMergeError(f"{side.title()} live API sync is only available for API-backed merge jobs.")
+
+
+def _require_sync_not_active(job, side: str) -> None:
+    status = (job.sync_results.get(side) or {}).get("status")
+    if status == "running":
+        raise WebMergeError(f"{side.title()} live API sync is already running.")
+    if status == "done":
+        raise WebMergeError(f"{side.title()} live API sync has already completed.")
 
 
 def _load_terms():

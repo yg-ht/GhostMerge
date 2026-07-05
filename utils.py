@@ -24,7 +24,7 @@ def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"
         with open(config_path, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
             log('INFO', f'Loaded config from: {config_path}', prefix="UTILS")
-            log('DEBUG', f'Config is now: {json.dumps(user_config, indent=2)}', prefix="UTILS")
+            log('DEBUG', f'Config is now: {json.dumps(redact_config_secrets(user_config), indent=2)}', prefix="UTILS")
             CONFIG.update(user_config)
             CONFIG["config_loaded"] = True
             CONFIG["script_dir"] = SCRIPT_DIR
@@ -39,13 +39,30 @@ def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"
         with open(local_config_path, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
             log('INFO', f'Loaded config from: {local_config_path}', prefix="UTILS")
-            log('DEBUG', f'Config is now: {json.dumps(user_config, indent=2)}', prefix="UTILS")
+            log('DEBUG', f'Config is now: {json.dumps(redact_config_secrets(user_config), indent=2)}', prefix="UTILS")
             CONFIG.update(user_config)
             CONFIG["config_loaded"] = True
     except FileNotFoundError:
         log('DEBUG', f'No ".local" config file found at: {local_config_path}', prefix="UTILS")
     except Exception as e:
         log('ERROR', f"Failed to load config from {config_path}: {e}", prefix="UTILS")
+
+
+def redact_config_secrets(value: Any) -> Any:
+    """Return a copy of config data with credential-like values redacted for logging."""
+    secret_fragments = ("token", "secret", "password", "credential", "api_key", "bearer")
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            key_text = str(key).lower()
+            if any(fragment in key_text for fragment in secret_fragments):
+                redacted[key] = "[REDACTED]" if item else item
+            else:
+                redacted[key] = redact_config_secrets(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_config_secrets(item) for item in value]
+    return value
 
 
 def is_path_writable(path: str | Path) -> bool:

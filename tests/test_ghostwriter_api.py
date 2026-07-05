@@ -217,6 +217,18 @@ class GhostwriterApiTests(unittest.TestCase):
             self.assertEqual(fake_client.tag_sets, [(101, ["web", "xss"])])
             self.assertEqual(list_backups(Path(tmp_dir))[0]["record_count"], 1)
 
+    def test_replace_all_validates_records_before_backup_or_delete(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_client = FakeGraphQLClient()
+            api = GhostwriterApi(server_config(), client=fake_client)
+
+            with self.assertRaises(GhostwriterApiError):
+                api.replace_all_findings([finding_record(severity="Unknown")], Path(tmp_dir))
+
+            self.assertEqual(fake_client.deleted_ids, [])
+            self.assertEqual(fake_client.created_objects, [])
+            self.assertEqual(list_backups(Path(tmp_dir)), [])
+
     def test_verify_backup_rejects_incomplete_backup(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "bad.json"
