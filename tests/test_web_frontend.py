@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from globals import get_config
-from web_app import create_app
+from web_app import create_app, _import_job_sources
 from web_service import (
     WebMergeError,
     accept_offered_fields_for_current_match,
@@ -213,13 +213,23 @@ class FlaskRouteTests(unittest.TestCase):
     def tearDown(self):
         self.tmp_dir.cleanup()
 
+    def csrf_token(self):
+        with self.client.session_transaction() as session:
+            session.setdefault("_csrf_token", "test-csrf-token")
+            return session["_csrf_token"]
+
+    def with_csrf(self, data=None):
+        submitted = dict(data or {})
+        submitted["_csrf_token"] = self.csrf_token()
+        return submitted
+
     def test_upload_rejects_invalid_json(self):
         response = self.client.post(
             "/jobs",
-            data={
+            data=self.with_csrf({
                 "left_file": (io.BytesIO(b"not json"), "left.json"),
                 "right_file": (io.BytesIO(b"[]"), "right.json"),
-            },
+            }),
             content_type="multipart/form-data",
         )
 
@@ -246,10 +256,10 @@ class FlaskRouteTests(unittest.TestCase):
 
         upload = self.client.post(
             "/jobs",
-            data={
+            data=self.with_csrf({
                 "left_file": (io.BytesIO(left), "left.json"),
                 "right_file": (io.BytesIO(right), "right.json"),
-            },
+            }),
             content_type="multipart/form-data",
             follow_redirects=False,
         )
@@ -269,7 +279,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         conflict = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data={"preview_action": "continue"},
+            data=self.with_csrf({"preview_action": "continue"}),
             follow_redirects=True,
         )
         self.assertEqual(conflict.status_code, 200)
@@ -279,7 +289,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         completed = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data={"field_name": "description", "action": "right"},
+            data=self.with_csrf({"field_name": "description", "action": "right"}),
             follow_redirects=True,
         )
         self.assertEqual(completed.status_code, 200)
@@ -299,17 +309,17 @@ class FlaskRouteTests(unittest.TestCase):
 
         upload = self.client.post(
             "/jobs",
-            data={
+            data=self.with_csrf({
                 "left_file": (io.BytesIO(left), "left.json"),
                 "right_file": (io.BytesIO(right), "right.json"),
-            },
+            }),
             content_type="multipart/form-data",
             follow_redirects=False,
         )
         job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
         response = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data={"preview_action": "accept_offered"},
+            data=self.with_csrf({"preview_action": "accept_offered"}),
             follow_redirects=True,
         )
 
@@ -348,7 +358,7 @@ class FlaskRouteTests(unittest.TestCase):
                 "bearer_token": "left-token",
             }
         )
-        response = self.client.post("/jobs/running123/sync/left")
+        response = self.client.post("/jobs/running123/sync/left", data=self.with_csrf())
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"already running", response.data)
@@ -372,10 +382,24 @@ class FlaskRouteTests(unittest.TestCase):
             }
         )
 
-        response = self.client.post("/jobs/locked123/sync/left")
+        response = self.client.post("/jobs/locked123/sync/left", data=self.with_csrf())
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"already running", response.data)
+
+    def test_live_sync_rejects_missing_csrf_token(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record()], [], job_id="csrf123", input_sources={"left": "api", "right": "file"})
+        self.assertIsNone(get_next_conflict(job))
+        result = finalise_job(job)
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+        save_outputs(job, jobs_dir, result)
+
+        response = self.client.post("/jobs/csrf123/sync/left")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Invalid or missing form token", response.data)
 
     def test_api_backed_upload_redirects_to_visible_import_status(self):
         config = get_config()
@@ -391,11 +415,11 @@ class FlaskRouteTests(unittest.TestCase):
             thread_class.return_value.start.return_value = None
             response = self.client.post(
                 "/jobs",
-                data={
+                data=self.with_csrf({
                     "left_source": "api",
                     "right_source": "file",
                     "right_file": (io.BytesIO(json.dumps([record()]).encode("utf-8")), "right.json"),
-                },
+                }),
                 content_type="multipart/form-data",
                 follow_redirects=False,
             )
@@ -406,6 +430,18 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(status.status_code, 200)
         self.assertIn(b"API import status", status.data)
         self.assertIn(b"Queued API import", status.data)
+
+    def test_api_import_worker_records_error_when_state_file_is_corrupt(self):
+        import_dir = Path(self.tmp_dir.name) / "api_imports"
+        import_dir.mkdir(parents=True)
+        import_path = import_dir / "badstate123.json"
+        import_path.write_text("{not json", encoding="utf-8")
+
+        _import_job_sources(self.app, Path(self.tmp_dir.name), "badstate123")
+
+        state = json.loads(import_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["status"], "error")
+        self.assertIn("Expecting property name", state["message"])
 
     def test_backup_detail_allows_empty_backup(self):
         backup_root = Path(self.tmp_dir.name) / "backups"
@@ -463,7 +499,7 @@ class FlaskRouteTests(unittest.TestCase):
             }
         )
 
-        response = self.client.post("/api-backups/left/mismatch.json/0/restore")
+        response = self.client.post("/api-backups/left/mismatch.json/0/restore", data=self.with_csrf())
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"Backup target does not match", response.data)
@@ -497,10 +533,36 @@ class FlaskRouteTests(unittest.TestCase):
             }
         )
 
-        response = self.client.post("/api-backups/left/missing-target.json/0/restore")
+        response = self.client.post("/api-backups/left/missing-target.json/0/restore", data=self.with_csrf())
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"Backup target is not recorded", response.data)
+
+    def test_backup_restore_rejects_missing_csrf_token(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "csrf-restore.json"
+        backup_path.write_text(
+            json.dumps(
+                {
+                    "server_side": "left",
+                    "server_name": "Left",
+                    "graphql_url": "https://left.example/v1/graphql",
+                    "created_at": "20260705T000000Z",
+                    "record_count": 1,
+                    "raw_records": [{"record": {"id": 1}, "tags": []}],
+                    "normalised_records": [record()],
+                }
+            ),
+            encoding="utf-8",
+        )
+        get_config()["ghostwriter_api"]["backup_dir"] = str(backup_root)
+
+        response = self.client.post("/api-backups/left/csrf-restore.json/0/restore")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Invalid or missing form token", response.data)
 
     def test_config_debug_logging_redacts_bearer_token(self):
         from utils import load_config

@@ -3,6 +3,7 @@
 <h1>Merge finding libraries</h1>
 {% if error %}<div class="panel error">{{ error }}</div>{% endif %}
 <form class="panel" action="{{ url_for('create_job_route') }}" method="post" enctype="multipart/form-data">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <div class="grid">
     <div>
       <label for="left_source">Left source</label>

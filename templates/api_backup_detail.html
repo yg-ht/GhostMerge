@@ -27,6 +27,7 @@
         <td>{{ record.finding_type }}</td>
         <td>
           <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, index=loop.index0) }}">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <button type="submit">Restore this finding</button>
           </form>
         </td>

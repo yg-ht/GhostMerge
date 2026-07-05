@@ -10,6 +10,7 @@
     <dt>Source records</dt><dd>{% if side == "left" %}{{ job.final_left|length if job.final_left else job.merged_left|length }}{% else %}{{ job.final_right|length if job.final_right else job.merged_right|length }}{% endif %}</dd>
   </dl>
   <form method="post" class="actions">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <button type="submit">Back up and replace server findings</button>
     <a class="button secondary" href="{{ url_for('complete', job_id=job.job_id) }}">Cancel</a>
   </form>

@@ -2,6 +2,7 @@
 {% block content %}
 <h1>Record preview</h1>
 <form class="panel" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <dl>
     <dt>Match</dt><dd>{{ preview.match_index + 1 }}</dd>
     <dt>Score</dt><dd>{{ "%.2f"|format(preview.score) }}%</dd>

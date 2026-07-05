@@ -12,6 +12,7 @@
   <pre>{% for part in item.highlighted_parts %}{% if part.hit %}<mark>{{ part.text }}</mark>{% else %}{{ part.text }}{% endif %}{% endfor %}</pre>
 </section>
 <form class="panel" action="{{ url_for('apply_sensitivity', job_id=job.job_id) }}" method="post">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="side" value="{{ item.side }}">
   <input type="hidden" name="record_index" value="{{ item.record_index }}">
   <input type="hidden" name="field_name" value="{{ item.field_name }}">

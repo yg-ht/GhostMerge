@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 import uuid
 from pathlib import Path
 
-from flask import Flask, redirect, render_template, request, send_file, url_for
+from flask import Flask, redirect, render_template, request, send_file, session, url_for
 
 from ghostwriter_api import (
     GhostwriterApi,
@@ -47,7 +48,7 @@ CONFIG = get_config()
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__)
     app.config.update(
-        SECRET_KEY="dev-change-me",
+        SECRET_KEY=secrets.token_hex(32),
         MAX_CONTENT_LENGTH=8 * 1024 * 1024,
         GHOSTMERGE_JOBS_DIR=Path("ghostmerge_web_jobs"),
     )
@@ -59,6 +60,28 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     jobs_dir = Path(app.config["GHOSTMERGE_JOBS_DIR"])
     jobs_dir.mkdir(parents=True, exist_ok=True)
+
+    @app.before_request
+    def require_csrf_token():
+        if request.method != "POST":
+            return None
+        expected_token = session.get("_csrf_token")
+        submitted_token = request.form.get("_csrf_token")
+        if not expected_token or not submitted_token or not secrets.compare_digest(expected_token, submitted_token):
+            return render_template("error.html", error="Invalid or missing form token."), 400
+        return None
+
+    @app.context_processor
+    def inject_csrf_token():
+        def csrf_token() -> str:
+            # A session-scoped token protects local mutating routes without adding a new dependency.
+            token = session.get("_csrf_token")
+            if not token:
+                token = secrets.token_urlsafe(32)
+                session["_csrf_token"] = token
+            return token
+
+        return {"csrf_token": csrf_token}
 
     @app.get("/")
     def index():
@@ -334,6 +357,15 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
 
 def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
     with app.app_context():
+        state = {
+            "import_id": import_id,
+            "status": "error",
+            "stage": "error",
+            "message": "API import failed before state could be loaded.",
+            "complete": 0,
+            "total": 0,
+            "job_id": None,
+        }
         try:
             state = _load_import_state(jobs_dir, import_id)
             input_sources = state["input_sources"]
@@ -384,7 +416,6 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
             state.pop("file_records", None)
             _save_import_state(jobs_dir, import_id, state)
         except Exception as exc:
-            state = _load_import_state(jobs_dir, import_id)
             state.update({"status": "error", "stage": "error", "message": str(exc)})
             _save_import_state(jobs_dir, import_id, state)
 
