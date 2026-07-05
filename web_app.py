@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import threading
+import uuid
 from pathlib import Path
 
 from flask import Flask, redirect, render_template, request, send_file, url_for
@@ -75,6 +77,10 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "left": request.form.get("left_source", "file"),
                 "right": request.form.get("right_source", "file"),
             }
+            _validate_input_sources(input_sources)
+            if "api" in input_sources.values():
+                import_id = _start_import_thread(app, jobs_dir, input_sources, request.files)
+                return redirect(url_for("import_status", import_id=import_id))
             left_records = _load_records_for_side("left", request.files.get("left_file"), input_sources["left"])
             right_records = _load_records_for_side("right", request.files.get("right_file"), input_sources["right"])
             job = create_merge_job(left_records, right_records, input_sources=input_sources)
@@ -89,6 +95,14 @@ def create_app(test_config: dict | None = None) -> Flask:
                 backups=list_backups(backup_root_from_config(CONFIG)),
                 root_page=True,
             ), 400
+
+    @app.get("/imports/<import_id>/status")
+    def import_status(import_id: str):
+        try:
+            state = _load_import_state(jobs_dir, import_id)
+            return render_template("import_status.html", state=state)
+        except WebMergeError as exc:
+            return render_template("error.html", error=str(exc)), 404
 
     @app.get("/jobs/<job_id>/summary")
     def summary(job_id: str):
@@ -273,6 +287,12 @@ def post_or_get(app: Flask, rule: str):
     return app.route(rule, methods=["GET", "POST"])
 
 
+def _validate_input_sources(input_sources: dict[str, str]) -> None:
+    for side in ("left", "right"):
+        if input_sources.get(side) not in {"file", "api"}:
+            raise WebMergeError(f"{side.title()} source must be file or API.")
+
+
 def _load_records_for_side(side: str, uploaded_file, source: str) -> list[dict]:
     if source == "api":
         server = _server_for_side(side)
@@ -280,6 +300,112 @@ def _load_records_for_side(side: str, uploaded_file, source: str) -> list[dict]:
     if uploaded_file is None or uploaded_file.filename == "":
         raise WebMergeError(f"{side.title()} JSON file is required when that side is file-backed.")
     return load_records_from_json_text(uploaded_file.read().decode("utf-8"))
+
+
+def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, str], files) -> str:
+    import_id = uuid.uuid4().hex
+    file_records: dict[str, list[dict]] = {}
+    for side in ("left", "right"):
+        if input_sources[side] == "file":
+            # Uploaded files only live for the request, so parse and persist them before the worker starts.
+            file_records[side] = _load_records_for_side(side, files.get(f"{side}_file"), "file")
+        else:
+            _server_for_side(side)
+    api_sides = [side for side in ("left", "right") if input_sources[side] == "api"]
+    _save_import_state(
+        jobs_dir,
+        import_id,
+        {
+            "import_id": import_id,
+            "status": "running",
+            "stage": "queued",
+            "message": "Queued API import.",
+            "complete": 0,
+            "total": len(api_sides),
+            "input_sources": input_sources,
+            "file_records": file_records,
+            "job_id": None,
+        },
+    )
+    thread = threading.Thread(target=_import_job_sources, args=(app, jobs_dir, import_id), daemon=True)
+    thread.start()
+    return import_id
+
+
+def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
+    with app.app_context():
+        try:
+            state = _load_import_state(jobs_dir, import_id)
+            input_sources = state["input_sources"]
+            records = dict(state.get("file_records") or {})
+            api_sides = [side for side in ("left", "right") if input_sources[side] == "api"]
+            for index, side in enumerate(api_sides, start=1):
+                server = _server_for_side(side)
+
+                def update(event, current_side=side, current_index=index):
+                    current = _load_import_state(jobs_dir, import_id)
+                    current.update(
+                        {
+                            "status": event.status if event.status != "done" else "running",
+                            "stage": f"fetch_{current_side}",
+                            "message": event.message,
+                            "complete": current_index - 1,
+                            "total": len(api_sides),
+                        }
+                    )
+                    _save_import_state(jobs_dir, import_id, current)
+
+                records[side] = GhostwriterApi(server, progress=update).fetch_findings()
+                state = _load_import_state(jobs_dir, import_id)
+                state.update(
+                    {
+                        "status": "running",
+                        "stage": f"fetched_{side}",
+                        "message": f"Fetched {side} API source.",
+                        "complete": index,
+                        "total": len(api_sides),
+                    }
+                )
+                _save_import_state(jobs_dir, import_id, state)
+            job = create_merge_job(records["left"], records["right"], input_sources=input_sources)
+            save_job(job, jobs_dir)
+            state = _load_import_state(jobs_dir, import_id)
+            state.update(
+                {
+                    "status": "done",
+                    "stage": "complete",
+                    "message": "API import complete.",
+                    "complete": len(api_sides),
+                    "total": len(api_sides),
+                    "job_id": job.job_id,
+                }
+            )
+            # Drop copied records once the durable merge job exists so the import file does not duplicate data.
+            state.pop("file_records", None)
+            _save_import_state(jobs_dir, import_id, state)
+        except Exception as exc:
+            state = _load_import_state(jobs_dir, import_id)
+            state.update({"status": "error", "stage": "error", "message": str(exc)})
+            _save_import_state(jobs_dir, import_id, state)
+
+
+def _import_state_path(jobs_dir: Path, import_id: str) -> Path:
+    if not import_id or not import_id.isalnum():
+        raise WebMergeError("Invalid import ID.")
+    return jobs_dir / "api_imports" / f"{import_id}.json"
+
+
+def _save_import_state(jobs_dir: Path, import_id: str, state: dict) -> None:
+    path = _import_state_path(jobs_dir, import_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def _load_import_state(jobs_dir: Path, import_id: str) -> dict:
+    path = _import_state_path(jobs_dir, import_id)
+    if not path.exists():
+        raise WebMergeError("API import not found.")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _server_for_side(side: str):
@@ -290,14 +416,20 @@ def _server_for_side(side: str):
 
 
 def _start_sync_thread(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
+    lock_path = _sync_lock_path(jobs_dir, job_id, side)
+    _acquire_sync_lock(lock_path, side)
     job = load_job(jobs_dir, job_id)
-    _require_completed_review(job)
-    _require_api_backed_side(job, side)
-    _require_sync_not_active(job, side)
-    job.sync_results[side] = {"status": "running", "stage": "queued", "message": "Queued", "complete": 0, "total": 0}
-    save_job(job, jobs_dir)
-    thread = threading.Thread(target=_sync_job_side, args=(app, jobs_dir, job_id, side), daemon=True)
-    thread.start()
+    try:
+        _require_completed_review(job)
+        _require_api_backed_side(job, side)
+        _require_sync_not_active(job, side)
+        job.sync_results[side] = {"status": "running", "stage": "queued", "message": "Queued", "complete": 0, "total": 0}
+        save_job(job, jobs_dir)
+        thread = threading.Thread(target=_sync_job_side, args=(app, jobs_dir, job_id, side), daemon=True)
+        thread.start()
+    except Exception:
+        _release_sync_lock(lock_path)
+        raise
 
 
 def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
@@ -341,6 +473,8 @@ def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
                 "total": 0,
             }
             save_job(job, jobs_dir)
+        finally:
+            _release_sync_lock(_sync_lock_path(jobs_dir, job_id, side))
 
 
 def _safe_backup_path(side: str, filename: str) -> Path:
@@ -370,9 +504,35 @@ def _require_sync_not_active(job, side: str) -> None:
         raise WebMergeError(f"{side.title()} live API sync has already completed.")
 
 
+def _sync_lock_path(jobs_dir: Path, job_id: str, side: str) -> Path:
+    if side not in {"left", "right"}:
+        raise WebMergeError("Unknown sync side.")
+    return jobs_dir / job_id / f"sync-{side}.lock"
+
+
+def _acquire_sync_lock(lock_path: Path, side: str) -> None:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with lock_path.open("x", encoding="utf-8") as handle:
+            handle.write("running\n")
+    except FileExistsError as exc:
+        raise WebMergeError(f"{side.title()} live API sync is already running.") from exc
+
+
+def _release_sync_lock(lock_path: Path) -> None:
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _require_backup_target_match(backup: dict, server) -> None:
     backup_url = backup.get("graphql_url")
-    if backup_url and backup_url != server.graphql_url:
+    if not backup_url:
+        raise WebMergeError(
+            "Backup target is not recorded. Refusing restore to avoid writing data to the wrong deployment."
+        )
+    if backup_url != server.graphql_url:
         raise WebMergeError(
             "Backup target does not match the currently configured Ghostwriter server. "
             "Refusing restore to avoid writing data to the wrong deployment."

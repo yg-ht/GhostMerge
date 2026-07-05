@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>API import status</h1>
+<section class="panel">
+  <dl>
+    <dt>Status</dt><dd>{{ state.status|default("queued") }}</dd>
+    <dt>Stage</dt><dd>{{ state.stage|default("queued") }}</dd>
+    <dt>Progress</dt><dd>{{ state.complete|default(0) }} / {{ state.total|default(0) }}</dd>
+    <dt>Message</dt><dd>{{ state.message|default("Queued") }}</dd>
+  </dl>
+  {% if state.status == "running" %}
+  <meta http-equiv="refresh" content="2">
+  {% endif %}
+  <div class="actions">
+    {% if state.status == "done" and state.job_id %}
+    <a class="button" href="{{ url_for('summary', job_id=state.job_id) }}">Open merge job</a>
+    {% endif %}
+    <a class="button secondary" href="{{ url_for('index') }}">Back to start</a>
+  </div>
+</section>
+{% endblock %}

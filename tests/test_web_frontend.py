@@ -353,6 +353,60 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"already running", response.data)
 
+    def test_live_sync_rejects_existing_side_lock(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record()], [], job_id="locked123", input_sources={"left": "api", "right": "file"})
+        self.assertIsNone(get_next_conflict(job))
+        result = finalise_job(job)
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+        save_outputs(job, jobs_dir, result)
+        (jobs_dir / "locked123" / "sync-left.lock").write_text("running\n", encoding="utf-8")
+
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        response = self.client.post("/jobs/locked123/sync/left")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"already running", response.data)
+
+    def test_api_backed_upload_redirects_to_visible_import_status(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        with patch("web_app.threading.Thread") as thread_class:
+            thread_class.return_value.start.return_value = None
+            response = self.client.post(
+                "/jobs",
+                data={
+                    "left_source": "api",
+                    "right_source": "file",
+                    "right_file": (io.BytesIO(json.dumps([record()]).encode("utf-8")), "right.json"),
+                },
+                content_type="multipart/form-data",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/imports/", response.headers["Location"])
+        status = self.client.get(response.headers["Location"])
+        self.assertEqual(status.status_code, 200)
+        self.assertIn(b"API import status", status.data)
+        self.assertIn(b"Queued API import", status.data)
+
     def test_backup_detail_allows_empty_backup(self):
         backup_root = Path(self.tmp_dir.name) / "backups"
         backup_dir = backup_root / "left"
@@ -413,6 +467,40 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"Backup target does not match", response.data)
+
+    def test_backup_restore_rejects_missing_backup_target(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "missing-target.json"
+        backup_path.write_text(
+            json.dumps(
+                {
+                    "server_side": "left",
+                    "server_name": "Unknown Left",
+                    "created_at": "20260705T000000Z",
+                    "record_count": 1,
+                    "raw_records": [{"record": {"id": 1}, "tags": []}],
+                    "normalised_records": [record()],
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = get_config()
+        config["ghostwriter_api"]["backup_dir"] = str(backup_root)
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "base_url": "https://left.example",
+                "graphql_endpoint": "/v1/graphql",
+                "bearer_token": "left-token",
+            }
+        )
+
+        response = self.client.post("/api-backups/left/missing-target.json/0/restore")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Backup target is not recorded", response.data)
 
     def test_config_debug_logging_redacts_bearer_token(self):
         from utils import load_config
