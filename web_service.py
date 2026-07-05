@@ -387,7 +387,7 @@ def apply_sensitivity_decision(job: MergeJob, decision: dict[str, Any]) -> None:
 def finalise_job(job: MergeJob) -> MergeResult:
     """Renumber and serialise final left/right output records."""
     if not job.conflict_phase_complete:
-        get_next_conflict(job)
+        raise WebMergeError("Conflict review must be complete before finalising output.")
 
     left = [copy.deepcopy(item) for item in job.merged_left]
     right = [copy.deepcopy(item) for item in job.merged_right]

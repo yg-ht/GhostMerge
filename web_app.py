@@ -210,9 +210,9 @@ def create_app(test_config: dict | None = None) -> Flask:
     def complete(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
+            _require_completed_review(job, action="Completion")
             result = finalise_job(job)
             save_outputs(job, jobs_dir, result)
-            job.sensitivity_phase_complete = True
             save_job(job, jobs_dir)
             return render_template(
                 "complete.html",
@@ -522,9 +522,11 @@ def _safe_backup_path(side: str, filename: str) -> Path:
     return path
 
 
-def _require_completed_review(job) -> None:
+def _require_completed_review(job, action: str = "Live API sync") -> None:
+    if not job.conflict_phase_complete:
+        raise WebMergeError(f"{action} is only available after conflict review is complete.")
     if not job.sensitivity_phase_complete:
-        raise WebMergeError("Live API sync is only available after the merge review is complete.")
+        raise WebMergeError(f"{action} is only available after sensitivity review is complete.")
 
 
 def _require_api_backed_side(job, side: str) -> None:

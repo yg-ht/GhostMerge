@@ -67,7 +67,7 @@
       `get_next_sensitivity_item()` currently returns only the first hit in a field after advancing
       `sensitivity_field_index`; after the user handles that hit, review resumes at the next field,
       so remaining hits in the same value can be skipped and left in downloaded output.
-- [ ] Block web finalisation until conflict review is fully complete.
+- [x] Block web finalisation until conflict review is fully complete.
       Direct access to `/jobs/<id>/complete`, or download redirects to completion, can call
       `finalise_job()` before all conflicts are resolved. `finalise_job()` should not serialise
       partial `merged_left`/`merged_right`; it should reject incomplete jobs or drive completion only

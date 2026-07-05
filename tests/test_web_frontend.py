@@ -92,6 +92,16 @@ class WebServiceTests(unittest.TestCase):
         with self.assertRaises(WebMergeError):
             load_records_from_json_text('["not a record"]')
 
+    def test_finalise_rejects_incomplete_conflict_review(self):
+        job = create_merge_job(
+            [record(description="Left detail")],
+            [record(id="2", description="Right detail")],
+            job_id="incomplete123",
+        )
+
+        with self.assertRaisesRegex(WebMergeError, "Conflict review must be complete"):
+            finalise_job(job)
+
     def test_conflict_decision_and_finalise_outputs_aligned_records(self):
         job = create_merge_job(
             [record(description="Left detail")],
@@ -339,6 +349,35 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"only available for API-backed merge jobs", response.data)
+
+    def test_direct_complete_does_not_unlock_live_sync_for_incomplete_review(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record(description="Left detail")],
+            [record(id="2", description="Right detail")],
+            job_id="bypass123",
+            input_sources={"left": "api", "right": "file"},
+        )
+        save_job(job, jobs_dir)
+
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        complete_response = self.client.get("/jobs/bypass123/complete")
+        sync_response = self.client.get("/jobs/bypass123/sync/left")
+        reloaded = load_job(jobs_dir, "bypass123")
+
+        self.assertEqual(complete_response.status_code, 400)
+        self.assertIn(b"conflict review is complete", complete_response.data)
+        self.assertEqual(sync_response.status_code, 400)
+        self.assertIn(b"conflict review is complete", sync_response.data)
+        self.assertFalse(reloaded.sensitivity_phase_complete)
 
     def test_live_sync_rejects_duplicate_running_sync(self):
         jobs_dir = Path(self.tmp_dir.name)
