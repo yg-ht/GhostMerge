@@ -29,6 +29,30 @@ from web_service import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def web_access_disabled():
+    return {
+        "source_ip_restriction_enabled": False,
+        "api_key_auth_enabled": False,
+        "allow_framing": False,
+    }
+
+
+def web_access_enabled(**overrides):
+    config = {
+        "source_ip_restriction_enabled": True,
+        "allowed_source_ips": ["127.0.0.1"],
+        "api_key_auth_enabled": True,
+        "api_key_query_param": "api_key",
+        "api_key": "test-web-key",
+        "allow_framing": True,
+        "frame_ancestors": ["*"],
+        "session_cookie_samesite": "None",
+        "session_cookie_secure": True,
+    }
+    config.update(overrides)
+    return config
+
+
 def configure_for_web_tests(**overrides):
     config = get_config()
     with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
@@ -209,7 +233,7 @@ class WebServiceTests(unittest.TestCase):
 
 class FlaskRouteTests(unittest.TestCase):
     def setUp(self):
-        configure_for_web_tests()
+        configure_for_web_tests(web_access=web_access_disabled())
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.app = create_app(
             {
@@ -632,7 +656,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"Invalid or missing form token", response.data)
 
-    def test_config_debug_logging_redacts_bearer_token(self):
+    def test_config_debug_logging_redacts_bearer_token_and_web_api_key(self):
         from utils import load_config
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -647,6 +671,9 @@ class FlaskRouteTests(unittest.TestCase):
                         "log_verbosity": "DEBUG",
                         "log_verbosity_utils": "DEBUG",
                         "verbosity_decision_log_enabled": False,
+                        "web_access": {
+                            "api_key": "super-secret-web-key",
+                        },
                         "ghostwriter_api": {
                             "servers": {
                                 "left": {
@@ -672,3 +699,125 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertIn("[REDACTED]", log_text)
         self.assertNotIn("super-secret-token", log_text)
+        self.assertNotIn("super-secret-web-key", log_text)
+
+
+class WebAccessControlTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def make_client(self, web_access):
+        configure_for_web_tests(web_access=web_access)
+        app = create_app(
+            {
+                "TESTING": True,
+                "GHOSTMERGE_JOBS_DIR": Path(self.tmp_dir.name),
+                "SECRET_KEY": "test-secret",
+            }
+        )
+        return app.test_client(), app
+
+    def csrf_token(self, client):
+        with client.session_transaction() as session:
+            session.setdefault("_csrf_token", "test-csrf-token")
+            return session["_csrf_token"]
+
+    def test_valid_get_api_key_authenticates_session_for_later_post(self):
+        client, _app = self.make_client(web_access_enabled())
+
+        initial = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+        response = client.post(
+            "/jobs",
+            data={
+                "_csrf_token": self.csrf_token(client),
+                "left_file": (io.BytesIO(b"not json"), "left.json"),
+                "right_file": (io.BytesIO(b"[]"), "right.json"),
+            },
+            content_type="multipart/form-data",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        )
+
+        self.assertEqual(initial.status_code, 200)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Invalid JSON", response.data)
+
+    def test_missing_api_key_is_rejected(self):
+        client, _app = self.make_client(web_access_enabled())
+
+        response = client.get("/", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn(b"Invalid or missing API key", response.data)
+
+    def test_invalid_api_key_is_rejected(self):
+        client, _app = self.make_client(web_access_enabled())
+
+        response = client.get("/?api_key=wrong", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn(b"Invalid or missing API key", response.data)
+
+    def test_empty_api_key_fails_closed_when_auth_is_enabled(self):
+        client, _app = self.make_client(web_access_enabled(api_key=""))
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn(b"no API key is configured", response.data)
+
+    def test_disallowed_source_ip_is_rejected_before_api_key_authentication(self):
+        client, _app = self.make_client(web_access_enabled(allowed_source_ips=["10.0.0.1"]))
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b"Source IP address is not allowed", response.data)
+
+    def test_empty_allowed_source_ips_fail_closed(self):
+        client, _app = self.make_client(web_access_enabled(allowed_source_ips=[]))
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b"no allowed IPs are configured", response.data)
+
+    def test_absent_web_access_config_fails_closed(self):
+        client, _app = self.make_client(None)
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b"no allowed IPs are configured", response.data)
+
+    def test_cidr_source_ip_range_is_allowed(self):
+        client, _app = self.make_client(web_access_enabled(allowed_source_ips=["127.0.0.0/24"]))
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.42"})
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_x_forwarded_for_is_not_trusted_for_source_ip(self):
+        client, _app = self.make_client(web_access_enabled(allowed_source_ips=["203.0.113.10"]))
+
+        response = client.get(
+            "/?api_key=test-web-key",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+            headers={"X-Forwarded-For": "203.0.113.10"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b"Source IP address is not allowed", response.data)
+
+    def test_framing_headers_and_session_cookie_policy_are_applied(self):
+        client, app = self.make_client(web_access_enabled(frame_ancestors=["https://portal.example"]))
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Security-Policy"], "frame-ancestors https://portal.example")
+        self.assertNotIn("X-Frame-Options", response.headers)
+        self.assertEqual(app.config["SESSION_COOKIE_SAMESITE"], "None")
+        self.assertTrue(app.config["SESSION_COOKIE_SECURE"])

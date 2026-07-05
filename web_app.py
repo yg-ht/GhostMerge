@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import secrets
 import threading
 import uuid
 from pathlib import Path
 
-from flask import Flask, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, Response, redirect, render_template, request, send_file, session, url_for
 
 from ghostwriter_api import (
     GhostwriterApi,
@@ -58,8 +59,17 @@ def create_app(test_config: dict | None = None) -> Flask:
     if not CONFIG.get("config_loaded"):
         load_config()
 
+    _configure_session_cookie_policy(app)
+
     jobs_dir = Path(app.config["GHOSTMERGE_JOBS_DIR"])
     jobs_dir.mkdir(parents=True, exist_ok=True)
+
+    @app.before_request
+    def require_configured_web_access():
+        blocked_response = _require_allowed_source_ip()
+        if blocked_response is not None:
+            return blocked_response
+        return _require_get_api_key_authentication()
 
     @app.before_request
     def require_csrf_token():
@@ -82,6 +92,10 @@ def create_app(test_config: dict | None = None) -> Flask:
             return token
 
         return {"csrf_token": csrf_token}
+
+    @app.after_request
+    def apply_framing_policy(response: Response) -> Response:
+        return _apply_framing_policy(response)
 
     @app.get("/")
     def index():
@@ -308,6 +322,84 @@ def create_app(test_config: dict | None = None) -> Flask:
 
 def post_or_get(app: Flask, rule: str):
     return app.route(rule, methods=["GET", "POST"])
+
+
+def _web_access_config() -> dict:
+    return CONFIG.get("web_access") or {}
+
+
+def _configure_session_cookie_policy(app: Flask) -> None:
+    access_config = _web_access_config()
+    if "session_cookie_samesite" in access_config:
+        app.config["SESSION_COOKIE_SAMESITE"] = access_config["session_cookie_samesite"]
+    if "session_cookie_secure" in access_config:
+        app.config["SESSION_COOKIE_SECURE"] = bool(access_config["session_cookie_secure"])
+
+
+def _require_allowed_source_ip():
+    access_config = _web_access_config()
+    if access_config.get("source_ip_restriction_enabled", True) is False:
+        return None
+
+    remote_addr = request.remote_addr
+    if not remote_addr:
+        return render_template("error.html", error="Source IP address could not be determined."), 403
+
+    try:
+        client_ip = ipaddress.ip_address(remote_addr)
+    except ValueError:
+        return render_template("error.html", error="Source IP address is invalid."), 403
+
+    allowed_ranges = access_config.get("allowed_source_ips") or []
+    if not allowed_ranges:
+        return render_template("error.html", error="Source IP restriction is enabled but no allowed IPs are configured."), 403
+
+    try:
+        for allowed_range in allowed_ranges:
+            # strict=False allows exact IP strings and CIDR networks through one parser.
+            if client_ip in ipaddress.ip_network(str(allowed_range), strict=False):
+                return None
+    except ValueError:
+        return render_template("error.html", error="Source IP restriction contains an invalid configured range."), 403
+
+    return render_template("error.html", error="Source IP address is not allowed."), 403
+
+
+def _require_get_api_key_authentication():
+    access_config = _web_access_config()
+    if access_config.get("api_key_auth_enabled", True) is False:
+        return None
+
+    expected_key = str(access_config.get("api_key") or "")
+    query_param = str(access_config.get("api_key_query_param") or "api_key")
+    if not expected_key:
+        return render_template("error.html", error="API key authentication is enabled but no API key is configured."), 401
+
+    if session.get("_web_api_key_authenticated") is True:
+        return None
+
+    if request.method != "GET":
+        return render_template("error.html", error="API key authentication requires an authenticated GET session."), 401
+
+    submitted_key = request.args.get(query_param, "")
+    if not submitted_key or not secrets.compare_digest(submitted_key, expected_key):
+        return render_template("error.html", error="Invalid or missing API key."), 401
+
+    # The GET key is intentionally a bootstrap credential so existing CSRF-protected POST forms stay unchanged.
+    session["_web_api_key_authenticated"] = True
+    return None
+
+
+def _apply_framing_policy(response: Response) -> Response:
+    access_config = _web_access_config()
+    if not access_config.get("allow_framing", False):
+        return response
+
+    frame_ancestors = access_config.get("frame_ancestors") or []
+    if frame_ancestors:
+        response.headers["Content-Security-Policy"] = f"frame-ancestors {' '.join(map(str, frame_ancestors))}"
+    response.headers.pop("X-Frame-Options", None)
+    return response
 
 
 def _validate_input_sources(input_sources: dict[str, str]) -> None:

@@ -37,6 +37,17 @@
   "num_lines_messages": 8,
   "num_lines_input": 4,
   "max_chars_field_render": 600,
+  "web_access": {
+    "source_ip_restriction_enabled": true,
+    "allowed_source_ips": ["203.0.113.10", "198.51.100.0/24"],
+    "api_key_auth_enabled": true,
+    "api_key_query_param": "api_key",
+    "api_key": "",
+    "allow_framing": true,
+    "frame_ancestors": ["*"],
+    "session_cookie_samesite": "None",
+    "session_cookie_secure": true
+  },
   "ghostwriter_api": {
     "backup_dir": "ghostmerge_api_backups",
     "default_rate_limit_per_second": 1.0,

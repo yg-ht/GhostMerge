@@ -81,6 +81,26 @@ Then open the local URL printed by Flask. Uploaded files and in-progress job
 state are stored under `ghostmerge_web_jobs/` by default. Treat that directory as
 local working data and remove it when old merge jobs are no longer needed.
 
+The web frontend is protected by the `web_access` block in
+`ghostmerge_config.json`. Source IP restriction and GET API-key authentication
+default to enabled; if the block, allowed IP list, or API key is missing, the
+application fails closed. Set `allowed_source_ips` to the direct client IPs or
+CIDR ranges that may reach Flask, and set `api_key` to a deployment-specific
+secret. The key is supplied on the first GET request with the configured query
+parameter, for example `/?api_key=...`; after a valid GET, the Flask session
+stays authenticated for later navigation and CSRF-protected form posts.
+
+The source IP check uses Flask's direct `request.remote_addr` value only. It
+does not trust `X-Forwarded-For` or other proxy headers, so any reverse proxy
+must connect from an explicitly allowed address or be handled by a separate
+deployment design.
+
+When the web frontend is embedded in another application, keep `allow_framing`
+enabled and set `frame_ancestors` to the embedding origin where possible. The
+default cross-site iframe cookie settings are `SESSION_COOKIE_SAMESITE=None` and
+`SESSION_COOKIE_SECURE=True`, so iframe sessions require HTTPS in normal
+browsers.
+
 The web review flow starts with a whole-record preview for each matched pair,
 then moves through field-level conflicts. Differing fields and field-level diffs
 are highlighted. Decision buttons can be clicked directly, and common CLI-style
