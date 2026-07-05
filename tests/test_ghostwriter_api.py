@@ -117,6 +117,7 @@ class GhostwriterApiTests(unittest.TestCase):
                         "name": "Left",
                         "base_url": "https://left.example",
                         "bearer_token": "left-token",
+                        "rate_limit_per_second": 2.5,
                     },
                     "right": {"enabled": False, "base_url": "https://right.example", "bearer_token": "right-token"},
                 },
@@ -126,7 +127,7 @@ class GhostwriterApiTests(unittest.TestCase):
         servers = load_server_configs(config)
 
         self.assertEqual(servers["left"].graphql_url, "https://left.example/v1/graphql")
-        self.assertEqual(servers["left"].rate_limit_per_second, 1.0)
+        self.assertEqual(servers["left"].rate_limit_per_second, 2.5)
         self.assertIsNone(servers["right"])
 
     def test_backup_root_uses_configured_relative_path(self):

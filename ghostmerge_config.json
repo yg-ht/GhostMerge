@@ -48,6 +48,7 @@
         "graphql_url": "",
         "bearer_token": "",
         "timeout_seconds": 30,
+        "rate_limit_per_second": 1.0,
         "verify_tls": true
       },
       "right": {
@@ -57,6 +58,7 @@
         "graphql_url": "",
         "bearer_token": "",
         "timeout_seconds": 30,
+        "rate_limit_per_second": 1.0,
         "verify_tls": true
       }
     }
