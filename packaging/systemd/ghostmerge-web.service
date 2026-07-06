@@ -1,0 +1,25 @@
+[Unit]
+Description=GhostMerge Flask web frontend
+Documentation=file://{{PROJECT_DIR}}/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{SERVICE_USER}}
+Group={{SERVICE_GROUP}}
+WorkingDirectory={{PROJECT_DIR}}
+Environment=FLASK_APP=web_app:create_app
+Environment=PYTHONUNBUFFERED=1
+ExecStart={{VENV_DIR}}/bin/flask --app web_app:create_app run --host {{HOST}} --port {{PORT}}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths={{PROJECT_DIR}}
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

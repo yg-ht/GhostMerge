@@ -167,6 +167,70 @@ pipenv run python ghostmerge.py \
   --config ghostmerge_config.json
 ```
 
+## Systemd web service
+
+The repository includes a systemd unit template and installer for running the
+Flask web frontend as a system service. Prepare the project first:
+
+```bash
+cp ghostmerge_config.example.json ghostmerge_config.json
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Edit `ghostmerge_config.json` before installing. The web frontend fails closed
+when `web_access` is missing or incomplete, and deployment secrets such as API
+keys and Ghostwriter bearer tokens must stay in local config files.
+
+Inspect the generated service without writing to systemd:
+
+```bash
+./install-systemd-service.sh --dry-run
+```
+
+Install the service:
+
+```bash
+sudo ./install-systemd-service.sh
+```
+
+By default the service binds Flask to `127.0.0.1:5000`, enables the unit at boot,
+does not start it immediately, and runs as a dedicated locked `ghostmerge`
+system user/group. If the account does not already exist, the installer creates
+it without an interactive shell and without creating a home directory. During
+installation it checks that this account can read the app/config and write the
+project-local job, backup, and log paths used by the current app. Use explicit
+options when needed:
+
+```bash
+sudo ./install-systemd-service.sh \
+  --user ghostmerge \
+  --group ghostmerge \
+  --host 127.0.0.1 \
+  --port 5000 \
+  --start
+```
+
+The installer refuses to configure the service to run as `root`. If your
+deployment uses a pre-created account, pass `--no-create-user` to require the
+dedicated user and group to exist before installation. If you have checked
+filesystem permissions another way, pass `--no-check-access` to skip the
+service-user access probe.
+
+Operational commands:
+
+```bash
+sudo systemctl status ghostmerge-web.service
+sudo systemctl restart ghostmerge-web.service
+sudo journalctl -u ghostmerge-web.service -f
+```
+
+If exposing the service through a reverse proxy, keep the default loopback bind
+where possible and configure `web_access.trusted_proxy_ips`,
+`web_access.source_ip_mode`, and `web_access.trusted_source_ip_header` to match
+the proxy. Do not bind to a public interface unless the source IP restriction,
+API key, framing policy, and TLS termination have been reviewed for that
+deployment.
+
 ## Input format
 
 Each input file must be a JSON list of finding records.
