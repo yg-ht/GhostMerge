@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PROJECT_DIR="${SCRIPT_DIR}"
 VENV_DIR="${PROJECT_DIR}/.venv"
+VENV_DIR_EXPLICIT=0
 SERVICE_NAME="ghostmerge-web"
 SERVICE_USER="ghostmerge"
 SERVICE_GROUP="ghostmerge"
@@ -15,6 +16,7 @@ START_SERVICE=0
 DRY_RUN=0
 CREATE_SERVICE_USER=1
 CHECK_SERVICE_ACCESS=1
+INSTALL_DEPS=1
 UNIT_DIR="/etc/systemd/system"
 TEMPLATE_PATH="${PROJECT_DIR}/packaging/systemd/ghostmerge-web.service"
 
@@ -27,7 +29,7 @@ Usage:
 
 Options:
   --project-dir PATH      Project checkout path. Defaults to this script's directory.
-  --venv-dir PATH         Python virtualenv path. Defaults to PROJECT_DIR/.venv.
+  --venv-dir PATH         Python virtualenv path. Defaults to PROJECT_DIR/.venv, then Pipenv discovery.
   --service-name NAME     Systemd service name without ".service". Defaults to ghostmerge-web.
   --user USER             Dedicated service user. Defaults to ghostmerge.
   --group GROUP           Dedicated service group. Defaults to ghostmerge.
@@ -35,6 +37,8 @@ Options:
   --no-create-user        Require the service user/group to already exist.
   --check-access          Verify the service user can read and write required paths. This is the default.
   --no-check-access       Skip service-user filesystem access checks.
+  --install-deps          Create PROJECT_DIR/.venv and install requirements if no venv is usable. This is the default.
+  --no-install-deps       Refuse to install Python dependencies automatically.
   --host ADDRESS          Flask bind address. Defaults to 127.0.0.1.
   --port PORT             Flask bind port. Defaults to 5000.
   --enable                Enable the service at boot. This is the default.
@@ -91,13 +95,16 @@ parse_args() {
             --project-dir)
                 [[ $# -ge 2 ]] || fail "--project-dir requires a value."
                 PROJECT_DIR="$(absolute_path "$2")"
-                VENV_DIR="${PROJECT_DIR}/.venv"
+                if (( VENV_DIR_EXPLICIT == 0 )); then
+                    VENV_DIR="${PROJECT_DIR}/.venv"
+                fi
                 TEMPLATE_PATH="${PROJECT_DIR}/packaging/systemd/ghostmerge-web.service"
                 shift 2
                 ;;
             --venv-dir)
                 [[ $# -ge 2 ]] || fail "--venv-dir requires a value."
                 VENV_DIR="$(absolute_path "$2")"
+                VENV_DIR_EXPLICIT=1
                 shift 2
                 ;;
             --service-name)
@@ -129,6 +136,14 @@ parse_args() {
                 ;;
             --no-check-access)
                 CHECK_SERVICE_ACCESS=0
+                shift
+                ;;
+            --install-deps)
+                INSTALL_DEPS=1
+                shift
+                ;;
+            --no-install-deps)
+                INSTALL_DEPS=0
                 shift
                 ;;
             --host)
@@ -172,17 +187,91 @@ parse_args() {
     done
 }
 
+venv_has_flask() {
+    local venv_dir="$1"
+
+    [[ -n "${venv_dir}" && -x "${venv_dir}/bin/flask" ]]
+}
+
+discover_pipenv_venv() {
+    local discovered
+
+    command -v pipenv >/dev/null 2>&1 || return 1
+    [[ -f "${PROJECT_DIR}/Pipfile" ]] || [[ -f "${PROJECT_DIR}/requirements.txt" ]] || return 1
+
+    # Run from the project directory so Pipenv resolves the same project that systemd will run.
+    discovered="$(cd "${PROJECT_DIR}" && pipenv --venv 2>/dev/null || true)"
+    [[ -n "${discovered}" ]] || return 1
+    if [[ "${discovered}" == /root/* ]]; then
+        printf 'Ignoring Pipenv virtualenv under /root because the dedicated service user should not depend on root-owned private environments: %s\n' "${discovered}" >&2
+        return 1
+    fi
+    venv_has_flask "${discovered}" || return 1
+
+    printf '%s\n' "${discovered}"
+}
+
+install_project_venv() {
+    local python_bin
+
+    (( INSTALL_DEPS == 1 )) || return 1
+    (( DRY_RUN == 0 )) || return 1
+    [[ -f "${PROJECT_DIR}/requirements.txt" ]] || fail "No usable Flask executable found and requirements.txt is missing."
+
+    if command -v python3 >/dev/null 2>&1; then
+        python_bin="python3"
+    elif command -v python >/dev/null 2>&1; then
+        python_bin="python"
+    else
+        fail "No usable Flask executable found and neither python3 nor python is available to create ${PROJECT_DIR}/.venv."
+    fi
+
+    printf 'No usable Flask executable found. Creating project virtualenv at %s/.venv\n' "${PROJECT_DIR}" >&2
+    "${python_bin}" -m venv "${PROJECT_DIR}/.venv" || fail "Could not create ${PROJECT_DIR}/.venv. Install the Python venv package for ${python_bin}, or provide --venv-dir."
+    "${PROJECT_DIR}/.venv/bin/python" -m pip install --upgrade pip || fail "Could not upgrade pip in ${PROJECT_DIR}/.venv."
+    "${PROJECT_DIR}/.venv/bin/python" -m pip install -r "${PROJECT_DIR}/requirements.txt" || fail "Could not install requirements.txt into ${PROJECT_DIR}/.venv."
+    VENV_DIR="${PROJECT_DIR}/.venv"
+}
+
+resolve_venv_dir() {
+    local discovered
+
+    if (( VENV_DIR_EXPLICIT == 1 )); then
+        venv_has_flask "${VENV_DIR}" || fail "Flask executable not found or not executable: ${VENV_DIR}/bin/flask"
+        return
+    fi
+
+    if venv_has_flask "${PROJECT_DIR}/.venv"; then
+        VENV_DIR="${PROJECT_DIR}/.venv"
+        return
+    fi
+
+    if discovered="$(discover_pipenv_venv)"; then
+        VENV_DIR="${discovered}"
+        return
+    fi
+
+    install_project_venv || fail "Flask executable not found or not executable. Create ${PROJECT_DIR}/.venv, run pipenv install without sudo and pass --venv-dir \"\$(pipenv --venv)\", or re-run with --install-deps."
+    venv_has_flask "${VENV_DIR}" || fail "Dependency installation completed but Flask executable is still missing: ${VENV_DIR}/bin/flask"
+}
+
 validate_inputs() {
     PROJECT_DIR="$(absolute_path "${PROJECT_DIR}")"
     VENV_DIR="$(absolute_path "${VENV_DIR}")"
 
     [[ -d "${PROJECT_DIR}" ]] || fail "Project directory not found: ${PROJECT_DIR}"
     [[ "${PROJECT_DIR}" != *[[:space:]]* ]] || fail "Project directory must not contain whitespace because systemd ExecStart paths are not shell-expanded."
-    [[ "${VENV_DIR}" != *[[:space:]]* ]] || fail "Virtualenv directory must not contain whitespace because systemd ExecStart paths are not shell-expanded."
     [[ -f "${PROJECT_DIR}/web_app.py" ]] || fail "web_app.py not found in ${PROJECT_DIR}"
     [[ -f "${PROJECT_DIR}/ghostmerge_config.json" ]] || fail "ghostmerge_config.json is required before installing the web service."
     [[ -f "${TEMPLATE_PATH}" ]] || fail "Systemd template not found: ${TEMPLATE_PATH}"
-    [[ -x "${VENV_DIR}/bin/flask" ]] || fail "Flask executable not found or not executable: ${VENV_DIR}/bin/flask"
+
+    if (( DRY_RUN == 0 && EUID != 0 )); then
+        fail "System service installation requires root. Re-run with sudo, or use --dry-run to inspect the unit."
+    fi
+
+    resolve_venv_dir
+    VENV_DIR="$(absolute_path "${VENV_DIR}")"
+    [[ "${VENV_DIR}" != *[[:space:]]* ]] || fail "Virtualenv directory must not contain whitespace because systemd ExecStart paths are not shell-expanded."
 
     validate_plain_token "--service-name" "${SERVICE_NAME}"
     [[ "${SERVICE_NAME}" != *.service ]] || fail "--service-name should not include the .service suffix."
@@ -193,9 +282,6 @@ validate_inputs() {
     validate_plain_token "--host" "${HOST}"
     validate_port
 
-    if (( DRY_RUN == 0 && EUID != 0 )); then
-        fail "System service installation requires root. Re-run with sudo, or use --dry-run to inspect the unit."
-    fi
 }
 
 ensure_service_account() {
@@ -227,6 +313,16 @@ ensure_service_account() {
     fi
 }
 
+prepare_service_state_paths() {
+    # Keep the application code and virtualenv root-owned where desired, while granting
+    # the service account only the project-local paths the current app writes to.
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" "${PROJECT_DIR}/ghostmerge_web_jobs"
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" "${PROJECT_DIR}/ghostmerge_api_backups"
+    touch "${PROJECT_DIR}/ghostmerge.log"
+    chown "${SERVICE_USER}:${SERVICE_GROUP}" "${PROJECT_DIR}/ghostmerge.log"
+    chmod 0640 "${PROJECT_DIR}/ghostmerge.log"
+}
+
 check_service_account_access() {
     local probe
 
@@ -244,11 +340,11 @@ check_service_account_access() {
         test -r "$1/web_app.py"
         test -r "$1/ghostmerge_config.json"
         test -x "$2/bin/flask"
-        mkdir -p "$1/ghostmerge_web_jobs" "$1/ghostmerge_api_backups"
         test -w "$1/ghostmerge_web_jobs"
         test -w "$1/ghostmerge_api_backups"
-        touch "$1/.ghostmerge-systemd-access-check"
-        rm -f "$1/.ghostmerge-systemd-access-check"
+        test -w "$1/ghostmerge.log"
+        touch "$1/ghostmerge_web_jobs/.ghostmerge-systemd-access-check"
+        rm -f "$1/ghostmerge_web_jobs/.ghostmerge-systemd-access-check"
     '
 
     if ! runuser -u "${SERVICE_USER}" -- sh -c "${probe}" sh "${PROJECT_DIR}" "${VENV_DIR}"; then
@@ -286,6 +382,7 @@ install_unit() {
     local temp_file
 
     ensure_service_account
+    prepare_service_state_paths
     check_service_account_access
 
     temp_file="$(mktemp)"

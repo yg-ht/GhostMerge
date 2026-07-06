@@ -174,12 +174,18 @@ Flask web frontend as a system service. Prepare the project first:
 
 ```bash
 cp ghostmerge_config.example.json ghostmerge_config.json
-.venv/bin/python -m pip install -r requirements.txt
 ```
 
 Edit `ghostmerge_config.json` before installing. The web frontend fails closed
 when `web_access` is missing or incomplete, and deployment secrets such as API
 keys and Ghostwriter bearer tokens must stay in local config files.
+
+The installer uses `PROJECT_DIR/.venv` when it already exists. If it does not
+exist, the installer tries to discover a Pipenv virtualenv for the project. If
+neither contains Flask, a normal installation creates `PROJECT_DIR/.venv` and
+installs `requirements.txt` automatically. Do not run `sudo pipenv install`;
+that creates a root-owned virtualenv under `/root`, which the dedicated service
+user should not depend on and the installer deliberately ignores.
 
 Inspect the generated service without writing to systemd:
 
@@ -198,8 +204,9 @@ does not start it immediately, and runs as a dedicated locked `ghostmerge`
 system user/group. If the account does not already exist, the installer creates
 it without an interactive shell and without creating a home directory. During
 installation it checks that this account can read the app/config and write the
-project-local job, backup, and log paths used by the current app. Use explicit
-options when needed:
+project-local job, backup, and log paths used by the current app. The installer
+creates those writable paths for the service user without changing ownership of
+the whole checkout. Use explicit options when needed:
 
 ```bash
 sudo ./install-systemd-service.sh \
@@ -215,6 +222,14 @@ deployment uses a pre-created account, pass `--no-create-user` to require the
 dedicated user and group to exist before installation. If you have checked
 filesystem permissions another way, pass `--no-check-access` to skip the
 service-user access probe.
+
+To use an existing non-root Pipenv environment instead of the project-local
+`.venv`, install dependencies without `sudo` and pass the discovered path:
+
+```bash
+pipenv install -r requirements.txt
+sudo ./install-systemd-service.sh --venv-dir "$(pipenv --venv)"
+```
 
 Operational commands:
 
