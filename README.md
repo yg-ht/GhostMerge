@@ -246,6 +246,43 @@ the proxy. Do not bind to a public interface unless the source IP restriction,
 API key, framing policy, and TLS termination have been reviewed for that
 deployment.
 
+### Caddy reverse proxy
+
+An example Caddy configuration is provided at
+`packaging/caddy/Caddyfile.example`. Its purpose is to provide a reviewed
+starting point for deployments where one Caddy site serves multiple internal
+applications by top-level path, such as `/merge/` for GhostMerge.
+
+Caddy is useful in this layout because it can terminate TLS, keep the
+GhostMerge Flask service bound to loopback, provide one public hostname for
+multiple tools, and strip the public `/merge` prefix before requests reach
+Flask. That keeps the application simple: GhostMerge continues to receive normal
+internal paths such as `/`, `/jobs/...`, and `/static/...`, while browsers use
+the public `/merge/...` URLs.
+
+For a same-host Caddy deployment, keep the GhostMerge service bound to
+`127.0.0.1:5000` and configure `ghostmerge_config.json` along these lines:
+
+```json
+{
+  "web_access": {
+    "source_ip_restriction_enabled": true,
+    "allowed_source_ips": ["203.0.113.0/24"],
+    "source_ip_mode": "trusted_header",
+    "trusted_proxy_ips": ["127.0.0.1"],
+    "trusted_source_ip_header": "X-Forwarded-For",
+    "api_key_auth_enabled": true,
+    "api_key_query_param": "api_key",
+    "api_key": "replace-with-a-deployment-secret"
+  }
+}
+```
+
+With this proxy layout, users authenticate at
+`https://example.com/merge/?api_key=...`. Static image and script requests then
+use the Flask session cookie set by that page load; the API key does not need to
+be copied into each static asset URL.
+
 ## Input format
 
 Each input file must be a JSON list of finding records.

@@ -1,0 +1,32 @@
+# GhostMerge behind Caddy at https://example.com/merge/
+#
+# This example assumes the GhostMerge systemd service is listening on
+# 127.0.0.1:5000, which is the installer default.
+#
+# Keep GhostMerge's web_access.trusted_proxy_ips aligned with the direct source
+# address Caddy uses when connecting to Flask. For a same-host deployment that
+# is normally 127.0.0.1.
+
+example.com {
+    # Normalise the bare mount path so browsers use one cookie/path shape.
+    redir /merge /merge/ 308
+
+    # handle_path strips /merge before proxying, so Flask still sees its normal
+    # routes such as /, /jobs, and /static. Browser requests remain under /merge.
+    handle_path /merge/* {
+        reverse_proxy 127.0.0.1:5000 {
+            # Preserve the original host/protocol for Flask and diagnostics.
+            header_up Host {host}
+            header_up X-Forwarded-Proto {scheme}
+
+            # Tell GhostMerge the external mount point. Current GhostMerge keeps
+            # its own routes at / internally, so this is mainly useful for logs
+            # and future prefix-aware deployments.
+            header_up X-Forwarded-Prefix /merge
+
+            # Caddy sends X-Forwarded-For by default. This explicit line keeps
+            # the expected GhostMerge config obvious for reviewed deployments.
+            header_up X-Forwarded-For {remote_host}
+        }
+    }
+}
