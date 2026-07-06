@@ -43,6 +43,7 @@
     "source_ip_mode": "direct",
     "trusted_proxy_ips": [],
     "trusted_source_ip_header": "X-Forwarded-For",
+    "reverse_proxy_prefix": "",
     "api_key_auth_enabled": true,
     "api_key_query_param": "api_key",
     "api_key": "",

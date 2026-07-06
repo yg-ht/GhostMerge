@@ -6,6 +6,10 @@
 # Keep GhostMerge's web_access.trusted_proxy_ips aligned with the direct source
 # address Caddy uses when connecting to Flask. For a same-host deployment that
 # is normally 127.0.0.1.
+#
+# Set web_access.reverse_proxy_prefix to "/merge" in ghostmerge_config.json so
+# GhostMerge generates public static, link, form, and redirect URLs below
+# /merge even though Flask receives stripped internal paths.
 
 example.com {
     # Normalise the bare mount path so browsers use one cookie/path shape.
@@ -19,9 +23,9 @@ example.com {
             header_up Host {host}
             header_up X-Forwarded-Proto {scheme}
 
-            # Tell GhostMerge the external mount point. Current GhostMerge keeps
-            # its own routes at / internally, so this is mainly useful for logs
-            # and future prefix-aware deployments.
+            # Keep the external mount point visible to upstream diagnostics.
+            # GhostMerge's generated URLs are controlled by
+            # web_access.reverse_proxy_prefix in ghostmerge_config.json.
             header_up X-Forwarded-Prefix /merge
 
             # Caddy sends X-Forwarded-For by default. This explicit line keeps

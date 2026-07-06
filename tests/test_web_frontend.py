@@ -951,3 +951,41 @@ class WebAccessControlTests(unittest.TestCase):
         self.assertNotIn("X-Frame-Options", response.headers)
         self.assertEqual(app.config["SESSION_COOKIE_SAMESITE"], "None")
         self.assertTrue(app.config["SESSION_COOKIE_SECURE"])
+
+    def test_configured_reverse_proxy_prefix_is_used_for_generated_urls(self):
+        client, _app = self.make_client(web_access_enabled(reverse_proxy_prefix="/merge"))
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'src="/merge/static/GhostMerge-logo.png"', response.data)
+        self.assertIn(b'src="/merge/static/review_shortcuts.js"', response.data)
+        self.assertIn(b'href="/merge/"', response.data)
+        self.assertIn(b'action="/merge/jobs"', response.data)
+
+    def test_configured_reverse_proxy_prefix_accepts_prefixed_incoming_paths(self):
+        client, _app = self.make_client(web_access_enabled(reverse_proxy_prefix="/merge"))
+
+        response = client.get("/merge/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+        asset_response = client.get("/merge/static/GhostMerge-logo.png", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'src="/merge/static/GhostMerge-logo.png"', response.data)
+        self.assertEqual(asset_response.status_code, 200)
+        self.assertEqual(asset_response.content_type, "image/png")
+
+    def test_configured_reverse_proxy_prefix_can_be_written_without_leading_slash(self):
+        client, _app = self.make_client(web_access_enabled(reverse_proxy_prefix="merge"))
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'src="/merge/static/GhostMerge-logo.png"', response.data)
+
+    def test_invalid_reverse_proxy_prefix_fails_closed(self):
+        client, _app = self.make_client(web_access_enabled(reverse_proxy_prefix="/bad prefix"))
+
+        response = client.get("/?api_key=test-web-key", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b"Reverse proxy prefix", response.data)

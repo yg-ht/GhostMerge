@@ -60,6 +60,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     if not CONFIG.get("config_loaded"):
         load_config()
 
+    app.wsgi_app = ConfiguredReverseProxyPrefixMiddleware(app.wsgi_app, _web_access_config)
     _configure_session_cookie_policy(app)
 
     jobs_dir = Path(app.config["GHOSTMERGE_JOBS_DIR"])
@@ -325,8 +326,48 @@ def post_or_get(app: Flask, rule: str):
     return app.route(rule, methods=["GET", "POST"])
 
 
+class ConfiguredReverseProxyPrefixMiddleware:
+    """Apply the configured public URL prefix before Flask routes or builds URLs."""
+
+    def __init__(self, app, access_config_provider):
+        self.app = app
+        self.access_config_provider = access_config_provider
+
+    def __call__(self, environ, start_response):
+        try:
+            prefix = _normalise_reverse_proxy_prefix(self.access_config_provider().get("reverse_proxy_prefix", ""))
+        except WebAccessError as exc:
+            start_response("403 FORBIDDEN", [("Content-Type", "text/plain; charset=utf-8")])
+            return [str(exc).encode("utf-8")]
+
+        if not prefix:
+            return self.app(environ, start_response)
+
+        # SCRIPT_NAME is the WSGI mechanism Flask uses when url_for builds public URLs.
+        environ["SCRIPT_NAME"] = prefix
+
+        path_info = environ.get("PATH_INFO", "")
+        if path_info == prefix:
+            environ["PATH_INFO"] = "/"
+        elif path_info.startswith(f"{prefix}/"):
+            environ["PATH_INFO"] = path_info[len(prefix) :]
+
+        return self.app(environ, start_response)
+
+
 def _web_access_config() -> dict:
     return CONFIG.get("web_access") or {}
+
+
+def _normalise_reverse_proxy_prefix(raw_prefix) -> str:
+    prefix = str(raw_prefix or "").strip()
+    if not prefix or prefix == "/":
+        return ""
+    if any(character.isspace() for character in prefix) or "\\" in prefix or "?" in prefix or "#" in prefix:
+        raise WebAccessError(f"Reverse proxy prefix {prefix!r} is not supported.")
+    if not prefix.startswith("/"):
+        prefix = f"/{prefix}"
+    return prefix.rstrip("/")
 
 
 def _configure_session_cookie_policy(app: Flask) -> None:

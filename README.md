@@ -271,6 +271,7 @@ For a same-host Caddy deployment, keep the GhostMerge service bound to
     "source_ip_mode": "trusted_header",
     "trusted_proxy_ips": ["127.0.0.1"],
     "trusted_source_ip_header": "X-Forwarded-For",
+    "reverse_proxy_prefix": "/merge",
     "api_key_auth_enabled": true,
     "api_key_query_param": "api_key",
     "api_key": "replace-with-a-deployment-secret"
@@ -279,9 +280,10 @@ For a same-host Caddy deployment, keep the GhostMerge service bound to
 ```
 
 With this proxy layout, users authenticate at
-`https://example.com/merge/?api_key=...`. Static image and script requests then
-use the Flask session cookie set by that page load; the API key does not need to
-be copied into each static asset URL.
+`https://example.com/merge/?api_key=...`. The `reverse_proxy_prefix` setting
+makes GhostMerge generate static image, script, form, link, and redirect URLs
+under `/merge/...`, while Caddy strips `/merge` before forwarding requests to
+Flask.
 
 ## Input format
 
