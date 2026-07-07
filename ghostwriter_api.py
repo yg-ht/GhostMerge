@@ -34,6 +34,9 @@ FINDING_FIELDS = (
     "extra_fields",
 )
 
+SYNC_PREFLIGHT_QUERY_FIELDS = {"finding", "findingSeverity", "findingType", "tags"}
+SYNC_PREFLIGHT_MUTATION_FIELDS = {"delete_finding_by_pk", "insert_finding_one", "setTags"}
+
 
 class GhostwriterApiError(RuntimeError):
     """Raised when Ghostwriter API interaction cannot complete safely."""
@@ -241,7 +244,41 @@ class GhostwriterApi:
             offset += limit
         return raw_records
 
+    def preflight_sync_permissions(self) -> None:
+        """Check the configured token can see every GraphQL field live sync requires."""
+        query = """
+        query SyncPreflight {
+          __schema {
+            queryType { fields { name } }
+            mutationType { fields { name } }
+          }
+        }
+        """
+        try:
+            data = self.client.execute(query)
+        except GhostwriterApiError as exc:
+            detail = _redact(str(exc), self.server)
+            raise GhostwriterApiError(f"Ghostwriter API sync preflight failed for {self.server.name}: {detail}") from exc
+
+        schema = data.get("__schema") or {}
+        query_fields = _schema_field_names(((schema.get("queryType") or {}).get("fields") or []))
+        mutation_fields = _schema_field_names(((schema.get("mutationType") or {}).get("fields") or []))
+        missing_query_fields = sorted(SYNC_PREFLIGHT_QUERY_FIELDS - query_fields)
+        missing_mutation_fields = sorted(SYNC_PREFLIGHT_MUTATION_FIELDS - mutation_fields)
+        if missing_query_fields or missing_mutation_fields:
+            details = []
+            if missing_query_fields:
+                details.append(f"missing query fields: {', '.join(missing_query_fields)}")
+            if missing_mutation_fields:
+                details.append(f"missing mutation fields: {', '.join(missing_mutation_fields)}")
+            raise GhostwriterApiError(
+                "Ghostwriter API sync preflight failed for "
+                f"{self.server.name}; {'; '.join(details)}. "
+                "Use a Ghostwriter API token or service token with read/write access to Finding Templates and tags."
+            )
+
     def replace_all_findings(self, records: list[dict[str, Any]], backup_root: Path) -> Path:
+        self.preflight_sync_permissions()
         lookups = self.fetch_lookup_ids()
         prepared_records = self.prepare_records_for_reload(records, lookups)
         backup_path = self.create_backup(backup_root)
@@ -515,6 +552,10 @@ def _split_tags(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def _schema_field_names(fields: list[dict[str, Any]]) -> set[str]:
+    return {str(field.get("name") or "") for field in fields if field.get("name")}
 
 
 def _slug(value: str) -> str:

@@ -52,15 +52,26 @@ def finding_record(**overrides):
 
 
 class FakeGraphQLClient:
-    def __init__(self):
+    def __init__(self, missing_query_fields=None, missing_mutation_fields=None):
         self.calls = []
         self.deleted_ids = []
         self.created_objects = []
         self.tag_sets = []
+        self.missing_query_fields = set(missing_query_fields or [])
+        self.missing_mutation_fields = set(missing_mutation_fields or [])
 
     def execute(self, query, variables=None):
         variables = variables or {}
         self.calls.append((query, variables))
+        if "SyncPreflight" in query:
+            query_fields = {"finding", "findingSeverity", "findingType", "tags"} - self.missing_query_fields
+            mutation_fields = {"delete_finding_by_pk", "insert_finding_one", "setTags"} - self.missing_mutation_fields
+            return {
+                "__schema": {
+                    "queryType": {"fields": [{"name": name} for name in sorted(query_fields)]},
+                    "mutationType": {"fields": [{"name": name} for name in sorted(mutation_fields)]},
+                }
+            }
         if "FetchRawFindings" in query:
             if variables.get("offset", 0) > 0:
                 return {"finding": []}
@@ -183,6 +194,15 @@ class GhostwriterApiTests(unittest.TestCase):
 
         self.assertIsNone(urlopen.call_args.kwargs["context"])
 
+    def test_graphql_client_sends_opaque_token_as_bearer_header(self):
+        with patch("ghostwriter_api.urllib.request.urlopen", return_value=FakeUrlResponse()) as urlopen:
+            from ghostwriter_api import GhostwriterGraphQLClient
+
+            GhostwriterGraphQLClient(server_config(bearer_token="gwat_example-token")).execute("query Test { ok }")
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.headers["Authorization"], "Bearer gwat_example-token")
+
     def test_backup_root_uses_configured_relative_path(self):
         root = backup_root_from_config({"script_dir": "/tmp/project", "ghostwriter_api": {"backup_dir": "backups"}})
 
@@ -216,6 +236,29 @@ class GhostwriterApiTests(unittest.TestCase):
             self.assertEqual(len(fake_client.created_objects), 1)
             self.assertEqual(fake_client.tag_sets, [(101, ["web", "xss"])])
             self.assertEqual(list_backups(Path(tmp_dir))[0]["record_count"], 1)
+
+    def test_preflight_rejects_missing_sync_capabilities_before_writes(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_client = FakeGraphQLClient(missing_mutation_fields={"delete_finding_by_pk"})
+            api = GhostwriterApi(server_config(), client=fake_client)
+
+            with self.assertRaisesRegex(GhostwriterApiError, "delete_finding_by_pk"):
+                api.replace_all_findings([finding_record()], Path(tmp_dir))
+
+            self.assertEqual(fake_client.deleted_ids, [])
+            self.assertEqual(fake_client.created_objects, [])
+            self.assertEqual(list_backups(Path(tmp_dir)), [])
+
+    def test_preflight_error_redacts_configured_token(self):
+        token = "gwat_secret-token"
+        fake_client = FakeGraphQLClient()
+        api = GhostwriterApi(server_config(bearer_token=token), client=fake_client)
+        with patch.object(fake_client, "execute", side_effect=GhostwriterApiError(f"bad token {token}")):
+            with self.assertRaises(GhostwriterApiError) as caught:
+                api.preflight_sync_permissions()
+
+        self.assertNotIn(token, str(caught.exception))
+        self.assertIn("[REDACTED]", str(caught.exception))
 
     def test_backups_created_in_same_second_have_unique_paths(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

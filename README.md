@@ -333,6 +333,25 @@ sensitive_terms.txt.local
 
 For Ghostwriter API sync, set each server's `base_url` to the Ghostwriter site root, for example `https://ghostwriter.example`, and leave `graphql_endpoint` as `/v1/graphql` unless your deployment exposes GraphQL somewhere else. `graphql_endpoint` may also be a full URL if needed.
 
+Ghostwriter authenticates GraphQL requests with `Authorization: Bearer TOKEN`.
+Current Ghostwriter releases support short-lived login JWTs, user API tokens with
+the `gwat_` prefix, and service tokens with the `gwst_` prefix. For GhostMerge
+live sync, prefer a `gwat_` user API token created from the Ghostwriter profile
+page's API Tokens card. A user API token inherits the creating user's
+permissions, can have an explicit expiry, can be revoked, and works for accounts
+that use MFA. Store the generated value in the server's `bearer_token` setting
+in local `ghostmerge_config.json` or `ghostmerge_config.json.local`; do not put
+real tokens in committed files.
+
+Use a `gwst_` service token only when its scoped permissions explicitly allow
+all GhostMerge live sync operations. Live sync is destructive: GhostMerge backs
+up the target server, deletes existing Finding Templates, then recreates the
+reviewed output and tags. Before doing that, GhostMerge runs a non-destructive
+GraphQL preflight. The configured token must be able to see the `finding`,
+`findingSeverity`, `findingType`, and `tags` query fields and the
+`delete_finding_by_pk`, `insert_finding_one`, and `setTags` mutation fields. If
+any required field is missing, sync stops before backup, deletion, or reload.
+
 Useful configuration areas include:
 
 | Setting area | Purpose |
