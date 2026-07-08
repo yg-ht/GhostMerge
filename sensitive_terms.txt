@@ -5,22 +5,4 @@ acme-corp => [REDACTED COMPANY]
 P4ssw0rd! => [REDACTED]
 zero-day => 0-day
 secret sauce => proprietary technique
-<span style="font-weight: 400;"> =>
-<span style="font-weight: 400"> =>
-<span class="highlight" style="background-color: yellow;"> => <mark>
-<span class="highlight" style="background-color: yellow"> => <mark>
-<mark><span data-color="#f00" style="color: #f00"> => <mark>
-<mark><span data-color="#f00" style="color: #f00;"> => <mark>
-<p xmlns="http://www.w3.org/1999/xhtml" style="text-align: justify;"> => <p>
-<p xmlns="http://www.w3.org/1999/xhtml" style="text-align: justify"> => <p>
-<p style="text-align: justify;" xmlns="http://www.w3.org/1999/xhtml"> => <p>
-<p style="text-align: justify" xmlns="http://www.w3.org/1999/xhtml"> => <p>
-<p style="text-align: justify" xmlns="http://www.w3.org/1999/xhtml">
-<p xmlns="http://www.w3.org/1999/xhtml"> => <p>
-<p style="text-align: justify"> => <p>
-<ul xmlns="http://www.w3.org/1999/xhtml"> => <ul>
-<pre xmlns="http://www.w3.org/1999/xhtml" spellcheck="false"> => <pre spellcheck="false">
-<pre spellcheck="false" xmlns="http://www.w3.org/1999/xhtml"> => <pre spellcheck="false">
-<pre class="language-markup"><code> => <code spellcheck="false">
 {{.evidence}} => &lt;EVIDENCE&gt;
-<li><p> => <li>
