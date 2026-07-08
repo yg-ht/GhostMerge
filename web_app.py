@@ -363,7 +363,29 @@ def create_app(test_config: dict | None = None) -> Flask:
             server = _server_for_side(side)
             _require_backup_target_match(record["backup"], server)
             api = GhostwriterApi(server)
-            created_id = api.restore_backup_record(record)
+            restore_action = request.form.get("restore_action") or "check"
+            if restore_action not in {"check", "replace", "add", "skip"}:
+                raise ValueError("Unknown restore action.")
+            candidates = api.find_restore_candidates(record)
+            if restore_action == "check" and candidates:
+                return render_template(
+                    "api_restore_confirm.html",
+                    side=side,
+                    server_name=server.name,
+                    filename=filename,
+                    index=index,
+                    record=record["normalised_record"],
+                    candidates=candidates,
+                )
+            if restore_action == "skip":
+                return redirect(url_for("api_backup_detail", side=side, filename=filename))
+            if restore_action == "replace":
+                existing_id = _selected_restore_candidate_id(request.form.get("existing_id"), candidates)
+                created_id = api.restore_backup_record(record, replace_existing_id=existing_id)
+                restore_mode = "replaced"
+            else:
+                created_id = api.restore_backup_record(record)
+                restore_mode = "added"
             return render_template(
                 "api_restore_complete.html",
                 side=side,
@@ -371,6 +393,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 filename=filename,
                 record=record["normalised_record"],
                 created_id=created_id,
+                restore_mode=restore_mode,
             )
         except (GhostwriterApiError, ValueError) as exc:
             return render_template("error.html", error=str(exc)), 400
@@ -1123,6 +1146,17 @@ def _require_backup_target_match(backup: dict, server) -> None:
             "Backup target does not match the currently configured Ghostwriter server. "
             "Refusing restore to avoid writing data to the wrong deployment."
         )
+
+
+def _selected_restore_candidate_id(raw_existing_id: str | None, candidates: list[dict[str, Any]]) -> int:
+    try:
+        existing_id = int(raw_existing_id or "")
+    except ValueError as exc:
+        raise ValueError("Selected restore target is invalid.") from exc
+    candidate_ids = {int(candidate["id"]) for candidate in candidates}
+    if existing_id not in candidate_ids:
+        raise ValueError("Selected restore target is no longer a matching Finding Template.")
+    return existing_id
 
 
 def _load_terms():

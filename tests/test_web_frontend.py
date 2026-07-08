@@ -1167,13 +1167,116 @@ class FlaskRouteTests(unittest.TestCase):
         )
 
         with patch("web_app.GhostwriterApi") as api_class:
+            api_class.return_value.find_restore_candidates.return_value = []
             api_class.return_value.restore_backup_record.return_value = 1234
             response = self.client.post("/api-backups/left/restore.json/0/restore", data=self.with_csrf())
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"The selected Finding Template was restored to YGHT Ghostwriter.", response.data)
+        self.assertIn(b"The selected Finding Template was added on YGHT Ghostwriter.", response.data)
         self.assertNotIn(b"restored to the left server", response.data)
         api_class.return_value.restore_backup_record.assert_called_once()
+
+    def test_backup_restore_prompts_when_finding_already_exists(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "restore-existing.json"
+        backup_path.write_text(
+            json.dumps(
+                {
+                    "server_side": "left",
+                    "server_name": "Original backup name",
+                    "graphql_url": "https://left.example/v1/graphql",
+                    "created_at": "20260705T000000Z",
+                    "record_count": 1,
+                    "raw_records": [{"record": {"id": 99}, "tags": []}],
+                    "normalised_records": [record(title="Existing finding")],
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = get_config()
+        config["ghostwriter_api"]["backup_dir"] = str(backup_root)
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "YGHT Ghostwriter",
+                "base_url": "https://left.example",
+                "graphql_endpoint": "/v1/graphql",
+                "bearer_token": "left-token",
+            }
+        )
+
+        with patch("web_app.GhostwriterApi") as api_class:
+            api_class.return_value.find_restore_candidates.return_value = [
+                {
+                    "id": 99,
+                    "title": "Existing finding",
+                    "finding_type": "Web",
+                    "severity": "Medium",
+                    "match_reason": "same original Ghostwriter ID",
+                }
+            ]
+            response = self.client.post("/api-backups/left/restore-existing.json/0/restore", data=self.with_csrf())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Finding already exists", response.data)
+        self.assertIn(b"Replace existing finding", response.data)
+        self.assertIn(b"Add as duplicate", response.data)
+        self.assertIn(b"Do not restore", response.data)
+        api_class.return_value.restore_backup_record.assert_not_called()
+
+    def test_backup_restore_replace_rechecks_candidate_before_delete(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "replace-existing.json"
+        backup_path.write_text(
+            json.dumps(
+                {
+                    "server_side": "left",
+                    "server_name": "Original backup name",
+                    "graphql_url": "https://left.example/v1/graphql",
+                    "created_at": "20260705T000000Z",
+                    "record_count": 1,
+                    "raw_records": [{"record": {"id": 99}, "tags": []}],
+                    "normalised_records": [record(title="Existing finding")],
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = get_config()
+        config["ghostwriter_api"]["backup_dir"] = str(backup_root)
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "YGHT Ghostwriter",
+                "base_url": "https://left.example",
+                "graphql_endpoint": "/v1/graphql",
+                "bearer_token": "left-token",
+            }
+        )
+
+        with patch("web_app.GhostwriterApi") as api_class:
+            api_class.return_value.find_restore_candidates.return_value = [
+                {
+                    "id": 99,
+                    "title": "Existing finding",
+                    "finding_type": "Web",
+                    "severity": "Medium",
+                    "match_reason": "same original Ghostwriter ID",
+                }
+            ]
+            api_class.return_value.restore_backup_record.return_value = 1234
+            response = self.client.post(
+                "/api-backups/left/replace-existing.json/0/restore",
+                data=self.with_csrf({"restore_action": "replace", "existing_id": "99"}),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"The selected Finding Template was replaced on YGHT Ghostwriter.", response.data)
+        api_class.return_value.restore_backup_record.assert_called_once()
+        self.assertEqual(api_class.return_value.restore_backup_record.call_args.kwargs["replace_existing_id"], 99)
 
     def test_backup_restore_rejects_mismatched_configured_target(self):
         backup_root = Path(self.tmp_dir.name) / "backups"

@@ -97,6 +97,30 @@ class FakeGraphQLClient:
                     }
                 ]
             }
+        if "FetchFindings" in query:
+            if variables.get("offset", 0) > 0:
+                return {"finding": []}
+            return {
+                "finding": [
+                    {
+                        "id": 99,
+                        "title": "Cross-site scripting",
+                        "cvssScore": 5.0,
+                        "cvssVector": "",
+                        "description": "Existing description",
+                        "impact": "",
+                        "mitigation": "",
+                        "replication_steps": "",
+                        "hostDetectionTechniques": "",
+                        "networkDetectionTechniques": "",
+                        "references": "",
+                        "findingGuidance": "",
+                        "extraFields": {},
+                        "severity": {"severity": "Medium"},
+                        "type": {"findingType": "Web"},
+                    }
+                ]
+            }
         if "FindingIds" in query:
             return {"finding": [{"id": 99}]}
         if "FindingLookups" in query:
@@ -396,6 +420,33 @@ class GhostwriterApiTests(unittest.TestCase):
 
             with self.assertRaisesRegex(GhostwriterApiError, "raw and normalised record counts"):
                 verify_backup(path)
+
+    def test_restore_candidates_match_original_id_or_title_and_type(self):
+        fake_client = FakeGraphQLClient()
+        api = GhostwriterApi(server_config(), client=fake_client)
+        backup_record = {
+            "raw_record": {"record": {"id": 42}},
+            "normalised_record": finding_record(id="42", title="Cross-site scripting", finding_type="Web"),
+        }
+
+        candidates = api.find_restore_candidates(backup_record)
+
+        self.assertEqual(candidates[0]["id"], 99)
+        self.assertIn("same title and finding type", candidates[0]["match_reason"])
+
+    def test_restore_backup_record_can_replace_existing_finding(self):
+        fake_client = FakeGraphQLClient()
+        api = GhostwriterApi(server_config(), client=fake_client)
+
+        created_id = api.restore_backup_record(
+            {"normalised_record": finding_record(title="Replacement finding")},
+            replace_existing_id=99,
+        )
+
+        self.assertEqual(created_id, 101)
+        self.assertEqual(fake_client.deleted_ids, [99])
+        self.assertEqual(len(fake_client.created_objects), 1)
+        self.assertEqual(fake_client.tag_sets, [(101, ["web", "xss"])])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Finding already exists</h1>
+<section class="panel">
+  <p>{{ server_name }} already appears to contain a matching Finding Template.</p>
+  <dl>
+    <dt>Backup finding</dt><dd>{{ record.title }}</dd>
+    <dt>Type</dt><dd>{{ record.finding_type }}</dd>
+    <dt>Severity</dt><dd>{{ record.severity }}</dd>
+  </dl>
+</section>
+<section class="panel">
+  <h2>Matching findings</h2>
+  <table class="record-table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Title</th>
+        <th>Type</th>
+        <th>Severity</th>
+        <th>Match reason</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for candidate in candidates %}
+      <tr>
+        <td>{{ candidate.id }}</td>
+        <td>{{ candidate.title }}</td>
+        <td>{{ candidate.finding_type }}</td>
+        <td>{{ candidate.severity }}</td>
+        <td>{{ candidate.match_reason }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="panel">
+  <h2>Restore action</h2>
+  <div class="actions">
+    <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, index=index) }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="restore_action" value="replace">
+      <label for="existing_id">Finding to replace</label>
+      <select id="existing_id" name="existing_id">
+        {% for candidate in candidates %}
+        <option value="{{ candidate.id }}">{{ candidate.id }} - {{ candidate.title }}</option>
+        {% endfor %}
+      </select>
+      <button class="danger" type="submit">Replace existing finding</button>
+    </form>
+    <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, index=index) }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="restore_action" value="add">
+      <button type="submit">Add as duplicate</button>
+    </form>
+    <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, index=index) }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="restore_action" value="skip">
+      <button class="secondary" type="submit">Do not restore</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

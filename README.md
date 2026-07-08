@@ -289,8 +289,12 @@ downloads the full backup JSON, shows normalised records, and can restore a
 selected record to the currently configured matching Ghostwriter server. The
 downloaded JSON includes both `raw_records` and `normalised_records`, so the full
 original dataset remains available even if the per-record restore workflow is
-not sufficient. Restore refuses to run if the backup's recorded GraphQL URL does
-not match the current server configuration.
+not sufficient. Before restoring a single record, GhostMerge checks the current
+server for a matching Finding Template by original Ghostwriter ID or by exact
+title and finding type. If a match is found, the web UI asks whether to replace
+the existing finding, add the backup record as a duplicate, or skip the restore.
+Restore refuses to run if the backup's recorded GraphQL URL does not match the
+current server configuration.
 
 ### Preflight requirements
 

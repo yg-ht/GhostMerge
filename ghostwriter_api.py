@@ -384,12 +384,51 @@ class GhostwriterApi:
         """
         self.client.execute(mutation, {"id": finding_id, "tags": tags})
 
-    def restore_backup_record(self, backup_record: dict[str, Any]) -> int:
+    def restore_backup_record(self, backup_record: dict[str, Any], replace_existing_id: Optional[int] = None) -> int:
+        if replace_existing_id is not None:
+            self.delete_finding(int(replace_existing_id))
         lookups = self.fetch_lookup_ids()
         record = backup_record.get("normalised_record") or backup_record
         created_id = self.create_finding(record, lookups)
         self.set_tags(created_id, _split_tags(record.get("tags")))
         return created_id
+
+    def find_restore_candidates(self, backup_record: dict[str, Any]) -> list[dict[str, Any]]:
+        record = backup_record.get("normalised_record") or backup_record
+        raw_record = (backup_record.get("raw_record") or {}).get("record") or {}
+        original_id = _optional_int(raw_record.get("id") or record.get("id"))
+        title = str(record.get("title") or "").strip()
+        finding_type = str(record.get("finding_type") or "").strip()
+        candidates = []
+        seen_ids = set()
+        for existing in self.fetch_findings():
+            existing_id = _optional_int(existing.get("id"))
+            if existing_id is None or existing_id in seen_ids:
+                continue
+            id_matches = original_id is not None and existing_id == original_id
+            title_type_matches = (
+                title
+                and finding_type
+                and str(existing.get("title") or "").strip() == title
+                and str(existing.get("finding_type") or "").strip() == finding_type
+            )
+            if id_matches or title_type_matches:
+                reasons = []
+                if id_matches:
+                    reasons.append("same original Ghostwriter ID")
+                if title_type_matches:
+                    reasons.append("same title and finding type")
+                candidates.append(
+                    {
+                        "id": existing_id,
+                        "title": existing.get("title") or "",
+                        "finding_type": existing.get("finding_type") or "",
+                        "severity": existing.get("severity") or "",
+                        "match_reason": ", ".join(reasons),
+                    }
+                )
+                seen_ids.add(existing_id)
+        return candidates
 
     def _api_record_to_ghostmerge(self, record: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -558,6 +597,15 @@ def _optional_float(value: Any) -> Optional[float]:
     if number < 0.0 or number > 10.0:
         raise GhostwriterApiError("cvss_score must be between 0.0 and 10.0.")
     return number
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _extra_fields(value: Any, last_synced_at: Optional[str] = None) -> dict[str, Any]:
