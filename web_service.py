@@ -5,6 +5,7 @@ import difflib
 import json
 import uuid
 from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -96,6 +97,7 @@ class PreviousJobItem:
     phase: str
     matches: int
     completed_matches: int
+    updated_at: str
     has_left_output: bool
     has_right_output: bool
     sync_results: dict[str, Any] = field(default_factory=dict)
@@ -449,6 +451,7 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
     jobs = []
     for job_path in sorted(jobs_dir.glob("*/job.json"), key=lambda path: path.stat().st_mtime, reverse=True):
         job_dir = job_path.parent
+        updated_at = _human_file_mtime(job_path)
         try:
             job = job_from_dict(json.loads(job_path.read_text(encoding="utf-8")))
         except Exception as exc:
@@ -458,6 +461,7 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
                     phase="error",
                     matches=0,
                     completed_matches=0,
+                    updated_at=updated_at,
                     has_left_output=(job_dir / "left.json").exists(),
                     has_right_output=(job_dir / "right.json").exists(),
                     error=f"Job state could not be read: {exc}",
@@ -471,6 +475,7 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
                 phase=str(progress["phase"]),
                 matches=int(progress["total_matches"]),
                 completed_matches=min(int(progress["completed_matches"]), int(progress["total_matches"])),
+                updated_at=updated_at,
                 has_left_output=(job_dir / "left.json").exists(),
                 has_right_output=(job_dir / "right.json").exists(),
                 sync_results=job.sync_results,
@@ -669,6 +674,10 @@ def _winners_from_state(winners: dict[str, Any]) -> dict[str, Any]:
         else:
             restored[key] = value
     return restored
+
+
+def _human_file_mtime(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _job_dir(jobs_dir: Path, job_id: str) -> Path:

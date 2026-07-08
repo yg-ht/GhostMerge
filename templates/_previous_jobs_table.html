@@ -2,6 +2,7 @@
   <thead>
     <tr>
       <th>Job</th>
+      <th>Last updated</th>
       <th>Phase</th>
       <th>Review progress</th>
       <th>Actions</th>
@@ -11,6 +12,7 @@
     {% for previous in previous_jobs %}
     <tr>
       <td>{{ previous.job_id }}</td>
+      <td>{{ previous.updated_at }}</td>
       <td>{{ previous.phase }}</td>
       <td>
         {% if previous.error %}

@@ -7,6 +7,7 @@ import secrets
 import shutil
 import threading
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -505,6 +506,10 @@ def _positive_int_config(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _human_file_mtime(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
 def _normalise_reverse_proxy_prefix(raw_prefix) -> str:
     prefix = str(raw_prefix or "").strip()
     if not prefix or prefix == "/":
@@ -950,6 +955,7 @@ def _list_api_source_checks(jobs_dir: Path) -> list[dict[str, Any]]:
                 "message": f"API source check state could not be read: {exc}",
             }
         state.setdefault("check_id", check_id)
+        state["updated_at"] = _human_file_mtime(path)
         checks.append(_operation_state_with_liveness(state, "API source check", _ACTIVE_API_SOURCE_CHECKS))
     return checks
 
@@ -1030,6 +1036,7 @@ def _list_api_imports(jobs_dir: Path) -> list[dict[str, Any]]:
                 "message": f"API import state could not be read: {exc}",
             }
         state.setdefault("import_id", import_id)
+        state["updated_at"] = _human_file_mtime(path)
         imports.append(_operation_state_with_liveness(state, "API import", _ACTIVE_API_IMPORTS))
     return imports
 

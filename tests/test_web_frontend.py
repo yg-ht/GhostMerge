@@ -363,6 +363,7 @@ class FlaskRouteTests(unittest.TestCase):
         get_next_conflict(job)
         job.sync_results["left"] = {"status": "running", "message": "Creating reviewed findings"}
         save_job(job, jobs_dir)
+        os.utime(jobs_dir / "homejob123" / "job.json", (1700000000, 1700000000))
 
         response = self.client.get("/")
 
@@ -378,6 +379,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b">Home<", response.data)
         self.assertNotIn(b"New merge", response.data)
         self.assertIn(b"homejob123", response.data)
+        self.assertIn(b"Last updated", response.data)
+        self.assertIn(b"2023-11-14 22:13:20 UTC", response.data)
         self.assertIn(b"Matched pairs reviewed", response.data)
         self.assertIn(b"Left sync status", response.data)
         self.assertIn(b"/jobs/homejob123/sync/left/status", response.data)
@@ -437,11 +440,14 @@ class FlaskRouteTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        os.utime(checks_dir / "check123.json", (1700000100, 1700000100))
 
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"API source checks", response.data)
+        self.assertIn(b"Last updated", response.data)
+        self.assertIn(b"2023-11-14 22:15:00 UTC", response.data)
         self.assertIn(b"YGHT Ghostwriter", response.data)
         self.assertIn(b"worker process is no longer active", response.data)
         self.assertIn(b"/api-sources/checks/check123/status", response.data)
@@ -530,11 +536,14 @@ class FlaskRouteTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        os.utime(imports_dir / "import123.json", (1700000200, 1700000200))
 
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"API imports", response.data)
+        self.assertIn(b"Last updated", response.data)
+        self.assertIn(b"2023-11-14 22:16:40 UTC", response.data)
         self.assertIn(b"worker process is no longer active", response.data)
         self.assertIn(b"/imports/import123/status", response.data)
 

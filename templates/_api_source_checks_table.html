@@ -2,6 +2,7 @@
   <thead>
     <tr>
       <th>Check</th>
+      <th>Last updated</th>
       <th>Source</th>
       <th>Status</th>
       <th>Message</th>
@@ -12,6 +13,7 @@
     {% for check in api_source_checks %}
     <tr>
       <td>{{ check.check_id }}</td>
+      <td>{{ check.updated_at }}</td>
       <td>{{ check.server_name|default(check.side|default("Ghostwriter")) }}</td>
       <td>{{ check.status|default("queued") }}</td>
       <td>{{ check.message|default("Queued") }}</td>
