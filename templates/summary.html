@@ -10,7 +10,12 @@
     <dt>Current phase</dt><dd>{{ summary.phase }}</dd>
     <dt>Completed matches</dt><dd>{{ summary.completed_matches }}</dd>
   </dl>
-  <p><a class="button" href="{{ url_for('conflicts', job_id=summary.job_id) }}">Resume review</a></p>
+  <div class="actions">
+    <a class="button" href="{{ url_for('conflicts', job_id=summary.job_id) }}">Resume review</a>
+    {% with job_id=summary.job_id %}
+    {% include "_abandon_merge_form.html" %}
+    {% endwith %}
+  </div>
   {% if summary.sync_results %}
   <div class="actions">
     {% for sync_side, sync_state in summary.sync_results.items() %}

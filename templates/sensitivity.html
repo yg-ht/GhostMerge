@@ -28,4 +28,7 @@
   <textarea id="custom_value" name="custom_value">{{ item.offered or "" }}</textarea>
   <p><button class="secondary" type="submit" name="action" value="custom">Apply custom replacement</button></p>
 </form>
+{% with job_id=job.job_id %}
+{% include "_abandon_merge_form.html" %}
+{% endwith %}
 {% endblock %}

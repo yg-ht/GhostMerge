@@ -2,6 +2,9 @@
 {% block content %}
 <h1>Merge finding libraries</h1>
 {% if error %}<div class="panel error">{{ error }}</div>{% endif %}
+{% if abandoned_job %}
+<div class="panel">Abandoned merge job {{ abandoned_job }}.</div>
+{% endif %}
 {% if api_check %}
 <div class="panel">
   <p>Fetched and backed up {{ api_check.record_count }} findings from {{ api_check.server_name }}.</p>

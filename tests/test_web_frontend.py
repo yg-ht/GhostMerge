@@ -594,6 +594,67 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(left_download.get_json()[0]["description"], "Right detail")
         self.assertEqual(right_download.get_json()[0]["description"], "Right detail")
 
+    def test_record_preview_does_not_mark_id_only_difference_for_review(self):
+        left = json.dumps([record(id="1", description="Same detail")]).encode("utf-8")
+        right = json.dumps([record(id="99", description="Same detail")]).encode("utf-8")
+
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+
+        preview = self.client.get(f"/jobs/{job_id}/conflicts")
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn(b"Record preview", preview.data)
+        self.assertIn(b"<th class=\"field-cell\">id</th>", preview.data)
+        self.assertNotIn(b"changed selectable", preview.data)
+        self.assertNotIn(b"Accept offered id", preview.data)
+        self.assertNotIn(b"diff-line removed", preview.data)
+        self.assertNotIn(b"diff-line added", preview.data)
+
+    def test_abandon_merge_deletes_local_job_and_returns_home(self):
+        job = create_merge_job(
+            [record(description="Left detail")],
+            [record(id="2", description="Right detail")],
+            job_id="abandon123",
+        )
+        save_job(job, Path(self.tmp_dir.name))
+
+        preview = self.client.get("/jobs/abandon123/conflicts")
+        response = self.client.post(
+            "/jobs/abandon123/abandon",
+            data=self.with_csrf(),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn(b"Abandon merge", preview.data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Abandoned merge job abandon123.", response.data)
+        self.assertFalse((Path(self.tmp_dir.name) / "abandon123").exists())
+        self.assertEqual(self.client.get("/jobs/abandon123/summary").status_code, 404)
+
+    def test_abandon_merge_rejects_running_live_sync(self):
+        job = create_merge_job([record()], [], job_id="syncabandon123")
+        job.sync_results["left"] = {"status": "running"}
+        save_job(job, Path(self.tmp_dir.name))
+
+        response = self.client.post(
+            "/jobs/syncabandon123/abandon",
+            data=self.with_csrf(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"cannot be abandoned while live API sync is running", response.data)
+        self.assertTrue((Path(self.tmp_dir.name) / "syncabandon123").exists())
+
     def test_preview_can_accept_offered_values_for_current_match(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")
         right = json.dumps([record(id="2", description="Right detail")]).encode("utf-8")

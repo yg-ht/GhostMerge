@@ -4,6 +4,7 @@ import json
 import ipaddress
 import os
 import secrets
+import shutil
 import threading
 import uuid
 from pathlib import Path
@@ -240,6 +241,16 @@ def create_app(test_config: dict | None = None) -> Flask:
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
+    @app.post("/jobs/<job_id>/abandon")
+    def abandon_job(job_id: str):
+        try:
+            job = load_job(jobs_dir, job_id)
+            _require_no_running_live_sync(jobs_dir, job)
+            _delete_job_directory(jobs_dir, job.job_id)
+            return redirect(url_for("index", abandoned=job.job_id))
+        except WebMergeError as exc:
+            return render_template("error.html", error=str(exc)), 400
+
     @app.get("/jobs/<job_id>/sensitivity")
     def sensitivity(job_id: str):
         try:
@@ -468,6 +479,7 @@ def _home_context(jobs_dir: Path) -> dict[str, Any]:
         "running_api_source_checks": _running_api_source_checks_by_side(jobs_dir),
         "api_servers": configured_server_summary(CONFIG),
         "backups": list_backups(backup_root_from_config(CONFIG)),
+        "abandoned_job": request.args.get("abandoned"),
     }
 
 
@@ -1128,6 +1140,20 @@ def _require_sync_not_active(job, side: str) -> None:
         raise WebMergeError(f"{side.title()} live API sync is already running.")
     if status == "done":
         raise WebMergeError(f"{side.title()} live API sync has already completed.")
+
+
+def _require_no_running_live_sync(jobs_dir: Path, job) -> None:
+    for side in ("left", "right"):
+        status = (job.sync_results.get(side) or {}).get("status")
+        if status in RUNNING_OPERATION_STATUSES or _sync_lock_path(jobs_dir, job.job_id, side).exists():
+            raise WebMergeError("This merge job cannot be abandoned while live API sync is running.")
+
+
+def _delete_job_directory(jobs_dir: Path, job_id: str) -> None:
+    job_dir = jobs_dir / job_id
+    if not job_id.isalnum() or not job_dir.exists():
+        raise WebMergeError("Job not found.")
+    shutil.rmtree(job_dir)
 
 
 def _sync_lock_path(jobs_dir: Path, job_id: str, side: str) -> Path:
