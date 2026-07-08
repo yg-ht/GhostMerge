@@ -108,6 +108,15 @@
         "class": "language-markup"
       },
       "replacement_tag": "pre"
+    },
+    {
+      "name": "normalise-code-spellcheck",
+      "action": "set_attrs",
+      "tag": "code",
+      "attrs": {},
+      "replacement_attrs": {
+        "spellcheck": "false"
+      }
     }
   ],
   "auto_accept_single_sided_content": true,

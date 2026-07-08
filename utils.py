@@ -589,7 +589,7 @@ def _iter_formatting_cleanup_rules() -> list[dict[str, Any]]:
         attrs = rule.get("attrs", {})
         replacement_attrs = rule.get("replacement_attrs", {})
 
-        if action not in {"replace_tag", "unwrap"}:
+        if action not in {"replace_tag", "unwrap", "set_attrs"}:
             log("WARN", f"Formatting cleanup rule {index} has an invalid action; skipping", prefix="UTILS")
             continue
 
@@ -658,6 +658,16 @@ def apply_formatting_cleanup(input_string: str) -> str:
                 replacements.append((match.start(), match.end(), ""))
                 if closing_span is not None:
                     replacements.append((closing_span[0], closing_span[1], ""))
+            elif rule["action"] == "set_attrs":
+                merged_attrs = dict(attrs)
+                merged_attrs.update(rule["replacement_attrs"])
+                replacements.append(
+                    (
+                        match.start(),
+                        match.end(),
+                        _format_html_opening_tag(rule["tag"], merged_attrs),
+                    )
+                )
             else:
                 replacements.append(
                     (
