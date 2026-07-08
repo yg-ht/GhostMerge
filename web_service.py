@@ -50,6 +50,7 @@ class SensitivityReviewItem:
     field_value: Any
     sensitive_term: str
     offered: Optional[str]
+    hit_index: int
     highlighted_parts: list[dict[str, Any]]
 
 
@@ -74,6 +75,7 @@ class MergeJob:
     sensitivity_side: str = "left"
     sensitivity_record_index: int = 0
     sensitivity_field_index: int = 0
+    sensitivity_hit_index: int = 0
     final_left: Optional[list[Finding]] = None
     final_right: Optional[list[Finding]] = None
     preview_acknowledged: bool = False
@@ -328,12 +330,13 @@ def get_next_sensitivity_item(
             record = records[job.sensitivity_record_index]
             while job.sensitivity_field_index < len(field_defs):
                 field_def = field_defs[job.sensitivity_field_index]
-                job.sensitivity_field_index += 1
                 if field_def.name == "id" or not record.get(field_def.name):
+                    job.sensitivity_hit_index = 0
+                    job.sensitivity_field_index += 1
                     continue
                 hits = check_for_sensitivities(record.get(field_def.name), terms)
-                if hits:
-                    sensitive_term, offered = hits[0]
+                if hits and job.sensitivity_hit_index < len(hits):
+                    sensitive_term, offered = hits[job.sensitivity_hit_index]
                     return SensitivityReviewItem(
                         side=job.sensitivity_side,
                         record_index=job.sensitivity_record_index,
@@ -341,15 +344,20 @@ def get_next_sensitivity_item(
                         field_value=record.get(field_def.name),
                         sensitive_term=sensitive_term,
                         offered=offered,
+                        hit_index=job.sensitivity_hit_index,
                         highlighted_parts=_highlight_term_parts(record.get(field_def.name), sensitive_term),
                     )
+                job.sensitivity_hit_index = 0
+                job.sensitivity_field_index += 1
             job.sensitivity_field_index = 0
+            job.sensitivity_hit_index = 0
             job.sensitivity_record_index += 1
 
         if job.sensitivity_side == "left":
             job.sensitivity_side = "right"
             job.sensitivity_record_index = 0
             job.sensitivity_field_index = 0
+            job.sensitivity_hit_index = 0
         else:
             break
 
@@ -373,6 +381,7 @@ def apply_sensitivity_decision(job: MergeJob, decision: dict[str, Any]) -> None:
 
     record = records[record_index]
     if action == "keep":
+        job.sensitivity_hit_index += 1
         return
     if action == "offered":
         replacement = decision.get("offered")
@@ -382,6 +391,7 @@ def apply_sensitivity_decision(job: MergeJob, decision: dict[str, Any]) -> None:
         raise WebMergeError("Unsupported sensitivity decision.")
 
     record.set(field_name, apply_sensitive_replacement(record.get(field_name), sensitive_term, replacement))
+    job.sensitivity_hit_index = 0
 
 
 def finalise_job(job: MergeJob) -> MergeResult:
@@ -553,6 +563,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         sensitivity_side=data["sensitivity_side"],
         sensitivity_record_index=data["sensitivity_record_index"],
         sensitivity_field_index=data["sensitivity_field_index"],
+        sensitivity_hit_index=data.get("sensitivity_hit_index", 0),
         final_left=None if data["final_left"] is None else [_finding_from_state(item) for item in data["final_left"]],
         final_right=None if data["final_right"] is None else [_finding_from_state(item) for item in data["final_right"]],
         preview_acknowledged=data.get("preview_acknowledged", False),

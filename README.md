@@ -263,6 +263,14 @@ deletion, or reload. If deletion or reload fails after the backup has been
 written, use the backup browser to download the full original dataset, inspect
 the backup, or restore individual records.
 
+### Sync metadata
+
+When GhostMerge writes Finding Templates through live API sync, it records the
+write timestamp in `extra_fields.ghostmerge_last_synced_at`. GhostMerge is
+authoritative for this field. The value is a UTC ISO-8601 timestamp in
+`YYYY-MM-DDTHH:MM:SSZ` format. Existing `extra_fields` values are preserved, and
+file import/export keeps the field as ordinary `extra_fields` data.
+
 ### API backups and restore
 
 API backups are written under `ghostwriter_api.backup_dir`, which defaults to

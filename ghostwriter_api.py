@@ -36,6 +36,7 @@ FINDING_FIELDS = (
 
 SYNC_PREFLIGHT_QUERY_FIELDS = {"finding", "findingSeverity", "findingType", "tags"}
 SYNC_PREFLIGHT_MUTATION_FIELDS = {"delete_finding_by_pk", "insert_finding_one", "setTags"}
+GHOSTMERGE_LAST_SYNCED_AT_FIELD = "ghostmerge_last_synced_at"
 
 
 class GhostwriterApiError(RuntimeError):
@@ -299,7 +300,8 @@ class GhostwriterApi:
     def replace_all_findings(self, records: list[dict[str, Any]], backup_root: Path) -> Path:
         self.preflight_sync_permissions()
         lookups = self.fetch_lookup_ids()
-        prepared_records = self.prepare_records_for_reload(records, lookups)
+        sync_timestamp = _utc_timestamp()
+        prepared_records = self.prepare_records_for_reload(records, lookups, last_synced_at=sync_timestamp)
         backup_path = self.create_backup(backup_root)
         existing_ids = self.fetch_finding_ids()
         for index, finding_id in enumerate(existing_ids, start=1):
@@ -316,11 +318,12 @@ class GhostwriterApi:
         self,
         records: list[dict[str, Any]],
         lookups: dict[str, dict[str, int]],
+        last_synced_at: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         prepared_records = []
         for index, record in enumerate(records, start=1):
             try:
-                api_record = ghostmerge_record_to_api_input(record, lookups)
+                api_record = ghostmerge_record_to_api_input(record, lookups, last_synced_at=last_synced_at)
                 tags = _split_tags(record.get("tags"))
             except Exception as exc:
                 title = record.get("title") or f"record {index}"
@@ -409,7 +412,11 @@ class GhostwriterApi:
         }
 
 
-def ghostmerge_record_to_api_input(record: dict[str, Any], lookups: dict[str, dict[str, int]]) -> dict[str, Any]:
+def ghostmerge_record_to_api_input(
+    record: dict[str, Any],
+    lookups: dict[str, dict[str, int]],
+    last_synced_at: Optional[str] = None,
+) -> dict[str, Any]:
     severity = str(record.get("severity") or "")
     finding_type = str(record.get("finding_type") or "")
     try:
@@ -431,7 +438,7 @@ def ghostmerge_record_to_api_input(record: dict[str, Any], lookups: dict[str, di
         "networkDetectionTechniques": record.get("network_detection_techniques") or "",
         "references": record.get("references") or "",
         "findingGuidance": record.get("finding_guidance") or "",
-        "extraFields": _extra_fields(record.get("extra_fields")),
+        "extraFields": _extra_fields(record.get("extra_fields"), last_synced_at=last_synced_at),
     }
 
 
@@ -553,17 +560,25 @@ def _optional_float(value: Any) -> Optional[float]:
     return number
 
 
-def _extra_fields(value: Any) -> dict[str, Any]:
+def _extra_fields(value: Any, last_synced_at: Optional[str] = None) -> dict[str, Any]:
     if value in (None, ""):
-        return {}
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
+        fields = {}
+    elif isinstance(value, dict):
+        fields = dict(value)
+    elif isinstance(value, str):
         parsed = json.loads(value)
         if not isinstance(parsed, dict):
             raise GhostwriterApiError("extra_fields must be a JSON object.")
-        return parsed
-    raise GhostwriterApiError("extra_fields must be a JSON object.")
+        fields = parsed
+    else:
+        raise GhostwriterApiError("extra_fields must be a JSON object.")
+    if last_synced_at:
+        fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD] = last_synced_at
+    return fields
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _split_tags(value: Any) -> list[str]:

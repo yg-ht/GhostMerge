@@ -233,6 +233,53 @@ class WebServiceTests(unittest.TestCase):
         )
         self.assertIn("[CLIENT]", job.merged_left[0].description)
 
+    def test_sensitivity_review_handles_multiple_terms_in_same_field(self):
+        configure_for_web_tests(sensitivity_check_enabled=True)
+        job = create_merge_job([record(description="ACME and secret detail")], [], job_id="sens456")
+        self.assertIsNone(get_next_conflict(job))
+
+        first = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+        self.assertIsNotNone(first)
+        apply_sensitivity_decision(
+            job,
+            {
+                "side": first.side,
+                "record_index": first.record_index,
+                "field_name": first.field_name,
+                "sensitive_term": first.sensitive_term,
+                "action": "offered",
+                "offered": first.offered,
+            },
+        )
+        second = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+
+        self.assertIsNotNone(second)
+        self.assertEqual(second.field_name, "description")
+        self.assertEqual(second.sensitive_term, "secret")
+
+    def test_sensitivity_review_keep_advances_to_next_term_in_same_field(self):
+        configure_for_web_tests(sensitivity_check_enabled=True)
+        job = create_merge_job([record(description="ACME and secret detail")], [], job_id="sens789")
+        self.assertIsNone(get_next_conflict(job))
+
+        first = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+        self.assertIsNotNone(first)
+        apply_sensitivity_decision(
+            job,
+            {
+                "side": first.side,
+                "record_index": first.record_index,
+                "field_name": first.field_name,
+                "sensitive_term": first.sensitive_term,
+                "action": "keep",
+            },
+        )
+        second = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+
+        self.assertIsNotNone(second)
+        self.assertEqual(second.field_name, "description")
+        self.assertEqual(second.sensitive_term, "secret")
+
 
 class FlaskRouteTests(unittest.TestCase):
     def setUp(self):

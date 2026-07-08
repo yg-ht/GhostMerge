@@ -63,7 +63,7 @@
 - [ ] Integrate a CVSS checker to check the severity levels match the score / vector
 
 ## Web Frontend
-- [ ] Fix web sensitivity review so multiple sensitive terms in the same field are all reviewed.
+- [x] Fix web sensitivity review so multiple sensitive terms in the same field are all reviewed.
       `get_next_sensitivity_item()` currently returns only the first hit in a field after advancing
       `sensitivity_field_index`; after the user handles that hit, review resumes at the next field,
       so remaining hits in the same value can be skipped and left in downloaded output.
@@ -74,7 +74,7 @@
       when there are no unresolved conflict review items.
 
 ## Ghostwriter API Sync
-- [ ] Define a standard `extra_fields` timestamp for the last update to each Finding Template.
+- [x] Define a standard `extra_fields` timestamp for the last update to each Finding Template.
       Decide the exact key name, timestamp format, and whether GhostMerge or Ghostwriter should be
       authoritative. Once agreed, populate that field during API sync and preserve it through file
       import/export workflows.

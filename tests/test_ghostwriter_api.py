@@ -5,6 +5,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from ghostwriter_api import (
+    GHOSTMERGE_LAST_SYNCED_AT_FIELD,
     GhostwriterApi,
     GhostwriterApiError,
     GhostwriterServerConfig,
@@ -267,8 +268,23 @@ class GhostwriterApiTests(unittest.TestCase):
             self.assertEqual(backup["record_count"], 1)
             self.assertEqual(fake_client.deleted_ids, [99])
             self.assertEqual(len(fake_client.created_objects), 1)
+            extra_fields = fake_client.created_objects[0]["extraFields"]
+            self.assertIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, extra_fields)
+            self.assertTrue(extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD].endswith("Z"))
+            self.assertIn("T", extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD])
             self.assertEqual(fake_client.tag_sets, [(101, ["web", "xss"])])
             self.assertEqual(list_backups(Path(tmp_dir))[0]["record_count"], 1)
+
+    def test_replace_all_preserves_extra_fields_when_adding_sync_timestamp(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_client = FakeGraphQLClient()
+            api = GhostwriterApi(server_config(), client=fake_client)
+
+            api.replace_all_findings([finding_record(extra_fields={"owner": "red-team"})], Path(tmp_dir))
+
+            extra_fields = fake_client.created_objects[0]["extraFields"]
+            self.assertEqual(extra_fields["owner"], "red-team")
+            self.assertIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, extra_fields)
 
     def test_preflight_rejects_missing_sync_capabilities_before_writes(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
