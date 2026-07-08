@@ -625,6 +625,39 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertNotIn(b"diff-line removed", preview.data)
         self.assertNotIn(b"diff-line added", preview.data)
 
+    def test_id_only_match_does_not_skip_next_record_preview(self):
+        left = json.dumps(
+            [
+                record(id="1", title="First finding", description="Same detail"),
+                record(id="2", title="Second finding", description="Left detail"),
+            ]
+        ).encode("utf-8")
+        right = json.dumps(
+            [
+                record(id="99", title="First finding", description="Same detail"),
+                record(id="100", title="Second finding", description="Right detail"),
+            ]
+        ).encode("utf-8")
+
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+
+        response = self.client.get(f"/jobs/{job_id}/conflicts", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Record preview", response.data)
+        self.assertIn(b"Second finding", response.data)
+        self.assertIn(b"Highlighted difference for description", response.data)
+        self.assertNotIn(b"Conflict review", response.data)
+
     def test_abandon_merge_deletes_local_job_and_returns_home(self):
         job = create_merge_job(
             [record(description="Left detail")],

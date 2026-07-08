@@ -167,7 +167,9 @@
         font-size: 20px;
       }
       .wide-main {
-        max-width: 1680px;
+        box-sizing: border-box;
+        width: calc(100vw - 48px);
+        max-width: none;
       }
       .record-table {
         width: 100%;
@@ -177,14 +179,14 @@
         overflow-x: auto;
       }
       .record-preview-table {
-        min-width: 1480px;
+        min-width: max(1600px, 100%);
         table-layout: fixed;
       }
       .record-preview-table .select-cell {
-        width: 56px;
+        width: 4%;
       }
       .record-preview-table .field-cell {
-        width: 150px;
+        width: 12%;
       }
       .record-preview-table .value-cell {
         width: 28%;
@@ -411,6 +413,9 @@
         }
         main {
           padding: 18px;
+        }
+        .wide-main {
+          width: calc(100vw - 36px);
         }
         dl {
           grid-template-columns: 1fr;
