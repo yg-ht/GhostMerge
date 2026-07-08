@@ -312,6 +312,71 @@ def apply_configured_normalisation(value: Any) -> Any:
         }
     return value
 
+def apply_extra_fields_key_migrations(extra_fields: Any, template_type: str) -> Any:
+    """Apply configured key migrations to a template's extra_fields dictionary.
+
+    This deliberately acts only on the top-level keys of the `extra_fields`
+    object. Field names elsewhere in a Finding or Observation may legitimately
+    contain the same text and must not be rewritten by a broad replacement.
+    """
+    if not CONFIG.get("extra_fields_key_migration_enabled", False):
+        return extra_fields
+
+    if not isinstance(extra_fields, dict):
+        return extra_fields
+
+    migrations = CONFIG.get("extra_fields_key_migrations", [])
+    if not isinstance(migrations, list):
+        log("WARN", "extra_fields_key_migrations must be a list; skipping key migration", prefix="UTILS")
+        return extra_fields
+
+    migrated = dict(extra_fields)
+    template_type_key = str(template_type).strip().lower()
+
+    for index, rule in enumerate(migrations, start=1):
+        if not isinstance(rule, dict):
+            log("WARN", f"extra_fields key migration rule {index} is not an object; skipping", prefix="UTILS")
+            continue
+
+        rule_template_type = str(rule.get("template_type") or "").strip().lower()
+        if rule_template_type and rule_template_type != template_type_key:
+            continue
+
+        prefix = rule.get("prefix")
+        collision = str(rule.get("collision") or "preserve_existing").strip().lower()
+
+        if not isinstance(prefix, str) or prefix == "":
+            log("WARN", f"extra_fields key migration rule {index} has an invalid prefix; skipping", prefix="UTILS")
+            continue
+
+        if collision not in {"preserve_existing", "prefer_migrated", "keep_both"}:
+            log("WARN", f"extra_fields key migration rule {index} has an invalid collision mode; skipping", prefix="UTILS")
+            continue
+
+        for key in list(migrated.keys()):
+            if not isinstance(key, str) or not key.startswith(prefix):
+                continue
+
+            migrated_key = key[len(prefix):]
+            if migrated_key == "":
+                continue
+
+            if migrated_key not in migrated:
+                migrated[migrated_key] = migrated.pop(key)
+                log("DEBUG", f'Migrated extra_fields key "{key}" to "{migrated_key}"', prefix="UTILS")
+                continue
+
+            if collision == "prefer_migrated":
+                migrated[migrated_key] = migrated.pop(key)
+                log("WARN", f'Migrated extra_fields key "{key}" over existing "{migrated_key}"', prefix="UTILS")
+            elif collision == "preserve_existing":
+                log("WARN", f'Preserved existing extra_fields key "{migrated_key}" over "{key}"', prefix="UTILS")
+                migrated.pop(key, None)
+            else:
+                log("WARN", f'Kept both colliding extra_fields keys "{key}" and "{migrated_key}"', prefix="UTILS")
+
+    return migrated
+
 def normalise_html_tag_spacing(input_string: str) -> str:
     """
     Normalise semantically irrelevant HTML syntax noise without removing content.

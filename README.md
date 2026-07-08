@@ -507,6 +507,36 @@ tags
 extra_fields
 ```
 
+### Extra fields key migration
+
+Finding Template `extra_fields` keys can be migrated during import and API
+normalisation. This is intended for Ghostwriter naming changes where only the
+custom-field key changes, not the value or the rest of the template record.
+
+The default configuration removes the legacy `extra_` prefix from Finding
+Template `extra_fields` keys:
+
+```json
+{
+  "extra_fields_key_migration_enabled": true,
+  "extra_fields_key_migrations": [
+    {
+      "template_type": "finding",
+      "prefix": "extra_",
+      "collision": "preserve_existing"
+    }
+  ]
+}
+```
+
+For example, `extra_compliance_reference` becomes
+`compliance_reference`. The migration is scoped to the top-level
+`extra_fields` keys on Finding Templates; ordinary fields and Observation
+Template `extra_fields` are not changed by the default rule.
+
+When both old and new keys exist, `preserve_existing` keeps the unprefixed key
+and drops the prefixed duplicate.
+
 ### Output files
 
 GhostMerge writes two JSON files:
