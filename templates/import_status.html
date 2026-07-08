@@ -15,10 +15,10 @@
     {% if state.api_complete is defined %}
     <dt>Records fetched</dt>
     <dd>
-      {% if state.api_total|default(0) %}
-      {{ state.api_complete|default(0) }} / {{ state.api_total }}
+      {% if state.api_estimated_total is defined and state.api_estimated_total is not none %}
+      Fetched {{ state.api_complete|default(0) }} records of approx {{ state.api_estimated_total }}
       {% else %}
-      At least {{ state.api_complete|default(0) }}
+      Fetched {{ state.api_complete|default(0) }} records of approx unknown
       {% endif %}
     </dd>
     {% endif %}

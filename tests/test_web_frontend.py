@@ -895,7 +895,54 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"YGHT Ghostwriter", response.data)
         self.assertIn(b"Current API stage", response.data)
         self.assertIn(b"Records fetched", response.data)
-        self.assertIn(b"At least 42", response.data)
+        self.assertIn(b"Fetched 42 records of approx unknown", response.data)
+
+    def test_api_import_status_uses_previous_api_count_as_approximate_total(self):
+        checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
+        checks_dir.mkdir()
+        (checks_dir / "previousleft.json").write_text(
+            json.dumps(
+                {
+                    "check_id": "previousleft",
+                    "side": "left",
+                    "server_name": "YGHT Ghostwriter",
+                    "status": "done",
+                    "stage": "complete",
+                    "message": "Fetched and backed up 150 findings from YGHT Ghostwriter.",
+                    "record_count": 150,
+                    "worker_pid": os.getpid(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        imports_dir = Path(self.tmp_dir.name) / "api_imports"
+        imports_dir.mkdir()
+        (imports_dir / "importestimate123.json").write_text(
+            json.dumps(
+                {
+                    "import_id": "importestimate123",
+                    "status": "running",
+                    "stage": "fetch_left",
+                    "message": "Fetched 42 finding(s) from YGHT Ghostwriter",
+                    "complete": 0,
+                    "total": 1,
+                    "side": "left",
+                    "side_name": "YGHT Ghostwriter",
+                    "api_stage": "fetch",
+                    "api_complete": 42,
+                    "api_total": 0,
+                    "api_estimated_total": 150,
+                    "api_status": "running",
+                    "worker_pid": os.getpid(),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.get("/imports/importestimate123/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Fetched 42 records of approx 150", response.data)
 
     def test_api_import_worker_records_incremental_fetch_progress(self):
         config = get_config()
@@ -909,6 +956,21 @@ class FlaskRouteTests(unittest.TestCase):
         )
         captured_progress_state = {}
         jobs_dir = Path(self.tmp_dir.name)
+        checks_dir = jobs_dir / "api_source_checks"
+        checks_dir.mkdir()
+        (checks_dir / "previousleft.json").write_text(
+            json.dumps(
+                {
+                    "check_id": "previousleft",
+                    "side": "left",
+                    "status": "done",
+                    "stage": "complete",
+                    "record_count": 12,
+                    "worker_pid": os.getpid(),
+                }
+            ),
+            encoding="utf-8",
+        )
 
         class ProgressApi:
             def __init__(self, server, progress):
@@ -946,9 +1008,11 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(captured_progress_state["api_complete"], 7)
         self.assertEqual(captured_progress_state["api_total"], 0)
+        self.assertEqual(captured_progress_state["api_estimated_total"], 12)
         state = json.loads((jobs_dir / "api_imports" / f"{import_id}.json").read_text(encoding="utf-8"))
         self.assertEqual(state["api_complete"], 1)
         self.assertEqual(state["api_total"], 1)
+        self.assertEqual(state["api_estimated_total"], 12)
         self.assertEqual(state["side_name"], "Left Test Ghostwriter")
 
     def test_home_shows_api_fetch_check_for_configured_sources(self):

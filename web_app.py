@@ -761,6 +761,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
         else:
             _server_for_side(side)
     api_sides = [side for side in ("left", "right") if input_sources[side] == "api"]
+    api_estimated_totals = {side: _last_known_api_record_count(jobs_dir, side) for side in api_sides}
     _ACTIVE_API_IMPORTS.add(import_id)
     _save_import_state(
         jobs_dir,
@@ -772,6 +773,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
             "message": "Queued API import.",
             "complete": 0,
             "total": len(api_sides),
+            "api_estimated_totals": api_estimated_totals,
             "input_sources": input_sources,
             "file_records": file_records,
             "job_id": None,
@@ -802,6 +804,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
             state = _load_import_state(jobs_dir, import_id)
             input_sources = state["input_sources"]
             records = dict(state.get("file_records") or {})
+            api_estimated_totals = state.get("api_estimated_totals") or {}
             api_sides = [side for side in ("left", "right") if input_sources[side] == "api"]
             for index, side in enumerate(api_sides, start=1):
                 server = _server_for_side(side)
@@ -822,6 +825,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                             "api_stage": event.stage,
                             "api_complete": event.complete,
                             "api_total": event.total,
+                            "api_estimated_total": api_estimated_totals.get(current_side),
                             "api_status": event.status,
                             "worker_pid": os.getpid(),
                         }
@@ -844,6 +848,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                         "api_stage": "fetch",
                         "api_complete": len(records[side]),
                         "api_total": len(records[side]),
+                        "api_estimated_total": api_estimated_totals.get(side),
                         "api_status": "done",
                         "worker_pid": os.getpid(),
                     }
@@ -960,6 +965,30 @@ def _running_api_source_checks_by_side(jobs_dir: Path) -> dict[str, dict[str, An
 
 def _running_api_source_check_for_side(jobs_dir: Path, side: str) -> Optional[dict[str, Any]]:
     return _running_api_source_checks_by_side(jobs_dir).get(side)
+
+
+def _last_known_api_record_count(jobs_dir: Path, side: str) -> Optional[int]:
+    for state in _list_api_source_checks(jobs_dir):
+        if state.get("side") == side and state.get("status") == "done":
+            count = _optional_positive_int(state.get("record_count"))
+            if count is not None:
+                return count
+
+    for backup in list_backups(backup_root_from_config(CONFIG)):
+        if backup.get("side") == side:
+            count = _optional_positive_int(backup.get("record_count"))
+            if count is not None:
+                return count
+
+    return None
+
+
+def _optional_positive_int(value: Any) -> Optional[int]:
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if count >= 0 else None
 
 
 def _save_import_state(jobs_dir: Path, import_id: str, state: dict) -> None:
