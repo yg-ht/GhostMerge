@@ -31,7 +31,7 @@
     {% if state.status == "done" and state.job_id %}
     <a class="button" href="{{ url_for('summary', job_id=state.job_id) }}">Open merge job</a>
     {% endif %}
-    <a class="button secondary" href="{{ url_for('index') }}">Back to start</a>
+    <a class="button secondary" href="{{ url_for('index') }}">Return to Home</a>
   </div>
 </section>
 {% endblock %}

@@ -19,102 +19,136 @@
     </form>
   </div>
 </section>
-<section class="panel">
-  <h2>Backed-up findings</h2>
-  <label for="backup_finding_filter">Filter findings</label>
-  <input id="backup_finding_filter" type="search" placeholder="Filter by title, severity, type, or detail text" data-backup-finding-filter>
-  <table class="record-table" data-backup-findings-table>
-    <thead>
-      <tr>
-        <th><button class="table-sort" type="button" data-sort-column="title" aria-label="Sort by title">Title</button></th>
-        <th><button class="table-sort" type="button" data-sort-column="severity" aria-label="Sort by severity">Severity</button></th>
-        <th><button class="table-sort" type="button" data-sort-column="type" aria-label="Sort by type">Type</button></th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for record in backup.normalised_records %}
-      {% set record_index = loop.index0 %}
-      <tr class="finding-summary-row" data-title="{{ record.title }}" data-severity="{{ record.severity }}" data-type="{{ record.finding_type }}">
-        <td>{{ record.title }}</td>
-        <td>{{ record.severity }}</td>
-        <td>{{ record.finding_type }}</td>
-        <td>
-          <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, index=record_index) }}">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <button type="submit">Restore this finding</button>
-          </form>
-        </td>
-      </tr>
-      <tr class="finding-detail-row">
-        <td colspan="4">
-          <details class="finding-detail">
-            <summary>View finding detail</summary>
-            <dl>
-              <dt>ID</dt><dd>{{ record.id }}</dd>
-              <dt>Title</dt><dd>{{ record.title }}</dd>
-              <dt>Severity</dt><dd>{{ record.severity }}</dd>
-              <dt>CVSS score</dt><dd>{{ record.cvss_score }}</dd>
-              <dt>CVSS vector</dt><dd>{{ record.cvss_vector }}</dd>
-              <dt>Type</dt><dd>{{ record.finding_type }}</dd>
-              <dt>Tags</dt><dd>{{ record.tags }}</dd>
-              <dt>Description</dt><dd><pre>{{ record.description }}</pre></dd>
-              <dt>Impact</dt><dd><pre>{{ record.impact }}</pre></dd>
-              <dt>Mitigation</dt><dd><pre>{{ record.mitigation }}</pre></dd>
-              <dt>Replication steps</dt><dd><pre>{{ record.replication_steps }}</pre></dd>
-              <dt>Host detection</dt><dd><pre>{{ record.host_detection_techniques }}</pre></dd>
-              <dt>Network detection</dt><dd><pre>{{ record.network_detection_techniques }}</pre></dd>
-              <dt>References</dt><dd><pre>{{ record.references }}</pre></dd>
-              <dt>Finding guidance</dt><dd><pre>{{ record.finding_guidance }}</pre></dd>
-              <dt>Extra fields</dt><dd><pre>{{ record.extra_fields }}</pre></dd>
-            </dl>
-          </details>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
-<section class="panel">
-  <h2>Backed-up observations</h2>
-  <table class="record-table">
-    <thead>
-      <tr>
-        <th>Title</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for record in backup.observations.normalised_records %}
-      {% set record_index = loop.index0 %}
-      <tr>
-        <td>{{ record.title }}</td>
-        <td>
-          <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, template_type='observation', index=record_index) }}">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <button type="submit">Restore this observation</button>
-          </form>
-        </td>
-      </tr>
-      <tr>
-        <td colspan="2">
-          <details class="finding-detail">
-            <summary>View observation detail</summary>
-            <dl>
-              <dt>ID</dt><dd>{{ record.id }}</dd>
-              <dt>Title</dt><dd>{{ record.title }}</dd>
-              <dt>Tags</dt><dd>{{ record.tags }}</dd>
-              <dt>Description</dt><dd><pre>{{ record.description }}</pre></dd>
-              <dt>Extra fields</dt><dd><pre>{{ record.extra_fields }}</pre></dd>
-            </dl>
-          </details>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<section class="panel" data-backup-template-tabs>
+  <div class="actions" role="tablist" aria-label="Backed-up template type">
+    <button id="backup_tab_findings" type="button" role="tab" aria-selected="true" aria-controls="backup_panel_findings" data-backup-tab="findings">
+      Finding Templates ({{ backup.record_count }})
+    </button>
+    <button id="backup_tab_observations" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="backup_panel_observations" data-backup-tab="observations">
+      Observation Templates ({{ backup.observation_count|default(0) }})
+    </button>
+  </div>
+  <div id="backup_panel_findings" role="tabpanel" aria-labelledby="backup_tab_findings" data-backup-tab-panel="findings">
+    <h2>Backed-up findings</h2>
+    <label for="backup_finding_filter">Filter findings</label>
+    <input id="backup_finding_filter" type="search" placeholder="Filter by title, severity, type, or detail text" data-backup-finding-filter>
+    <table class="record-table" data-backup-findings-table>
+      <thead>
+        <tr>
+          <th><button class="table-sort" type="button" data-sort-column="title" aria-label="Sort by title">Title</button></th>
+          <th><button class="table-sort" type="button" data-sort-column="severity" aria-label="Sort by severity">Severity</button></th>
+          <th><button class="table-sort" type="button" data-sort-column="type" aria-label="Sort by type">Type</button></th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in backup.normalised_records %}
+        {% set record_index = loop.index0 %}
+        <tr class="finding-summary-row" data-title="{{ record.title }}" data-severity="{{ record.severity }}" data-type="{{ record.finding_type }}">
+          <td>{{ record.title }}</td>
+          <td>{{ record.severity }}</td>
+          <td>{{ record.finding_type }}</td>
+          <td>
+            <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, index=record_index) }}">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button type="submit">Restore this finding</button>
+            </form>
+          </td>
+        </tr>
+        <tr class="finding-detail-row">
+          <td colspan="4">
+            <details class="finding-detail">
+              <summary>View finding detail</summary>
+              <dl>
+                <dt>ID</dt><dd>{{ record.id }}</dd>
+                <dt>Title</dt><dd>{{ record.title }}</dd>
+                <dt>Severity</dt><dd>{{ record.severity }}</dd>
+                <dt>CVSS score</dt><dd>{{ record.cvss_score }}</dd>
+                <dt>CVSS vector</dt><dd>{{ record.cvss_vector }}</dd>
+                <dt>Type</dt><dd>{{ record.finding_type }}</dd>
+                <dt>Tags</dt><dd>{{ record.tags }}</dd>
+                <dt>Description</dt><dd><pre>{{ record.description }}</pre></dd>
+                <dt>Impact</dt><dd><pre>{{ record.impact }}</pre></dd>
+                <dt>Mitigation</dt><dd><pre>{{ record.mitigation }}</pre></dd>
+                <dt>Replication steps</dt><dd><pre>{{ record.replication_steps }}</pre></dd>
+                <dt>Host detection</dt><dd><pre>{{ record.host_detection_techniques }}</pre></dd>
+                <dt>Network detection</dt><dd><pre>{{ record.network_detection_techniques }}</pre></dd>
+                <dt>References</dt><dd><pre>{{ record.references }}</pre></dd>
+                <dt>Finding guidance</dt><dd><pre>{{ record.finding_guidance }}</pre></dd>
+                <dt>Extra fields</dt><dd><pre>{{ record.extra_fields }}</pre></dd>
+              </dl>
+            </details>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div id="backup_panel_observations" role="tabpanel" aria-labelledby="backup_tab_observations" data-backup-tab-panel="observations" hidden>
+    <h2>Backed-up observations</h2>
+    <table class="record-table">
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in backup.observations.normalised_records %}
+        {% set record_index = loop.index0 %}
+        <tr>
+          <td>{{ record.title }}</td>
+          <td>
+            <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, template_type='observation', index=record_index) }}">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button type="submit">Restore this observation</button>
+            </form>
+          </td>
+        </tr>
+        <tr>
+          <td colspan="2">
+            <details class="finding-detail">
+              <summary>View observation detail</summary>
+              <dl>
+                <dt>ID</dt><dd>{{ record.id }}</dd>
+                <dt>Title</dt><dd>{{ record.title }}</dd>
+                <dt>Tags</dt><dd>{{ record.tags }}</dd>
+                <dt>Description</dt><dd><pre>{{ record.description }}</pre></dd>
+                <dt>Extra fields</dt><dd><pre>{{ record.extra_fields }}</pre></dd>
+              </dl>
+            </details>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </section>
 <script>
+  (function () {
+    const tabsRoot = document.querySelector("[data-backup-template-tabs]");
+    if (!tabsRoot) {
+      return;
+    }
+
+    function activateTab(selectedName) {
+      tabsRoot.querySelectorAll("[data-backup-tab]").forEach(function (button) {
+        const isSelected = button.dataset.backupTab === selectedName;
+        button.setAttribute("aria-selected", String(isSelected));
+        button.classList.toggle("secondary", !isSelected);
+      });
+      tabsRoot.querySelectorAll("[data-backup-tab-panel]").forEach(function (panel) {
+        panel.hidden = panel.dataset.backupTabPanel !== selectedName;
+      });
+    }
+
+    tabsRoot.querySelectorAll("[data-backup-tab]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        activateTab(button.dataset.backupTab);
+      });
+    });
+  })();
+
   (function () {
     const table = document.querySelector("[data-backup-findings-table]");
     const filterInput = document.querySelector("[data-backup-finding-filter]");

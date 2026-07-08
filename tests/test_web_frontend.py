@@ -1516,6 +1516,7 @@ class FlaskRouteTests(unittest.TestCase):
                     "graphql_url": "https://left.example/v1/graphql",
                     "created_at": "20260705T000000Z",
                     "record_count": 1,
+                    "observation_count": 1,
                     "raw_records": [{"record": {"id": 1}, "tags": []}],
                     "normalised_records": [
                         record(
@@ -1528,6 +1529,18 @@ class FlaskRouteTests(unittest.TestCase):
                             extra_fields={"owner": "security"},
                         )
                     ],
+                    "observations": {
+                        "raw_records": [{"record": {"id": 5, "title": "Raw observation"}, "tags": ["edr"]}],
+                        "normalised_records": [
+                            observation(
+                                id="5",
+                                title="Detailed observation",
+                                description="Observation detail",
+                                tags="edr",
+                                extra_fields={"owner": "detection"},
+                            )
+                        ],
+                    },
                 }
             ),
             encoding="utf-8",
@@ -1537,6 +1550,13 @@ class FlaskRouteTests(unittest.TestCase):
         response = self.client.get("/api-backups/left/finding-detail.json")
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn(b'role="tablist"', response.data)
+        self.assertIn(b'data-backup-tab="findings"', response.data)
+        self.assertIn(b"Finding Templates (1)", response.data)
+        self.assertIn(b'data-backup-tab="observations"', response.data)
+        self.assertIn(b"Observation Templates (1)", response.data)
+        self.assertIn(b'data-backup-tab-panel="findings"', response.data)
+        self.assertIn(b'data-backup-tab-panel="observations" hidden', response.data)
         self.assertIn(b'data-backup-finding-filter', response.data)
         self.assertIn(b'data-sort-column="title"', response.data)
         self.assertIn(b'data-sort-column="severity"', response.data)
@@ -1549,6 +1569,9 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Detailed steps", response.data)
         self.assertIn(b"https://example.test/reference", response.data)
         self.assertIn(b"owner", response.data)
+        self.assertIn(b"Detailed observation", response.data)
+        self.assertIn(b"View observation detail", response.data)
+        self.assertIn(b"Observation detail", response.data)
 
     def test_backup_list_delete_button_requires_confirmation(self):
         backup_root = Path(self.tmp_dir.name) / "backups"
@@ -1574,6 +1597,15 @@ class FlaskRouteTests(unittest.TestCase):
         response = self.client.get("/api-backups")
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn(b"data-api-backups-table", response.data)
+        self.assertIn(b'data-sort-column="server"', response.data)
+        self.assertIn(b'data-sort-column="created"', response.data)
+        self.assertIn(b'data-sort-column="findings"', response.data)
+        self.assertIn(b'data-sort-column="observations"', response.data)
+        self.assertIn(b'data-sort-column="actions"', response.data)
+        self.assertIn(b'data-created="20260705T000000Z"', response.data)
+        self.assertIn(b'activeSort = { column: "created", direction: "desc" }', response.data)
+        self.assertIn(b'applySort("created", "desc")', response.data)
         self.assertIn(b"Delete this API backup? This cannot be undone.", response.data)
 
     def test_backup_download_returns_full_verified_backup_json(self):

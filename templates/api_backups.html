@@ -6,19 +6,25 @@
   <p>Deleted backup {{ deleted_backup }}.</p>
   {% endif %}
   {% if backups %}
-  <table class="record-table">
+  <table class="record-table" data-api-backups-table>
     <thead>
       <tr>
-        <th>Server</th>
-        <th>Created</th>
-        <th>Findings</th>
-        <th>Observations</th>
-        <th>Actions</th>
+        <th><button class="table-sort" type="button" data-sort-column="server" aria-label="Sort by server">Server</button></th>
+        <th><button class="table-sort" type="button" data-sort-column="created" aria-label="Sort by created timestamp">Created</button></th>
+        <th><button class="table-sort" type="button" data-sort-column="findings" aria-label="Sort by finding count">Findings</button></th>
+        <th><button class="table-sort" type="button" data-sort-column="observations" aria-label="Sort by observation count">Observations</button></th>
+        <th><button class="table-sort" type="button" data-sort-column="actions" aria-label="Sort by available actions">Actions</button></th>
       </tr>
     </thead>
     <tbody>
       {% for backup in backups %}
-      <tr>
+      <tr
+        data-server="{{ backup.server_name }}"
+        data-created="{{ backup.created_at }}"
+        data-findings="{{ backup.record_count }}"
+        data-observations="{{ backup.observation_count|default(0) }}"
+        data-actions="open download delete"
+      >
         <td>{{ backup.server_name }}</td>
         <td>{{ backup.created_at }}</td>
         <td>{{ backup.record_count }}</td>
@@ -39,4 +45,58 @@
   <p>No API backups found.</p>
   {% endif %}
 </section>
+<script>
+  (function () {
+    const table = document.querySelector("[data-api-backups-table]");
+    if (!table) {
+      return;
+    }
+
+    let activeSort = { column: "created", direction: "desc" };
+    const numericColumns = new Set(["findings", "observations"]);
+
+    function sortValue(row, column) {
+      const rawValue = row.dataset[column] || "";
+      if (numericColumns.has(column)) {
+        const parsed = Number.parseInt(rawValue, 10);
+        return Number.isNaN(parsed) ? 0 : parsed;
+      }
+      if (column === "created") {
+        const parsedDate = Date.parse(rawValue);
+        return Number.isNaN(parsedDate) ? rawValue.toLowerCase() : parsedDate;
+      }
+      return rawValue.toLowerCase();
+    }
+
+    function applySort(column, direction) {
+      const tbody = table.querySelector("tbody");
+      activeSort = { column: column, direction: direction };
+      Array.from(tbody.querySelectorAll("tr"))
+        .sort(function (left, right) {
+          const leftValue = sortValue(left, column);
+          const rightValue = sortValue(right, column);
+          if (leftValue < rightValue) {
+            return direction === "asc" ? -1 : 1;
+          }
+          if (leftValue > rightValue) {
+            return direction === "asc" ? 1 : -1;
+          }
+          return 0;
+        })
+        .forEach(function (row) {
+          tbody.appendChild(row);
+        });
+    }
+
+    table.querySelectorAll("[data-sort-column]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        const column = button.dataset.sortColumn;
+        const direction = activeSort.column === column && activeSort.direction === "asc" ? "desc" : "asc";
+        applySort(column, direction);
+      });
+    });
+
+    applySort("created", "desc");
+  })();
+</script>
 {% endblock %}
