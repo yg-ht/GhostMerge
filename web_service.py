@@ -213,6 +213,11 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
                 "right_value": stringify_field(right_value),
                 "offered_value": stringify_field(offered_value),
                 "different": left_value != right_value,
+                "diff_rows": (
+                    build_field_diff(left_value, right_value, offered_value)
+                    if left_value != right_value
+                    else []
+                ),
             }
         )
 

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block main_class %}wide-main{% endblock %}
 {% block content %}
 <h1>Record preview</h1>
 <form class="panel" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
@@ -7,32 +8,62 @@
     <dt>Match</dt><dd>{{ preview.match_index + 1 }}</dd>
     <dt>Score</dt><dd>{{ "%.2f"|format(preview.score) }}%</dd>
   </dl>
-  <table class="record-table">
-    <thead>
-      <tr>
-        <th class="select-cell">Use</th>
-        <th>Field</th>
-        <th>Left</th>
-        <th>Right</th>
-        <th>Offered</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in preview.rows %}
-      <tr class="{{ 'changed selectable' if row.different and row.field_name != 'id' else '' }}" data-select-row>
-        <td class="select-cell">
-          {% if row.different and row.field_name != 'id' %}
-          <input type="checkbox" name="selected_fields" value="{{ row.field_name }}" aria-label="Accept offered {{ row.field_name }}">
-          {% endif %}
-        </td>
-        <th>{{ row.field_name }}</th>
-        <td><pre>{{ row.left_value }}</pre></td>
-        <td><pre>{{ row.right_value }}</pre></td>
-        <td><pre>{{ row.offered_value }}</pre></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="record-preview-scroll">
+    <table class="record-table record-preview-table">
+      <thead>
+        <tr>
+          <th class="select-cell">Use</th>
+          <th class="field-cell">Field</th>
+          <th class="value-cell">Left</th>
+          <th class="value-cell">Right</th>
+          <th class="value-cell">Offered</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in preview.rows %}
+        <tr class="{{ 'changed selectable' if row.different and row.field_name != 'id' else '' }}" data-select-row>
+          <td class="select-cell">
+            {% if row.different and row.field_name != 'id' %}
+            <input type="checkbox" name="selected_fields" value="{{ row.field_name }}" aria-label="Accept offered {{ row.field_name }}">
+            {% endif %}
+          </td>
+          <th class="field-cell">{{ row.field_name }}</th>
+          <td class="value-cell">
+            <pre>{{ row.left_value }}</pre>
+            {% if row.diff_rows %}
+            <div class="preview-diff" aria-label="Highlighted difference for {{ row.field_name }}">
+              {% for diff_row in row.diff_rows if diff_row.side in ("left", "both") %}
+              <div class="diff-line {{ diff_row.class }}"><strong>{{ diff_row.side }}</strong><span>{{ diff_row.text }}</span></div>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </td>
+          <td class="value-cell">
+            <pre>{{ row.right_value }}</pre>
+            {% if row.diff_rows %}
+            <div class="preview-diff" aria-label="Highlighted difference for {{ row.field_name }}">
+              {% for diff_row in row.diff_rows if diff_row.side in ("right", "both") %}
+              <div class="diff-line {{ diff_row.class }}"><strong>{{ diff_row.side }}</strong><span>{{ diff_row.text }}</span></div>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </td>
+          <td class="value-cell">
+            <pre>{{ row.offered_value }}</pre>
+            {% set offered_diff_rows = row.diff_rows | selectattr("side", "equalto", "offered") | list %}
+            {% if offered_diff_rows %}
+            <div class="preview-diff" aria-label="Offered value for {{ row.field_name }}">
+              {% for diff_row in offered_diff_rows %}
+              <div class="diff-line {{ diff_row.class }}"><strong>{{ diff_row.side }}</strong><span>{{ diff_row.text }}</span></div>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
   <div class="actions">
     <button type="submit" name="preview_action" value="accept_selected_offered">Accept selected offered values</button>
     <button class="secondary" type="submit" name="preview_action" value="continue" data-shortcut="Enter">Review remaining fields</button>

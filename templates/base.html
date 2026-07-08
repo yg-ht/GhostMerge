@@ -166,9 +166,41 @@
         display: block;
         font-size: 20px;
       }
+      .wide-main {
+        max-width: 1680px;
+      }
       .record-table {
         width: 100%;
         border-collapse: collapse;
+      }
+      .record-preview-scroll {
+        overflow-x: auto;
+      }
+      .record-preview-table {
+        min-width: 1480px;
+        table-layout: fixed;
+      }
+      .record-preview-table .select-cell {
+        width: 56px;
+      }
+      .record-preview-table .field-cell {
+        width: 150px;
+      }
+      .record-preview-table .value-cell {
+        width: 28%;
+      }
+      .record-preview-table pre {
+        max-height: 420px;
+      }
+      .preview-diff {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        overflow: hidden;
+      }
+      .preview-diff .diff-line {
+        grid-template-columns: 84px 1fr;
+        font-size: 13px;
       }
       .record-table th,
       .record-table td {
@@ -416,7 +448,7 @@
         </button>
       </nav>
     </header>
-    <main>
+    <main class="{% block main_class %}{% endblock %}">
       {% if progress %}
       <section class="progress" aria-label="Review progress">
         <div class="metric"><span>Phase</span><strong>{{ progress.phase }}</strong></div>

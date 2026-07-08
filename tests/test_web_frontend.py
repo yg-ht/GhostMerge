@@ -162,7 +162,10 @@ class WebServiceTests(unittest.TestCase):
         diff = build_field_diff("Left detail", "Right detail", "Right detail")
 
         self.assertIsNotNone(preview)
-        self.assertIn("description", [row["field_name"] for row in preview.rows if row["different"]])
+        description_row = next(row for row in preview.rows if row["field_name"] == "description")
+        self.assertTrue(description_row["different"])
+        self.assertIn("removed", [row["class"] for row in description_row["diff_rows"]])
+        self.assertIn("added", [row["class"] for row in description_row["diff_rows"]])
         self.assertIn("removed", [row["class"] for row in diff])
         self.assertIn("added", [row["class"] for row in diff])
         self.assertIn("offered", [row["class"] for row in diff])
@@ -542,6 +545,9 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(conflict.status_code, 200)
         self.assertIn(b"Record preview", conflict.data)
         self.assertIn(b"changed", conflict.data)
+        self.assertIn(b"Highlighted difference for description", conflict.data)
+        self.assertIn(b"class=\"diff-line removed\"", conflict.data)
+        self.assertIn(b"class=\"diff-line added\"", conflict.data)
         self.assertIn(b"Accept selected offered values", conflict.data)
 
         conflict = self.client.post(
