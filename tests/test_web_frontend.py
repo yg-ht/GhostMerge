@@ -181,11 +181,7 @@ class WebServiceTests(unittest.TestCase):
         item = get_next_conflict(job)
 
         self.assertIsNotNone(preview)
-        id_row = next(row for row in preview.rows if row["field_name"] == "id")
-        self.assertEqual(id_row["left_value"], "1")
-        self.assertEqual(id_row["right_value"], "99")
-        self.assertFalse(id_row["different"])
-        self.assertEqual(id_row["diff_rows"], [])
+        self.assertNotIn("id", [row["field_name"] for row in preview.rows])
         self.assertIsNone(item)
 
     def test_preview_selected_offered_values_leave_remaining_fields_for_review(self):
@@ -622,7 +618,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(preview.status_code, 200)
         self.assertIn(b"Record preview", preview.data)
-        self.assertIn(b"<th class=\"field-cell\">id</th>", preview.data)
+        self.assertNotIn(b"<th class=\"field-cell\">id</th>", preview.data)
         self.assertNotIn(b"changed selectable", preview.data)
         self.assertNotIn(b"Accept offered id", preview.data)
         self.assertNotIn(b"diff-line removed", preview.data)

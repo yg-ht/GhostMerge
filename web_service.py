@@ -23,6 +23,7 @@ from sensitivity import apply_sensitive_replacement, check_for_sensitivities
 from utils import blank_for_type, normalise_finding_record, stringify_field, wrap_string
 
 CONFIG = get_config()
+NON_REVIEWABLE_FIELDS = {"id"}
 
 
 class WebMergeError(ValueError):
@@ -178,7 +179,7 @@ def get_next_conflict(job: MergeJob) -> Optional[ConflictReviewItem]:
         while job.field_index < len(field_defs):
             field_def = field_defs[job.field_index]
             job.field_index += 1
-            if field_def.name == "id":
+            if field_def.name in NON_REVIEWABLE_FIELDS:
                 continue
 
             item = _prepare_conflict_for_field(job.match_index, match, field_def)
@@ -203,12 +204,12 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
 
     match = job.matches[job.match_index]
     rows = []
-    for field_def in fields(Finding):
+    for field_def in _reviewable_field_defs():
         expected_type = get_type_as_str(field_def.type)
         left_value = getattr(match["left"], field_def.name, blank_for_type(expected_type))
         right_value = getattr(match["right"], field_def.name, blank_for_type(expected_type))
         offered_value = match["auto_value"].get(field_def.name)
-        requires_review = field_def.name != "id" and left_value != right_value
+        requires_review = left_value != right_value
         rows.append(
             {
                 "field_name": field_def.name,
@@ -243,9 +244,7 @@ def accept_offered_for_current_match(job: MergeJob) -> None:
         raise WebMergeError("There is no active match to accept.")
 
     match = job.matches[job.match_index]
-    for field_def in fields(Finding):
-        if field_def.name == "id":
-            continue
+    for field_def in _reviewable_field_defs():
         offered_value = match["auto_value"].get(field_def.name)
         match["left"].set(field_def.name, offered_value)
         match["right"].set(field_def.name, offered_value)
@@ -262,13 +261,13 @@ def accept_offered_fields_for_current_match(job: MergeJob, field_names: list[str
     if job.conflict_phase_complete or job.match_index >= len(job.matches):
         raise WebMergeError("There is no active match to update.")
 
-    selected = {name for name in field_names if name and name != "id"}
+    selected = {name for name in field_names if name and name not in NON_REVIEWABLE_FIELDS}
     if not selected:
         job.preview_acknowledged = True
         return 0
 
     match = job.matches[job.match_index]
-    valid_fields = {field_def.name for field_def in fields(Finding)}
+    valid_fields = {field_def.name for field_def in _reviewable_field_defs()}
     applied = 0
     for field_name in selected:
         if field_name not in valid_fields:
@@ -290,8 +289,8 @@ def apply_conflict_decision(job: MergeJob, decision: dict[str, Any]) -> None:
     match = job.matches[job.match_index]
     field_name = str(decision.get("field_name", ""))
     action = str(decision.get("action", ""))
-    field_def = next((item for item in fields(Finding) if item.name == field_name), None)
-    if field_def is None or field_name == "id":
+    field_def = next((item for item in _reviewable_field_defs() if item.name == field_name), None)
+    if field_def is None:
         raise WebMergeError("Unknown or unsupported field decision.")
 
     left_value = getattr(match["left"], field_name)
@@ -519,7 +518,7 @@ def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
         "total_matches": len(job.matches),
         "completed_matches": len(job.merged_left),
         "current_field": job.field_index,
-        "total_fields": len(fields(Finding)),
+        "total_fields": len(_reviewable_field_defs()),
         "preview_acknowledged": job.preview_acknowledged,
         "unmatched_left": len(job.unmatched_left),
         "unmatched_right": len(job.unmatched_right),
@@ -600,6 +599,8 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
 
 def _prepare_conflict_for_field(match_index: int, match: dict[str, Any], field_def: Any) -> Optional[ConflictReviewItem]:
     field_name = field_def.name
+    if field_name in NON_REVIEWABLE_FIELDS:
+        return None
     expected_type = get_type_as_str(field_def.type)
     left_value = getattr(match["left"], field_name, blank_for_type(expected_type))
     right_value = getattr(match["right"], field_name, blank_for_type(expected_type))
@@ -642,6 +643,10 @@ def _append_unmatched_records(job: MergeJob) -> None:
         normalise_finding_record(record)
         job.merged_left.append(copy.deepcopy(record))
         job.merged_right.append(record)
+
+
+def _reviewable_field_defs() -> list[Any]:
+    return [field_def for field_def in fields(Finding) if field_def.name not in NON_REVIEWABLE_FIELDS]
 
 
 def _finding_to_state(finding: Finding) -> dict[str, Any]:
