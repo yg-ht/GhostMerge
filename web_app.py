@@ -140,22 +140,8 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             if side not in {"left", "right"}:
                 return render_template("error.html", error="Unknown API source side."), 404
-            server = _server_for_side(side)
-            backup_path = GhostwriterApi(server).create_backup(backup_root_from_config(CONFIG))
-            backup = verify_backup(backup_path)
-            return render_template(
-                "upload.html",
-                api_check={
-                    "side": side,
-                    "server_name": server.name,
-                    "record_count": backup["record_count"],
-                    "backup_filename": backup_path.name,
-                },
-                previous_jobs=list_previous_jobs(jobs_dir),
-                api_servers=configured_server_summary(CONFIG),
-                backups=list_backups(backup_root_from_config(CONFIG)),
-                root_page=True,
-            )
+            check_id = _start_api_source_check_thread(app, jobs_dir, side)
+            return redirect(url_for("api_source_check_status", check_id=check_id))
         except GhostwriterApiError as exc:
             return render_template(
                 "upload.html",
@@ -165,6 +151,14 @@ def create_app(test_config: dict | None = None) -> Flask:
                 backups=list_backups(backup_root_from_config(CONFIG)),
                 root_page=True,
             ), 400
+
+    @app.get("/api-sources/checks/<check_id>/status")
+    def api_source_check_status(check_id: str):
+        try:
+            state = _load_api_source_check_state(jobs_dir, check_id)
+            return render_template("api_source_check_status.html", state=state)
+        except WebMergeError as exc:
+            return render_template("error.html", error=str(exc)), 404
 
     @app.get("/imports/<import_id>/status")
     def import_status(import_id: str):
@@ -558,6 +552,78 @@ def _load_records_for_side(side: str, uploaded_file, source: str) -> list[dict]:
     return load_records_from_json_text(uploaded_file.read().decode("utf-8"))
 
 
+def _start_api_source_check_thread(app: Flask, jobs_dir: Path, side: str) -> str:
+    server = _server_for_side(side)
+    check_id = uuid.uuid4().hex
+    _save_api_source_check_state(
+        jobs_dir,
+        check_id,
+        {
+            "check_id": check_id,
+            "side": side,
+            "server_name": server.name,
+            "status": "running",
+            "stage": "queued",
+            "message": "Queued API source check.",
+            "complete": 0,
+            "total": 0,
+            "backup_filename": None,
+            "record_count": None,
+        },
+    )
+    thread = threading.Thread(target=_check_api_source, args=(app, jobs_dir, check_id), daemon=True)
+    thread.start()
+    return check_id
+
+
+def _check_api_source(app: Flask, jobs_dir: Path, check_id: str) -> None:
+    with app.app_context():
+        state = {
+            "check_id": check_id,
+            "status": "error",
+            "stage": "error",
+            "message": "API source check failed before state could be loaded.",
+            "complete": 0,
+            "total": 0,
+        }
+        try:
+            state = _load_api_source_check_state(jobs_dir, check_id)
+            side = state["side"]
+            server = _server_for_side(side)
+
+            def update(event):
+                current = _load_api_source_check_state(jobs_dir, check_id)
+                current.update(
+                    {
+                        "status": "running",
+                        "stage": event.stage,
+                        "message": event.message,
+                        "complete": event.complete,
+                        "total": event.total,
+                    }
+                )
+                _save_api_source_check_state(jobs_dir, check_id, current)
+
+            backup_path = GhostwriterApi(server, progress=update).create_backup(backup_root_from_config(CONFIG))
+            backup = verify_backup(backup_path)
+            state = _load_api_source_check_state(jobs_dir, check_id)
+            state.update(
+                {
+                    "status": "done",
+                    "stage": "complete",
+                    "message": f"Fetched and backed up {backup['record_count']} findings from {server.name}.",
+                    "complete": backup["record_count"],
+                    "total": backup["record_count"],
+                    "backup_filename": backup_path.name,
+                    "record_count": backup["record_count"],
+                }
+            )
+            _save_api_source_check_state(jobs_dir, check_id, state)
+        except Exception as exc:
+            state.update({"status": "error", "stage": "error", "message": str(exc)})
+            _save_api_source_check_state(jobs_dir, check_id, state)
+
+
 def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, str], files) -> str:
     import_id = uuid.uuid4().hex
     file_records: dict[str, list[dict]] = {}
@@ -657,6 +723,30 @@ def _import_state_path(jobs_dir: Path, import_id: str) -> Path:
     if not import_id or not import_id.isalnum():
         raise WebMergeError("Invalid import ID.")
     return jobs_dir / "api_imports" / f"{import_id}.json"
+
+
+def _api_source_check_state_path(jobs_dir: Path, check_id: str) -> Path:
+    if not check_id or not check_id.isalnum():
+        raise WebMergeError("Invalid API source check ID.")
+    return jobs_dir / "api_source_checks" / f"{check_id}.json"
+
+
+def _save_api_source_check_state(jobs_dir: Path, check_id: str, state: dict) -> None:
+    path = _api_source_check_state_path(jobs_dir, check_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _load_api_source_check_state(jobs_dir: Path, check_id: str) -> dict:
+    path = _api_source_check_state_path(jobs_dir, check_id)
+    if not path.exists():
+        raise WebMergeError("API source check not found.")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WebMergeError("API source check state could not be read. Please refresh and try again.") from exc
 
 
 def _save_import_state(jobs_dir: Path, import_id: str, state: dict) -> None:

@@ -156,6 +156,23 @@ class GhostwriterApiTests(unittest.TestCase):
         self.assertFalse(servers["left"].strict_x509_verification)
         self.assertIsNone(servers["right"])
 
+    def test_server_config_defaults_to_conservative_rate_limit(self):
+        config = {
+            "ghostwriter_api": {
+                "servers": {
+                    "left": {
+                        "enabled": True,
+                        "base_url": "https://left.example",
+                        "bearer_token": "left-token",
+                    }
+                }
+            }
+        }
+
+        servers = load_server_configs(config)
+
+        self.assertEqual(servers["left"].rate_limit_per_second, 0.2)
+
     def test_server_config_accepts_full_graphql_endpoint(self):
         config = {
             "ghostwriter_api": {
@@ -287,6 +304,18 @@ class GhostwriterApiTests(unittest.TestCase):
             self.assertNotEqual(first, second)
             self.assertTrue(first.exists())
             self.assertTrue(second.exists())
+
+    def test_create_backup_reports_fetch_progress(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_client = FakeGraphQLClient()
+            api = GhostwriterApi(server_config(), client=fake_client, progress=events.append)
+
+            api.create_backup(Path(tmp_dir))
+
+        self.assertIn("backup_fetch", [event.stage for event in events])
+        self.assertIn("backup", [event.stage for event in events])
+        self.assertTrue(any(event.complete == 1 for event in events if event.stage == "backup_fetch"))
 
     def test_replace_all_validates_records_before_backup_or_delete(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -241,8 +241,8 @@ from configured Ghostwriter API servers. Configure the relevant side under
 Use the home page's API source check buttons to fetch and back up a configured
 side before creating a merge job. This confirms GhostMerge can retrieve the
 current findings, stores the full backup JSON in the backup browser, and reports
-the record count without saving a job. The Create merge job button still
-performs the API retrieval automatically for any side set to API.
+progress on a status page without saving a job. The Create merge job button
+still performs the API retrieval automatically for any side set to API.
 
 When a merge job is API-backed, the completion page offers live synchronisation
 for that side after conflict review and sensitivity review are complete.
@@ -334,6 +334,7 @@ Enable only the sides you intend to use:
         "base_url": "https://left-ghostwriter.example",
         "graphql_endpoint": "/v1/graphql",
         "bearer_token": "gwat_replace-with-local-token",
+        "rate_limit_per_second": 0.2,
         "verify_tls": true,
         "strict_x509_verification": true
       }
@@ -341,6 +342,12 @@ Enable only the sides you intend to use:
   }
 }
 ```
+
+Set `rate_limit_per_second` per server, or set
+`ghostwriter_api.default_rate_limit_per_second`, to control how quickly
+GhostMerge sends GraphQL requests. The default is `0.2`, which sends one request
+approximately every five seconds. Keep this conservative for production
+Ghostwriter instances because full backups also retrieve tags for each finding.
 
 Leave `verify_tls` enabled for normal deployments. If an internal CA chain is
 trusted by the operating system but fails with an OpenSSL strict-mode error such

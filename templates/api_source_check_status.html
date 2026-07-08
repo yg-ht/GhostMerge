@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>API source check status</h1>
+<section class="panel">
+  <dl>
+    <dt>Server</dt><dd>{{ state.server_name|default("Ghostwriter") }}</dd>
+    <dt>Status</dt><dd>{{ state.status|default("queued") }}</dd>
+    <dt>Stage</dt><dd>{{ state.stage|default("queued") }}</dd>
+    <dt>Progress</dt>
+    <dd>
+      {% if state.total|default(0) %}
+      {{ state.complete|default(0) }} / {{ state.total }}
+      {% else %}
+      {{ state.complete|default(0) }} record(s)
+      {% endif %}
+    </dd>
+    <dt>Message</dt><dd>{{ state.message|default("Queued") }}</dd>
+    {% if state.backup_filename %}
+    <dt>Backup</dt><dd>{{ state.backup_filename }}</dd>
+    {% endif %}
+  </dl>
+  {% if state.status == "running" %}
+  <meta http-equiv="refresh" content="2">
+  {% endif %}
+  <div class="actions">
+    {% if state.status == "done" %}
+    <a class="button" href="{{ url_for('api_backups') }}">Open backup browser</a>
+    {% endif %}
+    <a class="button secondary" href="{{ url_for('index') }}">Back to start</a>
+  </div>
+</section>
+{% endblock %}

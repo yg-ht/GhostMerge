@@ -51,7 +51,7 @@ class GhostwriterServerConfig:
     timeout_seconds: float = 30.0
     verify_tls: bool = True
     strict_x509_verification: bool = True
-    rate_limit_per_second: float = 1.0
+    rate_limit_per_second: float = 0.2
 
     @property
     def is_configured(self) -> bool:
@@ -234,15 +234,33 @@ class GhostwriterApi:
         offset = 0
         limit = 100
         while True:
+            self.progress(SyncEvent("backup_fetch", f"Fetching backup records from {self.server.name}", len(raw_records), 0))
             data = self.client.execute(query, {"limit": limit, "offset": offset})
             batch = data.get("finding") or []
             if not batch:
                 break
             for item in batch:
                 raw_records.append({"record": item, "tags": self.fetch_tags(int(item["id"]))})
+                self.progress(
+                    SyncEvent(
+                        "backup_fetch",
+                        f"Fetched {len(raw_records)} backup record(s) from {self.server.name}",
+                        len(raw_records),
+                        0,
+                    )
+                )
             if len(batch) < limit:
                 break
             offset += limit
+        self.progress(
+            SyncEvent(
+                "backup_fetch",
+                f"Fetched {len(raw_records)} backup record(s) from {self.server.name}",
+                len(raw_records),
+                len(raw_records),
+                "done",
+            )
+        )
         return raw_records
 
     def preflight_sync_permissions(self) -> None:
@@ -420,7 +438,7 @@ def ghostmerge_record_to_api_input(record: dict[str, Any], lookups: dict[str, di
 def load_server_configs(config: dict[str, Any]) -> dict[str, Optional[GhostwriterServerConfig]]:
     api_config = config.get("ghostwriter_api", {})
     servers = api_config.get("servers", {})
-    default_rate = float(api_config.get("default_rate_limit_per_second", 1.0))
+    default_rate = float(api_config.get("default_rate_limit_per_second", 0.2))
     parsed: dict[str, Optional[GhostwriterServerConfig]] = {}
     for side in ("left", "right"):
         server = servers.get(side, {})

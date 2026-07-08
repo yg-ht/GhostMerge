@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from globals import get_config
-from web_app import create_app, _import_job_sources
+from web_app import create_app, _check_api_source, _import_job_sources
 from web_service import (
     WebMergeError,
     accept_offered_fields_for_current_match,
@@ -533,7 +533,29 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Check API source", response.data)
         self.assertIn(b"Fetch Left Test Ghostwriter", response.data)
 
-    def test_api_fetch_check_creates_backup_without_creating_merge_job(self):
+    def test_api_fetch_check_redirects_to_visible_status(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        with patch("web_app.threading.Thread") as thread_class:
+            thread_class.return_value.start.return_value = None
+            response = self.client.post("/api-sources/left/check", data=self.with_csrf(), follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/api-sources/checks/", response.headers["Location"])
+        status = self.client.get(response.headers["Location"])
+        self.assertEqual(status.status_code, 200)
+        self.assertIn(b"API source check status", status.data)
+        self.assertIn(b"Queued API source check", status.data)
+
+    def test_api_source_check_worker_creates_backup_without_creating_merge_job(self):
         config = get_config()
         backup_root = Path(self.tmp_dir.name) / "backups"
         config["ghostwriter_api"]["backup_dir"] = str(backup_root)
@@ -566,13 +588,17 @@ class FlaskRouteTests(unittest.TestCase):
             backup_path.write_text(json.dumps(backup_data), encoding="utf-8")
             return backup_path
 
-        with patch("web_app.GhostwriterApi") as api_class:
+        with patch("web_app.threading.Thread") as thread_class, patch("web_app.GhostwriterApi") as api_class:
+            thread_class.return_value.start.return_value = None
             api_class.return_value.create_backup.side_effect = create_backup
-            response = self.client.post("/api-sources/left/check", data=self.with_csrf())
+            response = self.client.post("/api-sources/left/check", data=self.with_csrf(), follow_redirects=False)
+            check_id = response.headers["Location"].rsplit("/", 2)[-2]
+            _check_api_source(self.app, Path(self.tmp_dir.name), check_id)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Fetched and backed up 2 findings from Left Test Ghostwriter", response.data)
-        self.assertIn(b"Open backup browser", response.data)
+        status = self.client.get(response.headers["Location"])
+        self.assertEqual(status.status_code, 200)
+        self.assertIn(b"Fetched and backed up 2 findings from Left Test Ghostwriter", status.data)
+        self.assertIn(b"Open backup browser", status.data)
         self.assertEqual(list_previous_jobs(Path(self.tmp_dir.name)), [])
         backup_files = list((backup_root / "left").glob("*.json"))
         self.assertEqual(len(backup_files), 1)

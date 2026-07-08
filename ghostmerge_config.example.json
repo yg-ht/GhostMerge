@@ -54,7 +54,7 @@
   },
   "ghostwriter_api": {
     "backup_dir": "ghostmerge_api_backups",
-    "default_rate_limit_per_second": 1.0,
+    "default_rate_limit_per_second": 0.2,
     "servers": {
       "left": {
         "enabled": false,
@@ -63,7 +63,7 @@
         "graphql_endpoint": "/v1/graphql",
         "bearer_token": "",
         "timeout_seconds": 30,
-        "rate_limit_per_second": 1.0,
+        "rate_limit_per_second": 0.2,
         "verify_tls": true,
         "strict_x509_verification": true
       },
@@ -74,7 +74,7 @@
         "graphql_endpoint": "/v1/graphql",
         "bearer_token": "",
         "timeout_seconds": 30,
-        "rate_limit_per_second": 1.0,
+        "rate_limit_per_second": 0.2,
         "verify_tls": true,
         "strict_x509_verification": true
       }
