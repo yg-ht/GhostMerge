@@ -327,7 +327,7 @@ Enable only the sides you intend to use:
         "name": "Left Ghostwriter",
         "base_url": "https://left-ghostwriter.example",
         "graphql_endpoint": "/v1/graphql",
-        "bearer_token": "gwst_replace-with-local-token"
+        "bearer_token": "gwat_replace-with-local-token"
       }
     }
   }
@@ -341,50 +341,47 @@ Current Ghostwriter releases support short-lived login JWTs, user API tokens wit
 the `gwat_` prefix, and service tokens with the `gwst_` prefix.
 
 Do not use the GraphQL `login` action for GhostMerge live sync. That action
-returns a short-lived user JWT and is not the service-token workflow. It is also
-disabled for accounts that use MFA.
+returns a short-lived user JWT. It is also disabled for accounts that use MFA.
 
-For regular GhostMerge live sync, prefer a `gwst_` service token when your
-Ghostwriter deployment can grant it the required Finding Template and tag
-read/write operations. Service tokens are intended for non-human automation with
-a fixed, limited permission set and do not inherit the permissions of the user
-who created them. That is a better fit for a tool that can make global,
-destructive changes to the findings library.
+For regular GhostMerge live sync, use a `gwat_` user API token created from the
+Ghostwriter profile page's API Tokens card. A user API token inherits the
+creating user's current permissions, can have an explicit expiry, can be
+revoked, and works for accounts that use MFA. Because GhostMerge can make
+global, destructive changes to the findings library, create the token from a
+dedicated Ghostwriter user whose permissions are limited to the environments and
+Finding Template operations GhostMerge genuinely needs.
 
-Use a `gwat_` user API token for manual testing, interactive one-off use, or
-deployments where service-token permissions cannot express the required
-operations. A user API token inherits the creating user's current permissions,
-can have an explicit expiry, can be revoked, and works for accounts that use MFA.
+Ghostwriter also supports `gwst_` service tokens for non-human automation, but
+Ghostwriter cannot currently grant a service token all permissions required for
+GhostMerge live sync. Do not use a service token for this workflow unless that
+limitation changes and the token can be proven to read, delete, create, and tag
+Finding Templates.
 
 Store the generated token in the server's `bearer_token` setting in local
 `ghostmerge_config.json` or `ghostmerge_config.json.local`; do not put real
 tokens in committed files.
 
-#### Creating a service token in Ghostwriter
+#### Creating a user API token in Ghostwriter
 
-In the Ghostwriter web interface, create a service token from the Service Tokens
-card on a user profile page. This is separate from the GraphQL `login` mutation,
-which only creates short-lived JWTs.
+In the Ghostwriter web interface, create a user API token from the API Tokens
+card on the user's profile page. This is separate from the GraphQL `login`
+mutation, which only creates short-lived JWTs.
 
-1. Sign in with an account that is allowed to manage service tokens and API access.
+1. Sign in as the dedicated Ghostwriter user that should own GhostMerge sync operations.
 2. Open that user's profile page.
-3. Use the Service Tokens card, not the API Tokens card and not the GraphQL `login` action.
-4. Create a new service token for GhostMerge with a descriptive name such as `ghostmerge-live-sync`.
-5. Choose the narrowest available service-token permission set that still permits GhostMerge to read, delete, create, and tag Finding Templates.
-6. Confirm that the permission set is intended for non-human automation and does not depend on the creating user's normal role.
-7. Confirm the token can perform these GraphQL operations for the findings library:
+3. Use the API Tokens card, not the Service Tokens card and not the GraphQL `login` action.
+4. Create a new API token for GhostMerge with a descriptive name such as `ghostmerge-live-sync`.
+5. Set an expiry that matches your operational policy.
+6. Copy the generated `gwat_` token immediately and store it in the relevant server's `bearer_token` setting.
+7. Confirm the user account can perform these GraphQL operations for the findings library:
    `finding`, `findingSeverity`, `findingType`, `tags`,
    `delete_finding_by_pk`, `insert_finding_one`, and `setTags`.
-8. Copy the generated `gwst_` token immediately and store it in the relevant
-   server's `bearer_token` setting.
-9. Run a GhostMerge API import and then a live-sync preflight against a test
+8. Run a GhostMerge API import and then a live-sync preflight against a test
    Ghostwriter environment before using the token against production data.
 
-Ghostwriter service tokens share a Hasura `service` role, so a token may be able
-to see more schema fields than it is actually authorised to use for protected
-rows or Django-backed actions. GhostMerge's preflight catches missing schema
-visibility before changes begin, but the final proof is a test sync against a
-non-production findings library with the exact service token and permissions.
+GhostMerge's preflight catches missing schema visibility before changes begin,
+but the final proof is a test sync against a non-production findings library
+with the exact user API token and account permissions.
 
 ### Web access configuration
 
