@@ -340,6 +340,10 @@ Ghostwriter authenticates GraphQL requests with `Authorization: Bearer TOKEN`.
 Current Ghostwriter releases support short-lived login JWTs, user API tokens with
 the `gwat_` prefix, and service tokens with the `gwst_` prefix.
 
+Do not use the GraphQL `login` action for GhostMerge live sync. That action
+returns a short-lived user JWT and is not the service-token workflow. It is also
+disabled for accounts that use MFA.
+
 For regular GhostMerge live sync, prefer a `gwst_` service token when your
 Ghostwriter deployment can grant it the required Finding Template and tag
 read/write operations. Service tokens are intended for non-human automation with
@@ -358,19 +362,22 @@ tokens in committed files.
 
 #### Creating a service token in Ghostwriter
 
-In the Ghostwriter web interface:
+In the Ghostwriter web interface, create a service token from the Service Tokens
+card on a user profile page. This is separate from the GraphQL `login` mutation,
+which only creates short-lived JWTs.
 
 1. Sign in with an account that is allowed to manage service tokens and API access.
-2. Open the user profile page for that account.
-3. Find the Service Tokens card and create a new service token for GhostMerge.
-4. Give the token a descriptive name such as `ghostmerge-live-sync`.
-5. Choose the narrowest available permission scope that still permits GhostMerge to read, delete, create, and tag Finding Templates.
-6. Confirm the token can perform these GraphQL operations for the findings library:
+2. Open that user's profile page.
+3. Use the Service Tokens card, not the API Tokens card and not the GraphQL `login` action.
+4. Create a new service token for GhostMerge with a descriptive name such as `ghostmerge-live-sync`.
+5. Choose the narrowest available service-token permission set that still permits GhostMerge to read, delete, create, and tag Finding Templates.
+6. Confirm that the permission set is intended for non-human automation and does not depend on the creating user's normal role.
+7. Confirm the token can perform these GraphQL operations for the findings library:
    `finding`, `findingSeverity`, `findingType`, `tags`,
    `delete_finding_by_pk`, `insert_finding_one`, and `setTags`.
-7. Copy the generated `gwst_` token immediately and store it in the relevant
+8. Copy the generated `gwst_` token immediately and store it in the relevant
    server's `bearer_token` setting.
-8. Run a GhostMerge API import and then a live-sync preflight against a test
+9. Run a GhostMerge API import and then a live-sync preflight against a test
    Ghostwriter environment before using the token against production data.
 
 Ghostwriter service tokens share a Hasura `service` role, so a token may be able
