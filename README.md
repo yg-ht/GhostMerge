@@ -307,16 +307,16 @@ If any required field is missing, sync stops before backup, deletion, or reload.
 
 ### Config files
 
-GhostMerge loads `ghostmerge_config.json` automatically from the project
-directory. The repository includes `ghostmerge_config.example.json` as the
-committed template; copy it to `ghostmerge_config.json` for local use. The local
-config is gitignored so server URLs, web access keys, and Ghostwriter bearer
-tokens are not committed.
+GhostMerge loads committed defaults from `ghostmerge_config.example.json`, then
+loads `ghostmerge_config.json` from the project directory when it exists. The
+local config can be sparse: include only the values that need to differ from the
+committed defaults. The local config is gitignored so server URLs, web access
+keys, and Ghostwriter bearer tokens are not committed.
 
 You can override the config path with `--config`.
 
-If a `.local` version exists, it is loaded after the base file and can override
-local settings without changing the committed defaults:
+If a `.local` version exists, it is loaded last and can override local settings
+without changing either the committed defaults or the base local file:
 
 ```text
 ghostmerge_config.json.local
@@ -526,15 +526,17 @@ safety checks.
 ### Systemd web service
 
 The repository includes a systemd unit template and installer for running the
-Flask web frontend as a system service. Prepare the project first:
+Flask web frontend as a system service. Prepare a local config file first:
 
 ```bash
-cp ghostmerge_config.example.json ghostmerge_config.json
+printf '{}\n' > ghostmerge_config.json
 ```
 
-Edit `ghostmerge_config.json` before installing. The web frontend fails closed
-when `web_access` is missing or incomplete, and deployment secrets such as API
-keys and Ghostwriter bearer tokens must stay in local config files.
+Edit `ghostmerge_config.json` or `ghostmerge_config.json.local` before
+installing. These files can contain only deployment-specific overrides. The web
+frontend fails closed when required web access values are empty or incomplete,
+and deployment secrets such as API keys and Ghostwriter bearer tokens must stay
+in local config files.
 
 The installer uses `PROJECT_DIR/.venv` when it already exists. If it does not
 exist, the installer tries to discover a Pipenv virtualenv for the project. If

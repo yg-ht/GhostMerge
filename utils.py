@@ -14,7 +14,21 @@ class Aborting(Exception):
 
 def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"):
     config_path = Path(config_path)
+    defaults_path = SCRIPT_DIR / "ghostmerge_config.example.json"
     local_override_path = Path(f"{config_path}.local")
+
+    try:
+        with open(defaults_path, 'r', encoding='utf-8') as f:
+            default_config = json.load(f)
+            log('INFO', f'Loaded default config from: {defaults_path}', prefix="UTILS")
+            log('DEBUG', f'Default config is: {json.dumps(redact_config_secrets(default_config), indent=2)}', prefix="UTILS")
+            deep_merge_config(CONFIG, default_config)
+            CONFIG["config_loaded"] = True
+            CONFIG["script_dir"] = SCRIPT_DIR
+    except FileNotFoundError:
+        log('ERROR', f'No default config file found at: {defaults_path}', prefix="UTILS")
+    except Exception as e:
+        log('ERROR', f"Failed to load default config from {defaults_path}: {e}", prefix="UTILS")
 
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -25,7 +39,7 @@ def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"
             CONFIG["config_loaded"] = True
             CONFIG["script_dir"] = SCRIPT_DIR
     except FileNotFoundError:
-        log('ERROR', f'No config file found at: {config_path}', prefix="UTILS")
+        log('DEBUG', f'No config file found at: {config_path}', prefix="UTILS")
     except Exception as e:
         log('ERROR', f"Failed to load config from {config_path}: {e}", prefix="UTILS")
 

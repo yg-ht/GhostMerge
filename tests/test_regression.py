@@ -148,16 +148,28 @@ class ConfigRegressionTests(unittest.TestCase):
         self.assertIn("right", get_config()["ghostwriter_api"]["servers"])
         self.assertTrue(get_config()["config_loaded"])
 
-    def test_load_config_requires_real_config_file_not_example_fallback(self):
+    def test_load_config_uses_project_defaults_when_user_config_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "ghostmerge_config.json"
-            config_path.with_name("ghostmerge_config.example.json").write_text(
-                json.dumps({"log_file_enabled": False, "interactive_mode": True}),
+
+            load_config(config_path)
+
+        self.assertTrue(get_config()["config_loaded"])
+        self.assertIn("ghostwriter_api", get_config())
+        self.assertEqual(get_config()["script_dir"], PROJECT_ROOT)
+
+    def test_sparse_user_config_overrides_project_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "ghostmerge_config.json"
+            config_path.write_text(
+                json.dumps({"interactive_mode": False}),
                 encoding="utf-8",
             )
 
-            with self.assertRaises(Aborting):
-                load_config(config_path)
+            load_config(config_path)
+
+        self.assertFalse(get_config()["interactive_mode"])
+        self.assertIn("ghostwriter_api", get_config())
 
 
 class FindingModelRegressionTests(unittest.TestCase):
