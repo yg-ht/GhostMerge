@@ -19,10 +19,16 @@
     <dt>Backup</dt><dd>{{ state.backup_filename }}</dd>
     {% endif %}
   </dl>
-  {% if state.status == "running" %}
+  {% if state.status in ["running", "cancelling"] %}
   <meta http-equiv="refresh" content="2">
   {% endif %}
   <div class="actions">
+    {% if state.status == "running" %}
+    <form method="post" action="{{ url_for('stop_api_source_check', check_id=state.check_id) }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button class="secondary" type="submit">Stop</button>
+    </form>
+    {% endif %}
     {% if state.status == "done" %}
     <a class="button" href="{{ url_for('api_backups') }}">Open backup browser</a>
     {% endif %}

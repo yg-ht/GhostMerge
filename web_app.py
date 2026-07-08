@@ -7,7 +7,7 @@ import secrets
 import threading
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from flask import Flask, Response, redirect, render_template, request, send_file, session, url_for
 
@@ -47,6 +47,13 @@ from web_service import (
 
 CONFIG = get_config()
 SOURCE_IP_MODES = {"direct", "trusted_header", "both"}
+RUNNING_OPERATION_STATUSES = {"running", "cancelling"}
+_ACTIVE_API_SOURCE_CHECKS: set[str] = set()
+_ACTIVE_API_IMPORTS: set[str] = set()
+
+
+class ApiOperationCancelled(RuntimeError):
+    """Raised inside a worker when the user requests cancellation."""
 
 
 def create_app(test_config: dict | None = None) -> Flask:
@@ -108,6 +115,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             previous_jobs=list_previous_jobs(jobs_dir),
             api_source_checks=_list_api_source_checks(jobs_dir),
             api_imports=_list_api_imports(jobs_dir),
+            running_api_source_checks=_running_api_source_checks_by_side(jobs_dir),
             api_servers=configured_server_summary(CONFIG),
             backups=list_backups(backup_root_from_config(CONFIG)),
             root_page=True,
@@ -136,6 +144,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 previous_jobs=list_previous_jobs(jobs_dir),
                 api_source_checks=_list_api_source_checks(jobs_dir),
                 api_imports=_list_api_imports(jobs_dir),
+                running_api_source_checks=_running_api_source_checks_by_side(jobs_dir),
                 api_servers=configured_server_summary(CONFIG),
                 backups=list_backups(backup_root_from_config(CONFIG)),
                 root_page=True,
@@ -146,6 +155,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             if side not in {"left", "right"}:
                 return render_template("error.html", error="Unknown API source side."), 404
+            running_check = _running_api_source_check_for_side(jobs_dir, side)
+            if running_check:
+                return redirect(url_for("api_source_check_status", check_id=running_check["check_id"]))
             check_id = _start_api_source_check_thread(app, jobs_dir, side)
             return redirect(url_for("api_source_check_status", check_id=check_id))
         except GhostwriterApiError as exc:
@@ -155,6 +167,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 previous_jobs=list_previous_jobs(jobs_dir),
                 api_source_checks=_list_api_source_checks(jobs_dir),
                 api_imports=_list_api_imports(jobs_dir),
+                running_api_source_checks=_running_api_source_checks_by_side(jobs_dir),
                 api_servers=configured_server_summary(CONFIG),
                 backups=list_backups(backup_root_from_config(CONFIG)),
                 root_page=True,
@@ -165,6 +178,14 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             state = _load_api_source_check_state(jobs_dir, check_id)
             return render_template("api_source_check_status.html", state=state)
+        except WebMergeError as exc:
+            return render_template("error.html", error=str(exc)), 404
+
+    @app.post("/api-sources/checks/<check_id>/stop")
+    def stop_api_source_check(check_id: str):
+        try:
+            _request_api_source_check_stop(jobs_dir, check_id)
+            return redirect(url_for("api_source_check_status", check_id=check_id))
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 404
 
@@ -563,6 +584,7 @@ def _load_records_for_side(side: str, uploaded_file, source: str) -> list[dict]:
 def _start_api_source_check_thread(app: Flask, jobs_dir: Path, side: str) -> str:
     server = _server_for_side(side)
     check_id = uuid.uuid4().hex
+    _ACTIVE_API_SOURCE_CHECKS.add(check_id)
     _save_api_source_check_state(
         jobs_dir,
         check_id,
@@ -581,7 +603,11 @@ def _start_api_source_check_thread(app: Flask, jobs_dir: Path, side: str) -> str
         },
     )
     thread = threading.Thread(target=_check_api_source, args=(app, jobs_dir, check_id), daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _ACTIVE_API_SOURCE_CHECKS.discard(check_id)
+        raise
     return check_id
 
 
@@ -599,9 +625,12 @@ def _check_api_source(app: Flask, jobs_dir: Path, check_id: str) -> None:
             state = _load_api_source_check_state(jobs_dir, check_id)
             side = state["side"]
             server = _server_for_side(side)
+            _raise_if_api_source_check_cancelled(jobs_dir, check_id)
 
             def update(event):
                 current = _load_api_source_check_state(jobs_dir, check_id)
+                if current.get("cancel_requested"):
+                    raise ApiOperationCancelled("API source check was cancelled by the user.")
                 current.update(
                     {
                         "status": "running",
@@ -629,9 +658,14 @@ def _check_api_source(app: Flask, jobs_dir: Path, check_id: str) -> None:
                 }
             )
             _save_api_source_check_state(jobs_dir, check_id, state)
+        except ApiOperationCancelled as exc:
+            state.update({"status": "cancelled", "stage": "cancelled", "message": str(exc)})
+            _save_api_source_check_state(jobs_dir, check_id, state)
         except Exception as exc:
             state.update({"status": "error", "stage": "error", "message": str(exc)})
             _save_api_source_check_state(jobs_dir, check_id, state)
+        finally:
+            _ACTIVE_API_SOURCE_CHECKS.discard(check_id)
 
 
 def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, str], files) -> str:
@@ -644,6 +678,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
         else:
             _server_for_side(side)
     api_sides = [side for side in ("left", "right") if input_sources[side] == "api"]
+    _ACTIVE_API_IMPORTS.add(import_id)
     _save_import_state(
         jobs_dir,
         import_id,
@@ -661,7 +696,11 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
         },
     )
     thread = threading.Thread(target=_import_job_sources, args=(app, jobs_dir, import_id), daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _ACTIVE_API_IMPORTS.discard(import_id)
+        raise
     return import_id
 
 
@@ -730,6 +769,8 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
         except Exception as exc:
             state.update({"status": "error", "stage": "error", "message": str(exc)})
             _save_import_state(jobs_dir, import_id, state)
+        finally:
+            _ACTIVE_API_IMPORTS.discard(import_id)
 
 
 def _import_state_path(jobs_dir: Path, import_id: str) -> Path:
@@ -752,6 +793,27 @@ def _save_api_source_check_state(jobs_dir: Path, check_id: str, state: dict) -> 
     tmp_path.replace(path)
 
 
+def _request_api_source_check_stop(jobs_dir: Path, check_id: str) -> None:
+    state = _load_api_source_check_state(jobs_dir, check_id)
+    if state.get("status") not in RUNNING_OPERATION_STATUSES:
+        return
+    state.update(
+        {
+            "status": "cancelling",
+            "stage": "cancelling",
+            "message": "Stop requested. Waiting for the current API request to finish.",
+            "cancel_requested": True,
+        }
+    )
+    _save_api_source_check_state(jobs_dir, check_id, state)
+
+
+def _raise_if_api_source_check_cancelled(jobs_dir: Path, check_id: str) -> None:
+    state = _load_api_source_check_state(jobs_dir, check_id)
+    if state.get("cancel_requested"):
+        raise ApiOperationCancelled("API source check was cancelled by the user.")
+
+
 def _load_api_source_check_state(jobs_dir: Path, check_id: str) -> dict:
     path = _api_source_check_state_path(jobs_dir, check_id)
     if not path.exists():
@@ -760,6 +822,7 @@ def _load_api_source_check_state(jobs_dir: Path, check_id: str) -> dict:
         return _operation_state_with_liveness(
             json.loads(path.read_text(encoding="utf-8")),
             "API source check",
+            _ACTIVE_API_SOURCE_CHECKS,
         )
     except json.JSONDecodeError as exc:
         raise WebMergeError("API source check state could not be read. Please refresh and try again.") from exc
@@ -782,8 +845,21 @@ def _list_api_source_checks(jobs_dir: Path) -> list[dict[str, Any]]:
                 "message": f"API source check state could not be read: {exc}",
             }
         state.setdefault("check_id", check_id)
-        checks.append(_operation_state_with_liveness(state, "API source check"))
+        checks.append(_operation_state_with_liveness(state, "API source check", _ACTIVE_API_SOURCE_CHECKS))
     return checks
+
+
+def _running_api_source_checks_by_side(jobs_dir: Path) -> dict[str, dict[str, Any]]:
+    running = {}
+    for state in _list_api_source_checks(jobs_dir):
+        side = state.get("side")
+        if side in {"left", "right"} and state.get("status") in RUNNING_OPERATION_STATUSES:
+            running.setdefault(side, state)
+    return running
+
+
+def _running_api_source_check_for_side(jobs_dir: Path, side: str) -> Optional[dict[str, Any]]:
+    return _running_api_source_checks_by_side(jobs_dir).get(side)
 
 
 def _save_import_state(jobs_dir: Path, import_id: str, state: dict) -> None:
@@ -802,6 +878,7 @@ def _load_import_state(jobs_dir: Path, import_id: str) -> dict:
         return _operation_state_with_liveness(
             json.loads(path.read_text(encoding="utf-8")),
             "API import",
+            _ACTIVE_API_IMPORTS,
         )
     except json.JSONDecodeError as exc:
         raise WebMergeError("API import state could not be read. Please refresh and try again.") from exc
@@ -824,15 +901,20 @@ def _list_api_imports(jobs_dir: Path) -> list[dict[str, Any]]:
                 "message": f"API import state could not be read: {exc}",
             }
         state.setdefault("import_id", import_id)
-        imports.append(_operation_state_with_liveness(state, "API import"))
+        imports.append(_operation_state_with_liveness(state, "API import", _ACTIVE_API_IMPORTS))
     return imports
 
 
-def _operation_state_with_liveness(state: dict[str, Any], operation_name: str) -> dict[str, Any]:
-    if state.get("status") != "running":
+def _operation_state_with_liveness(
+    state: dict[str, Any],
+    operation_name: str,
+    active_operation_ids: set[str],
+) -> dict[str, Any]:
+    if state.get("status") not in RUNNING_OPERATION_STATUSES:
         return state
     worker_pid = state.get("worker_pid")
-    if _worker_pid_is_alive(worker_pid):
+    operation_id = state.get("check_id") or state.get("import_id")
+    if _worker_pid_is_alive(worker_pid) and operation_id in active_operation_ids:
         return state
     stale_state = dict(state)
     stale_state.update(

@@ -396,7 +396,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"API source checks", response.data)
         self.assertIn(b"YGHT Ghostwriter", response.data)
-        self.assertIn(b"Fetched 192 backup record", response.data)
+        self.assertIn(b"worker process is no longer active", response.data)
         self.assertIn(b"/api-sources/checks/check123/status", response.data)
 
     def test_home_marks_api_source_checks_without_live_worker_as_stale(self):
@@ -451,7 +451,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"API imports", response.data)
-        self.assertIn(b"Fetching left API source", response.data)
+        self.assertIn(b"worker process is no longer active", response.data)
         self.assertIn(b"/imports/import123/status", response.data)
 
     def test_upload_review_complete_and_download_outputs(self):
@@ -752,6 +752,74 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"API source check status", status.data)
         self.assertIn(b"Queued API source check", status.data)
 
+    def test_api_fetch_check_reuses_running_source_check(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        with patch("web_app.threading.Thread") as thread_class:
+            thread_class.return_value.start.return_value = None
+            first = self.client.post("/api-sources/left/check", data=self.with_csrf(), follow_redirects=False)
+            second = self.client.post("/api-sources/left/check", data=self.with_csrf(), follow_redirects=False)
+
+        self.assertEqual(first.status_code, 302)
+        self.assertEqual(second.status_code, 302)
+        self.assertEqual(second.headers["Location"], first.headers["Location"])
+
+    def test_home_fetch_button_links_to_running_source_check(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        with patch("web_app.threading.Thread") as thread_class:
+            thread_class.return_value.start.return_value = None
+            check = self.client.post("/api-sources/left/check", data=self.with_csrf(), follow_redirects=False)
+            response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Fetch Left Test Ghostwriter", response.data)
+        self.assertIn(check.headers["Location"].encode("utf-8"), response.data)
+        self.assertNotIn(b'action="/api-sources/left/check"', response.data)
+
+    def test_api_source_check_status_can_request_stop(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        with patch("web_app.threading.Thread") as thread_class:
+            thread_class.return_value.start.return_value = None
+            check = self.client.post("/api-sources/left/check", data=self.with_csrf(), follow_redirects=False)
+            status = self.client.get(check.headers["Location"])
+            stop = self.client.post(
+                check.headers["Location"].replace("/status", "/stop"),
+                data=self.with_csrf(),
+                follow_redirects=True,
+            )
+
+        self.assertEqual(status.status_code, 200)
+        self.assertIn(b">Stop<", status.data)
+        self.assertEqual(stop.status_code, 200)
+        self.assertIn(b"cancelling", stop.data)
+        self.assertIn(b"Stop requested", stop.data)
+
     def test_api_source_check_worker_creates_backup_without_creating_merge_job(self):
         config = get_config()
         backup_root = Path(self.tmp_dir.name) / "backups"
@@ -800,6 +868,35 @@ class FlaskRouteTests(unittest.TestCase):
         backup_files = list((backup_root / "left").glob("*.json"))
         self.assertEqual(len(backup_files), 1)
         api_class.return_value.create_backup.assert_called_once_with(backup_root)
+
+    def test_api_source_check_worker_honours_stop_request(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        class CancellableApi:
+            def __init__(self, server, progress):
+                self.progress = progress
+
+            def create_backup(self, root):
+                self.progress(None)
+
+        with patch("web_app.threading.Thread") as thread_class, patch("web_app.GhostwriterApi", CancellableApi):
+            thread_class.return_value.start.return_value = None
+            response = self.client.post("/api-sources/left/check", data=self.with_csrf(), follow_redirects=False)
+            check_id = response.headers["Location"].rsplit("/", 2)[-2]
+            self.client.post(response.headers["Location"].replace("/status", "/stop"), data=self.with_csrf())
+            _check_api_source(self.app, Path(self.tmp_dir.name), check_id)
+
+        status = self.client.get(response.headers["Location"])
+        self.assertEqual(status.status_code, 200)
+        self.assertIn(b"cancelled", status.data)
 
     def test_api_import_status_handles_partial_import_state(self):
         import_dir = Path(self.tmp_dir.name) / "api_imports"

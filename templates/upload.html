@@ -37,16 +37,26 @@
   <p>Fetch configured API data and store a full backup without creating a merge job.</p>
   {% if api_servers.left.configured or api_servers.right.configured %}
     {% if api_servers.left.configured %}
+    {% set running_left_check = running_api_source_checks.get("left") %}
+    {% if running_left_check %}
+    <p><a class="button" href="{{ url_for('api_source_check_status', check_id=running_left_check.check_id) }}">Fetch {{ api_servers.left.name }}</a></p>
+    {% else %}
     <form method="post" action="{{ url_for('check_api_source', side='left') }}">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <button type="submit">Fetch {{ api_servers.left.name }}</button>
     </form>
     {% endif %}
+    {% endif %}
     {% if api_servers.right.configured %}
+    {% set running_right_check = running_api_source_checks.get("right") %}
+    {% if running_right_check %}
+    <p><a class="button" href="{{ url_for('api_source_check_status', check_id=running_right_check.check_id) }}">Fetch {{ api_servers.right.name }}</a></p>
+    {% else %}
     <form method="post" action="{{ url_for('check_api_source', side='right') }}">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <button type="submit">Fetch {{ api_servers.right.name }}</button>
     </form>
+    {% endif %}
     {% endif %}
   {% else %}
   <p>No API sources are configured.</p>
