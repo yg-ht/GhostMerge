@@ -8,7 +8,7 @@ from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
 from utils import (log, is_blank, is_optional_field, blank_for_type, get_type_as_str, Aborting,
-                   apply_configured_string_normalisation)
+                   apply_configured_string_normalisation, apply_extra_fields_key_migrations)
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -118,6 +118,11 @@ class Finding:
                             log('ERROR', f"User prompt to resolve field type mismatch not successful for "
                                          f"unknown reason - aborting", prefix="MODEL")
                             raise Aborting()
+
+            coerced_data["extra_fields"] = apply_extra_fields_key_migrations(
+                coerced_data.get("extra_fields"),
+                template_type="finding",
+            )
 
             # Validate severity
             allowed_severities = CONFIG.get("allowed_severities")

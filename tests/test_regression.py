@@ -206,6 +206,45 @@ class FindingModelRegressionTests(unittest.TestCase):
         self.assertEqual(parsed.tags, ["auth", "web"])
         self.assertEqual(parsed.extra_fields, {"owner": "red-team"})
 
+    def test_from_dict_migrates_finding_extra_field_prefixes(self):
+        record = finding(
+            description="kept",
+            extra_fields={
+                "extra_compliance_reference": None,
+                "owner": "red-team",
+            },
+        ).to_dict()
+
+        parsed = Finding.from_dict(record)
+
+        self.assertEqual(parsed.extra_fields, {"compliance_reference": None, "owner": "red-team"})
+
+    def test_from_dict_preserves_existing_extra_field_on_collision(self):
+        record = finding(
+            description="kept",
+            extra_fields={
+                "extra_compliance_reference": "old",
+                "compliance_reference": "new",
+            },
+        ).to_dict()
+
+        parsed = Finding.from_dict(record)
+
+        self.assertEqual(parsed.extra_fields, {"compliance_reference": "new"})
+
+    def test_extra_field_key_migration_does_not_change_observations(self):
+        parsed = Observation.from_dict(
+            {
+                "id": 1,
+                "title": "Observation",
+                "description": "kept",
+                "tags": [],
+                "extra_fields": {"extra_compliance_reference": None},
+            }
+        )
+
+        self.assertEqual(parsed.extra_fields, {"extra_compliance_reference": None})
+
     def test_to_dict_preserves_import_compatible_string_fields(self):
         parsed = finding(id=3, cvss_score=4.2, tags=["api", "auth"], extra_fields={"owner": "blue"})
 
