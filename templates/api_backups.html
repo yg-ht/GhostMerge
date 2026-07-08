@@ -24,7 +24,7 @@
         <td>
           <a class="button secondary" href="{{ url_for('api_backup_detail', side=backup.side, filename=backup.filename) }}">Open</a>
           <a class="button secondary" href="{{ url_for('api_backup_download', side=backup.side, filename=backup.filename) }}">Download JSON</a>
-          <form method="post" action="{{ url_for('api_backup_delete', side=backup.side, filename=backup.filename) }}">
+          <form method="post" action="{{ url_for('api_backup_delete', side=backup.side, filename=backup.filename) }}" onsubmit="return confirm('Delete this API backup? This cannot be undone.');">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <button class="danger" type="submit">Delete</button>
           </form>

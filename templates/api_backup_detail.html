@@ -11,7 +11,7 @@
 <section class="panel">
   <div class="actions">
     <a class="button secondary" href="{{ url_for('api_backup_download', side=side, filename=filename) }}">Download full backup JSON</a>
-    <form method="post" action="{{ url_for('api_backup_delete', side=side, filename=filename) }}">
+    <form method="post" action="{{ url_for('api_backup_delete', side=side, filename=filename) }}" onsubmit="return confirm('Delete this API backup? This cannot be undone.');">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <button class="danger" type="submit">Delete backup</button>
     </form>
