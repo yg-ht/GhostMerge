@@ -533,8 +533,10 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Check API source", response.data)
         self.assertIn(b"Fetch Left Test Ghostwriter", response.data)
 
-    def test_api_fetch_check_retrieves_records_without_creating_merge_job(self):
+    def test_api_fetch_check_creates_backup_without_creating_merge_job(self):
         config = get_config()
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        config["ghostwriter_api"]["backup_dir"] = str(backup_root)
         config["ghostwriter_api"]["servers"]["left"].update(
             {
                 "enabled": True,
@@ -544,14 +546,37 @@ class FlaskRouteTests(unittest.TestCase):
             }
         )
 
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "checked-backup.json"
+        backup_data = {
+            "server_side": "left",
+            "server_name": "Left Test Ghostwriter",
+            "graphql_url": "https://left.example/v1/graphql",
+            "created_at": "20260705T000000Z",
+            "record_count": 2,
+            "raw_records": [
+                {"record": {"id": 1, "title": "First"}, "tags": []},
+                {"record": {"id": 2, "title": "Second"}, "tags": []},
+            ],
+            "normalised_records": [record(), record(id="2")],
+        }
+
+        def create_backup(root):
+            backup_path.write_text(json.dumps(backup_data), encoding="utf-8")
+            return backup_path
+
         with patch("web_app.GhostwriterApi") as api_class:
-            api_class.return_value.fetch_findings.return_value = [record(), record(id="2")]
+            api_class.return_value.create_backup.side_effect = create_backup
             response = self.client.post("/api-sources/left/check", data=self.with_csrf())
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Fetched 2 findings from Left Test Ghostwriter", response.data)
+        self.assertIn(b"Fetched and backed up 2 findings from Left Test Ghostwriter", response.data)
+        self.assertIn(b"Open backup browser", response.data)
         self.assertEqual(list_previous_jobs(Path(self.tmp_dir.name)), [])
-        api_class.return_value.fetch_findings.assert_called_once_with()
+        backup_files = list((backup_root / "left").glob("*.json"))
+        self.assertEqual(len(backup_files), 1)
+        api_class.return_value.create_backup.assert_called_once_with(backup_root)
 
     def test_api_import_status_handles_partial_import_state(self):
         import_dir = Path(self.tmp_dir.name) / "api_imports"

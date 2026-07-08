@@ -141,13 +141,15 @@ def create_app(test_config: dict | None = None) -> Flask:
             if side not in {"left", "right"}:
                 return render_template("error.html", error="Unknown API source side."), 404
             server = _server_for_side(side)
-            records = GhostwriterApi(server).fetch_findings()
+            backup_path = GhostwriterApi(server).create_backup(backup_root_from_config(CONFIG))
+            backup = verify_backup(backup_path)
             return render_template(
                 "upload.html",
                 api_check={
                     "side": side,
                     "server_name": server.name,
-                    "record_count": len(records),
+                    "record_count": backup["record_count"],
+                    "backup_filename": backup_path.name,
                 },
                 previous_jobs=list_previous_jobs(jobs_dir),
                 api_servers=configured_server_summary(CONFIG),

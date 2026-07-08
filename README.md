@@ -238,10 +238,11 @@ The web frontend can load the left side, the right side, or both sides directly
 from configured Ghostwriter API servers. Configure the relevant side under
 `ghostwriter_api.servers`, then choose the API option on the upload page.
 
-Use the home page's API source check buttons to fetch a configured side before
-creating a merge job. This confirms GhostMerge can retrieve the current findings
-and reports the record count without saving a job. The Create merge job button
-still performs the same retrieval automatically for any side set to API.
+Use the home page's API source check buttons to fetch and back up a configured
+side before creating a merge job. This confirms GhostMerge can retrieve the
+current findings, stores the full backup JSON in the backup browser, and reports
+the record count without saving a job. The Create merge job button still
+performs the API retrieval automatically for any side set to API.
 
 When a merge job is API-backed, the completion page offers live synchronisation
 for that side after conflict review and sensitivity review are complete.

@@ -4,7 +4,8 @@
 {% if error %}<div class="panel error">{{ error }}</div>{% endif %}
 {% if api_check %}
 <div class="panel">
-  <p>Fetched {{ api_check.record_count }} findings from {{ api_check.server_name }}.</p>
+  <p>Fetched and backed up {{ api_check.record_count }} findings from {{ api_check.server_name }}.</p>
+  <p>Backup file: {{ api_check.backup_filename }}. <a href="{{ url_for('api_backups') }}">Open backup browser</a></p>
 </div>
 {% endif %}
 <form class="panel" action="{{ url_for('create_job_route') }}" method="post" enctype="multipart/form-data">
@@ -33,7 +34,7 @@
 </form>
 <section class="panel">
   <h2>Check API source</h2>
-  <p>Fetch configured API data without creating a merge job.</p>
+  <p>Fetch configured API data and store a full backup without creating a merge job.</p>
   {% if api_servers.left.configured or api_servers.right.configured %}
     {% if api_servers.left.configured %}
     <form method="post" action="{{ url_for('check_api_source', side='left') }}">
