@@ -4,8 +4,91 @@ from imports import (Any, BeautifulSoup, Dict, fields, key, List, NavigableStrin
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, stringify_field, apply_configured_normalisation, _normalise_sensitive_term_for_matching, _replace_sensitive_opening_tag_with_closing_pair
+from utils import log, stringify_field, apply_configured_normalisation, _normalise_sensitive_term_for_matching
 from model import Finding
+
+def _opening_tag_name(tag_text: str) -> Optional[str]:
+    """Return the element name if tag_text is an opening HTML tag."""
+    tag_text = tag_text.strip()
+    match = re.fullmatch(r"<\s*([A-Za-z][A-Za-z0-9:_-]*)\b[^<>]*>", tag_text)
+    if not match:
+        return None
+    if re.match(r"<\s*/", tag_text):
+        return None
+    if re.search(r"/\s*>$", tag_text):
+        return None
+    return match.group(1).lower()
+
+def _find_matching_closing_tag(text: str, opening_end: int, tag_name: str) -> Optional[Tuple[int, int]]:
+    """Find the closing tag paired with an opening sensitive-term tag."""
+    tag_pattern = re.compile(
+        rf"<\s*(/?)\s*{re.escape(tag_name)}\b[^<>]*?>",
+        flags=re.IGNORECASE,
+    )
+    depth = 1
+
+    for match in tag_pattern.finditer(text, opening_end):
+        tag_text = match.group(0)
+        is_closing = bool(match.group(1))
+        is_self_closing = bool(re.search(r"/\s*>$", tag_text))
+
+        if is_self_closing:
+            continue
+
+        if is_closing:
+            depth -= 1
+            if depth == 0:
+                return match.span()
+        else:
+            depth += 1
+
+    return None
+
+def _replacement_closing_tag(opening_replacement: str) -> Optional[str]:
+    """Return the closing tag implied by an opening replacement tag."""
+    replacement_tag = _opening_tag_name(opening_replacement)
+    if replacement_tag is None:
+        return None
+    return f"</{replacement_tag}>"
+
+def _replace_literal_or_opening_tag_pair(field_value: str, sensitive_term: str, replacement: str) -> str:
+    """Replace literal sensitive terms while preserving paired HTML tag safety.
+
+    HTML formatting rewrites are configured separately, but this fallback keeps
+    older local sensitive-term files from producing dangling closing tags.
+    """
+    tag_name = _opening_tag_name(sensitive_term)
+    if tag_name is None:
+        return re.sub(re.escape(sensitive_term), replacement, field_value, flags=re.IGNORECASE)
+
+    closing_replacement = _replacement_closing_tag(replacement) or ""
+    sensitive_pattern = re.compile(re.escape(sensitive_term), flags=re.IGNORECASE)
+    result_parts = []
+    cursor = 0
+
+    for match in sensitive_pattern.finditer(field_value):
+        if match.start() < cursor:
+            continue
+
+        closing_span = _find_matching_closing_tag(field_value, match.end(), tag_name)
+        if closing_span is None:
+            result_parts.append(field_value[cursor:match.start()])
+            result_parts.append(replacement)
+            cursor = match.end()
+            continue
+
+        closing_start, closing_end = closing_span
+        result_parts.append(field_value[cursor:match.start()])
+        result_parts.append(replacement)
+        result_parts.append(field_value[match.end():closing_start])
+        result_parts.append(closing_replacement)
+        cursor = closing_end
+
+    if cursor == 0:
+        return field_value
+
+    result_parts.append(field_value[cursor:])
+    return "".join(result_parts)
 
 def load_sensitive_terms(filename: str, filepath: str) -> Dict[str, Optional[str]] | None:
     """Parses a file of sensitive terms and optional replacements."""
@@ -80,9 +163,9 @@ def check_for_sensitivities(field, terms) -> List[Tuple[str, Optional[str]]]:
 def apply_sensitive_replacement(field_value: Any, sensitive_term: str, replacement: str) -> Any:
     """Replace a sensitive term using literal, case-insensitive matching.
 
-    When the sensitive term is an opening HTML tag, also remove or replace the
-    corresponding closing tag so replacements such as "<mark> =>" do not leave
-    dangling "</mark>" fragments behind.
+    Formatting-only HTML rewrites are handled by configured normalisation, but
+    opening-tag replacements still remove the paired closing tag for backward
+    compatibility with older local sensitive-term files.
     """
     field_value = apply_configured_normalisation(field_value)
     if not isinstance(field_value, str):
@@ -96,7 +179,7 @@ def apply_sensitive_replacement(field_value: Any, sensitive_term: str, replaceme
     if replacement is None:
         replacement = ""
 
-    replaced = _replace_sensitive_opening_tag_with_closing_pair(field_value, sensitive_term, replacement)
+    replaced = _replace_literal_or_opening_tag_pair(field_value, sensitive_term, replacement)
     return apply_configured_normalisation(replaced)
 
 def sensitivities_checker_records(

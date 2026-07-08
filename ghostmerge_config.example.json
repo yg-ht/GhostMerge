@@ -28,6 +28,80 @@
   "remove_lead_and_trail_whitespace": true,
   "remove_pointless_html_tags": true,
   "normalise_line_endings": true,
+  "formatting_cleanup_enabled": true,
+  "formatting_cleanup_rules": [
+    {
+      "name": "legacy-yellow-highlight-span",
+      "tag": "span",
+      "attrs": {
+        "class": "highlight",
+        "style": "background-color: yellow"
+      },
+      "replacement_tag": "mark"
+    },
+    {
+      "name": "legacy-font-weight-span",
+      "action": "unwrap",
+      "tag": "span",
+      "attrs": {
+        "style": "font-weight: 400"
+      }
+    },
+    {
+      "name": "legacy-red-span-inside-mark",
+      "action": "unwrap",
+      "tag": "span",
+      "parent_tag": "mark",
+      "attrs": {
+        "data-color": "#f00",
+        "style": "color: #f00"
+      }
+    },
+    {
+      "name": "remove-xhtml-namespace-from-paragraph",
+      "tag": "p",
+      "attrs": {
+        "xmlns": "http://www.w3.org/1999/xhtml"
+      },
+      "replacement_tag": "p"
+    },
+    {
+      "name": "remove-justified-paragraph-style",
+      "tag": "p",
+      "attrs": {
+        "style": "text-align: justify"
+      },
+      "replacement_tag": "p"
+    },
+    {
+      "name": "remove-xhtml-namespace-from-list",
+      "tag": "ul",
+      "attrs": {
+        "xmlns": "http://www.w3.org/1999/xhtml"
+      },
+      "replacement_tag": "ul"
+    },
+    {
+      "name": "remove-xhtml-namespace-from-pre",
+      "tag": "pre",
+      "attrs": {
+        "xmlns": "http://www.w3.org/1999/xhtml",
+        "spellcheck": "false"
+      },
+      "replacement_tag": "pre",
+      "replacement_attrs": {
+        "spellcheck": "false"
+      }
+    },
+    {
+      "name": "normalise-language-markup-pre",
+      "tag": "pre",
+      "attrs": {
+        "class": "language-markup"
+      },
+      "replacement_tag": "pre"
+    }
+  ],
   "auto_accept_single_sided_content": true,
   "tui_refresh_rate": 4.0,
   "field_level_diff_highlight_style": "bold blue",

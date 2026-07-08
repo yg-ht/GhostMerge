@@ -268,132 +268,6 @@ def remove_double_spaces_from_string(input_string: str) -> str:
     return result
 
 
-def _opening_tag_name(tag_text: str) -> Optional[str]:
-    """Return the element name if tag_text is an opening HTML tag, otherwise None."""
-    tag_text = tag_text.strip()
-    match = re.fullmatch(r"<\s*([A-Za-z][A-Za-z0-9:_-]*)\b[^<>]*>", tag_text)
-    if not match:
-        return None
-    if re.match(r"<\s*/", tag_text):
-        return None
-    if re.search(r"/\s*>$", tag_text):
-        return None
-    return match.group(1).lower()
-
-def _find_matching_closing_tag(text: str, opening_end: int, tag_name: str) -> Optional[Tuple[int, int]]:
-    """Find the closing tag span paired with an opening tag ending at opening_end.
-
-    This is intentionally small and HTML-ish rather than a full parser. It only
-    tracks tags with the same element name, which is enough to avoid deleting the
-    first unrelated </tag> when same-named elements are nested.
-    """
-    tag_pattern = re.compile(
-        rf"<\s*(/?)\s*{re.escape(tag_name)}\b[^<>]*?>",
-        flags=re.IGNORECASE,
-    )
-    depth = 1
-
-    for match in tag_pattern.finditer(text, opening_end):
-        tag_text = match.group(0)
-        is_closing = bool(match.group(1))
-        is_self_closing = bool(re.search(r"/\s*>$", tag_text))
-
-        if is_self_closing:
-            continue
-
-        if is_closing:
-            depth -= 1
-            if depth == 0:
-                return match.span()
-        else:
-            depth += 1
-
-    return None
-
-def apply_configured_normalisation(value: Any) -> Any:
-    """
-    Apply configured normalisation recursively to strings, lists, and dictionaries.
-    Non-string scalar values are returned unchanged.
-    """
-    if isinstance(value, str):
-        return apply_configured_string_normalisation(value)
-    if isinstance(value, list):
-        return [apply_configured_normalisation(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(apply_configured_normalisation(item) for item in value)
-    if isinstance(value, dict):
-        return {
-            key: apply_configured_normalisation(item)
-            for key, item in value.items()
-        }
-    return value
-
-
-
-def _replacement_closing_tag(opening_replacement: str) -> Optional[str]:
-    """Return the closing tag needed by an opening replacement.
-
-    None means the replacement is not itself an opening tag and any matched closing
-    tag for the sensitive opening tag should be removed.
-    """
-    replacement_tag = _opening_tag_name(opening_replacement)
-    if replacement_tag is None:
-        return None
-    return f"</{replacement_tag}>"
-
-def _replace_sensitive_opening_tag_with_closing_pair(field_value: str, sensitive_term: str, replacement: str) -> str:
-    """Replace an opening tag term and its paired closing tag.
-
-    Examples:
-      - <mark> =>            removes both <mark> and </mark>
-      - <b> => <strong>      replaces </b> with </strong>
-      - <p style="x"> => <p> keeps the paired </p> as </p>
-    """
-    tag_name = _opening_tag_name(sensitive_term)
-    if tag_name is None:
-        sensitive_pattern = re.escape(sensitive_term)
-        return re.sub(sensitive_pattern, replacement, field_value, flags=re.IGNORECASE)
-
-    closing_replacement = _replacement_closing_tag(replacement)
-    if closing_replacement is None:
-        closing_replacement = ""
-
-    sensitive_pattern = re.compile(re.escape(sensitive_term), flags=re.IGNORECASE)
-    result_parts = []
-    cursor = 0
-    replacement_count = 0
-
-    for match in sensitive_pattern.finditer(field_value):
-        if match.start() < cursor:
-            continue
-
-        closing_span = _find_matching_closing_tag(field_value, match.end(), tag_name)
-        if closing_span is None:
-            result_parts.append(field_value[cursor:match.start()])
-            result_parts.append(replacement)
-            cursor = match.end()
-            replacement_count += 1
-            continue
-
-        closing_start, closing_end = closing_span
-        result_parts.append(field_value[cursor:match.start()])
-        result_parts.append(replacement)
-        result_parts.append(field_value[match.end():closing_start])
-        result_parts.append(closing_replacement)
-        cursor = closing_end
-        replacement_count += 1
-
-    if replacement_count == 0:
-        return field_value
-
-    result_parts.append(field_value[cursor:])
-    log(
-        "DEBUG",
-        f"Sensitive opening tag replacement also handled {replacement_count} closing tag(s) for </{tag_name}>",
-        prefix="SENSITIVITY",
-    )
-    return "".join(result_parts)
-
 def _normalise_sensitive_term_for_matching(term: str) -> str:
     """Normalise a sensitive-term key without deleting empty HTML tags.
 
@@ -470,6 +344,287 @@ def normalise_html_tag_spacing(input_string: str) -> str:
 
     return normalised
 
+def _normalise_configured_tag_name(value: Any) -> Optional[str]:
+    """Return a safe lower-case HTML tag name from config, or None if invalid."""
+    if not isinstance(value, str):
+        return None
+
+    tag_name = value.strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9:_-]*", tag_name):
+        return None
+
+    return tag_name
+
+def _html_attrs_from_opening_tag(opening_tag: str, tag_name: str) -> Optional[dict[str, Any]]:
+    """Parse one opening tag and return its attributes without touching nearby text."""
+    soup = BeautifulSoup(opening_tag, "html.parser")
+    parsed_tag = soup.find(tag_name)
+    if parsed_tag is None:
+        return None
+    return dict(parsed_tag.attrs)
+
+def _normalise_html_attribute_value(value: Any) -> str:
+    """Normalise attribute values so harmless parser/config differences match."""
+    if isinstance(value, (list, tuple)):
+        value = " ".join(str(item) for item in value)
+
+    normalised = str(value).replace("\xa0", " ").strip().lower()
+    normalised = re.sub(r"\s+", " ", normalised)
+    return normalised
+
+def _normalise_style_declarations(value: Any) -> set[str]:
+    """Return lower-case CSS declarations with insignificant spacing removed."""
+    normalised = _normalise_html_attribute_value(value)
+    declarations = set()
+
+    for declaration in normalised.split(";"):
+        declaration = declaration.strip()
+        if not declaration:
+            continue
+
+        # Inline styles vary between "name:value" and "name: value"; compare the
+        # declaration content rather than that cosmetic spacing.
+        declaration = re.sub(r"\s*:\s*", ":", declaration)
+        declarations.add(declaration)
+
+    return declarations
+
+def _configured_attrs_match(actual_attrs: dict[str, Any], expected_attrs: dict[str, Any]) -> bool:
+    """Return True when a parsed tag contains all attributes required by a rule."""
+    actual_attrs_by_name = {
+        str(attr_name).strip().lower(): attr_value
+        for attr_name, attr_value in actual_attrs.items()
+    }
+
+    for attr_name, expected_value in expected_attrs.items():
+        attr_key = str(attr_name).strip().lower()
+        if attr_key not in actual_attrs_by_name:
+            return False
+
+        actual_value = actual_attrs_by_name[attr_key]
+
+        if attr_key == "class":
+            # Class order is not meaningful in HTML. Treat configured classes as
+            # required classes so an extra class does not block a known cleanup.
+            actual_classes = set(_normalise_html_attribute_value(actual_value).split())
+            expected_classes = set(_normalise_html_attribute_value(expected_value).split())
+            if not expected_classes.issubset(actual_classes):
+                return False
+            continue
+
+        if attr_key == "style":
+            # Ghostwriter/browser exports may keep or drop trailing semicolons.
+            # Compare declarations so equivalent inline styles match reliably.
+            actual_styles = _normalise_style_declarations(actual_value)
+            expected_styles = _normalise_style_declarations(expected_value)
+            if not expected_styles.issubset(actual_styles):
+                return False
+            continue
+
+        if _normalise_html_attribute_value(actual_value) != _normalise_html_attribute_value(expected_value):
+            return False
+
+    return True
+
+def _find_matching_html_closing_tag(text: str, opening_end: int, tag_name: str) -> Optional[Tuple[int, int]]:
+    """Find the closing tag paired with an opening tag in a field fragment."""
+    tag_pattern = re.compile(
+        rf"<\s*(/?)\s*{re.escape(tag_name)}\b[^<>]*?>",
+        flags=re.IGNORECASE,
+    )
+    depth = 1
+
+    for match in tag_pattern.finditer(text, opening_end):
+        tag_text = match.group(0)
+        is_closing = bool(match.group(1))
+        is_self_closing = bool(re.search(r"/\s*>$", tag_text))
+
+        if is_self_closing:
+            continue
+
+        if is_closing:
+            depth -= 1
+            if depth == 0:
+                return match.span()
+        else:
+            depth += 1
+
+    return None
+
+def _active_html_tag_stack(text: str, end: int) -> list[str]:
+    """Return the simple open-tag stack before an offset.
+
+    This is intentionally small and only supports parent constraints for cleanup
+    rules. If markup is malformed, the stack is best-effort and the constrained
+    rule simply will not match unless the expected parent is active.
+    """
+    stack: list[str] = []
+    tag_pattern = re.compile(r"<\s*(/?)\s*([A-Za-z][A-Za-z0-9:_-]*)\b[^<>]*?>")
+
+    for match in tag_pattern.finditer(text, 0, end):
+        tag_name = match.group(2).lower()
+        tag_text = match.group(0)
+        is_closing = bool(match.group(1))
+        is_self_closing = bool(re.search(r"/\s*>$", tag_text))
+
+        if is_self_closing:
+            continue
+
+        if is_closing:
+            if tag_name in stack:
+                while stack:
+                    active_tag = stack.pop()
+                    if active_tag == tag_name:
+                        break
+            continue
+
+        stack.append(tag_name)
+
+    return stack
+
+def _formatting_parent_matches(input_string: str, opening_start: int, rule: dict[str, Any]) -> bool:
+    """Return whether a rule's optional parent_tag constraint is satisfied."""
+    parent_tag = rule.get("parent_tag")
+    if parent_tag is None:
+        return True
+
+    stack = _active_html_tag_stack(input_string, opening_start)
+    return bool(stack and stack[-1] == parent_tag)
+
+def _format_html_opening_tag(tag_name: str, attrs: dict[str, Any]) -> str:
+    """Build a small deterministic opening tag for configured replacements."""
+    if not attrs:
+        return f"<{tag_name}>"
+
+    attr_parts = []
+    for attr_name, attr_value in attrs.items():
+        if isinstance(attr_value, (list, tuple)):
+            attr_value = " ".join(str(item) for item in attr_value)
+        attr_parts.append(f'{attr_name}="{attr_value}"')
+
+    return f"<{tag_name} {' '.join(attr_parts)}>"
+
+def _iter_formatting_cleanup_rules() -> list[dict[str, Any]]:
+    """Return validated formatting cleanup rules from config."""
+    rules = CONFIG.get("formatting_cleanup_rules", [])
+    if not isinstance(rules, list):
+        log("WARN", "formatting_cleanup_rules must be a list; skipping formatting cleanup", prefix="UTILS")
+        return []
+
+    validated_rules = []
+    for index, rule in enumerate(rules, start=1):
+        if not isinstance(rule, dict):
+            log("WARN", f"Formatting cleanup rule {index} is not an object; skipping", prefix="UTILS")
+            continue
+
+        tag_name = _normalise_configured_tag_name(rule.get("tag"))
+        action = str(rule.get("action") or "replace_tag").strip().lower()
+        replacement_tag = _normalise_configured_tag_name(rule.get("replacement_tag"))
+        parent_tag = _normalise_configured_tag_name(rule.get("parent_tag"))
+        attrs = rule.get("attrs", {})
+        replacement_attrs = rule.get("replacement_attrs", {})
+
+        if action not in {"replace_tag", "unwrap"}:
+            log("WARN", f"Formatting cleanup rule {index} has an invalid action; skipping", prefix="UTILS")
+            continue
+
+        if tag_name is None or (action == "replace_tag" and replacement_tag is None):
+            log("WARN", f"Formatting cleanup rule {index} has an invalid tag or replacement_tag; skipping", prefix="UTILS")
+            continue
+
+        if not isinstance(attrs, dict) or not isinstance(replacement_attrs, dict):
+            log("WARN", f"Formatting cleanup rule {index} has invalid attrs data; skipping", prefix="UTILS")
+            continue
+
+        validated_rules.append(
+            {
+                "name": str(rule.get("name") or f"rule-{index}"),
+                "action": action,
+                "tag": tag_name,
+                "parent_tag": parent_tag,
+                "attrs": attrs,
+                "replacement_tag": replacement_tag,
+                "replacement_attrs": replacement_attrs,
+            }
+        )
+
+    return validated_rules
+
+def apply_formatting_cleanup(input_string: str) -> str:
+    """Rewrite configured deprecated formatting HTML before review decisions.
+
+    This is intentionally separate from sensitive-term processing. Formatting
+    cleanup is deterministic normalisation, while sensitivity review is a human
+    decision workflow for real sensitive content.
+    """
+    if not CONFIG.get("formatting_cleanup_enabled", False):
+        return input_string
+
+    if "<" not in input_string or ">" not in input_string:
+        return input_string
+
+    rules = _iter_formatting_cleanup_rules()
+    if not rules:
+        return input_string
+
+    replacements: list[tuple[int, int, str]] = []
+
+    for rule in rules:
+        opening_pattern = re.compile(
+            rf"<\s*{re.escape(rule['tag'])}\b[^<>]*?>",
+            flags=re.IGNORECASE,
+        )
+
+        for match in opening_pattern.finditer(input_string):
+            opening_tag = match.group(0)
+            if re.search(r"/\s*>$", opening_tag):
+                continue
+
+            attrs = _html_attrs_from_opening_tag(opening_tag, rule["tag"])
+            if attrs is None or not _configured_attrs_match(attrs, rule["attrs"]):
+                continue
+
+            if not _formatting_parent_matches(input_string, match.start(), rule):
+                continue
+
+            closing_span = _find_matching_html_closing_tag(input_string, match.end(), rule["tag"])
+
+            if rule["action"] == "unwrap":
+                replacements.append((match.start(), match.end(), ""))
+                if closing_span is not None:
+                    replacements.append((closing_span[0], closing_span[1], ""))
+            else:
+                replacements.append(
+                    (
+                        match.start(),
+                        match.end(),
+                        _format_html_opening_tag(rule["replacement_tag"], rule["replacement_attrs"]),
+                    )
+                )
+                if closing_span is not None:
+                    replacements.append((closing_span[0], closing_span[1], f"</{rule['replacement_tag']}>"))
+
+    if replacements:
+        replacements.sort(key=lambda item: item[0])
+        result_parts = []
+        cursor = 0
+        applied = 0
+
+        for start, end, replacement in replacements:
+            if start < cursor:
+                continue
+
+            result_parts.append(input_string[cursor:start])
+            result_parts.append(replacement)
+            cursor = end
+            applied += 1
+
+        result_parts.append(input_string[cursor:])
+        log("DEBUG", f"Applied {applied} configured formatting cleanup replacement(s)", prefix="UTILS")
+        return normalise_html_tag_spacing("".join(result_parts).strip())
+
+    return input_string
+
 def remove_pointless_html_tags(input_string: str) -> str:
     """
        Remove pointless empty HTML wrappers such as:
@@ -485,6 +640,9 @@ def remove_pointless_html_tags(input_string: str) -> str:
 
        Structural void elements (br, img, hr, etc.) are never removed.
        """
+    if "<" not in input_string or ">" not in input_string:
+        return input_string
+
     soup = BeautifulSoup(input_string, "html.parser")
 
     # Process children first so parents see already cleaned content
@@ -572,12 +730,19 @@ def apply_configured_string_normalisation(input_string: str) -> str:
             log("DEBUG", "Leading or trailing whitespace stripped", prefix="UTILS")
         normalised = stripped
 
+    if CONFIG.get('formatting_cleanup_enabled', False):
+        normalised = apply_formatting_cleanup(normalised)
+
     if CONFIG.get('remove_pointless_html_tags', False):
         normalised = remove_pointless_html_tags(normalised)
 
     # Run tag-spacing cleanup last as replacements and BeautifulSoup serialisation
     # can both leave harmless formatting differences behind.
-    if CONFIG.get('remove_pointless_html_tags', False) or CONFIG.get('normalise_line_endings', False):
+    if (
+        CONFIG.get('remove_pointless_html_tags', False)
+        or CONFIG.get('normalise_line_endings', False)
+        or CONFIG.get('formatting_cleanup_enabled', False)
+    ):
         normalised = normalise_html_tag_spacing(normalised)
 
     return normalised

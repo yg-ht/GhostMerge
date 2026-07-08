@@ -538,6 +538,69 @@ acme-corp => [REDACTED COMPANY]
 During processing, GhostMerge scans finding fields for these terms and offers
 the analyst a chance to edit, keep, or apply a replacement.
 
+## Formatting cleanup
+
+Formatting cleanup is configured in `ghostmerge_config.example.json` and local
+config overrides. It runs as part of string normalisation before matching,
+conflict review, and sensitivity review, so deprecated presentation markup does
+not become a review decision.
+
+The default rule rewrites legacy yellow highlight spans:
+
+```html
+<span class="highlight" style="background-color: yellow">text</span>
+```
+
+to:
+
+```html
+<mark>text</mark>
+```
+
+Additional cleanup rules can be added with a source tag, required attributes,
+and replacement tag:
+
+```json
+{
+  "formatting_cleanup_enabled": true,
+  "formatting_cleanup_rules": [
+    {
+      "name": "legacy-yellow-highlight-span",
+      "tag": "span",
+      "attrs": {
+        "class": "highlight",
+        "style": "background-color: yellow"
+      },
+      "replacement_tag": "mark"
+    },
+    {
+      "name": "legacy-font-weight-span",
+      "action": "unwrap",
+      "tag": "span",
+      "attrs": {
+        "style": "font-weight: 400"
+      }
+    },
+    {
+      "name": "legacy-red-span-inside-mark",
+      "action": "unwrap",
+      "tag": "span",
+      "parent_tag": "mark",
+      "attrs": {
+        "data-color": "#f00",
+        "style": "color: #f00"
+      }
+    }
+  ]
+}
+```
+
+This is separate from sensitive terms. Sensitive terms should be used for
+content that needs analyst review, not deterministic HTML formatting rewrites.
+Older local sensitive term files that still contain opening HTML tag
+replacements are handled safely for backwards compatibility, but new formatting
+cleanup should be added here instead.
+
 ## Testing
 
 GhostMerge includes a pytest-discoverable regression suite under `tests/`. From

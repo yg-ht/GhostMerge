@@ -8,7 +8,7 @@ from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
 from utils import (log, is_blank, is_optional_field, blank_for_type, get_type_as_str, Aborting,
-                   remove_double_spaces_from_string, remove_pointless_html_tags, normalise_line_endings)
+                   apply_configured_string_normalisation)
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -58,14 +58,7 @@ class Finding:
                 raw_value = data.get(field_name, None)
 
                 if isinstance(raw_value, str):
-                    if CONFIG['remove_double_spaces']:
-                        raw_value = remove_double_spaces_from_string(raw_value)
-                    if CONFIG['remove_lead_and_trail_whitespace']:
-                        raw_value = raw_value.strip()
-                    if CONFIG['remove_pointless_html_tags']:
-                        raw_value = remove_pointless_html_tags(raw_value)
-                    if CONFIG['normalise_line_endings']:
-                        raw_value = normalise_line_endings(raw_value)
+                    raw_value = apply_configured_string_normalisation(raw_value)
 
                 log('DEBUG', f'Checking "{field_name}" if data type is as expected. '
                              f'Currently {type(raw_value)}', prefix='MODEL')
@@ -281,14 +274,7 @@ class Observation:
                 raw_value = data.get(field_name, None)
 
                 if isinstance(raw_value, str):
-                    if CONFIG['remove_double_spaces']:
-                        raw_value = remove_double_spaces_from_string(raw_value)
-                    if CONFIG['remove_lead_and_trail_whitespace']:
-                        raw_value = raw_value.strip()
-                    if CONFIG['remove_pointless_html_tags']:
-                        raw_value = remove_pointless_html_tags(raw_value)
-                    if CONFIG['normalise_line_endings']:
-                        raw_value = normalise_line_endings(raw_value)
+                    raw_value = apply_configured_string_normalisation(raw_value)
 
                 origin = get_origin(field_type)
                 args = get_args(field_type)

@@ -20,7 +20,7 @@ from merge import (
     renumber_findings,
     resolve_conflict,
 )
-from model import Finding
+from model import Finding, Observation
 from sensitivity import (
     apply_sensitive_replacement,
     check_for_sensitivities,
@@ -28,6 +28,7 @@ from sensitivity import (
 )
 from utils import (
     Aborting,
+    apply_formatting_cleanup,
     apply_configured_normalisation,
     load_config,
     normalise_line_endings,
@@ -248,6 +249,71 @@ class NormalisationRegressionTests(unittest.TestCase):
 
         self.assertEqual(normalised, {"a": "one two", "b": ["kept\ntext"]})
 
+    def test_formatting_cleanup_replaces_legacy_highlight_span(self):
+        value = '<span class="highlight" style="background-color: yellow">secret</span>'
+
+        self.assertEqual(apply_formatting_cleanup(value), "<mark>secret</mark>")
+
+    def test_formatting_cleanup_unwraps_legacy_formatting_spans(self):
+        value = '<span style="font-weight: 400;">secret</span>'
+
+        self.assertEqual(apply_formatting_cleanup(value), "secret")
+
+    def test_formatting_cleanup_preserves_unrelated_angle_bracket_text(self):
+        value = 'Keep 5 < 10 > 3 and <span style="font-weight: 400;">secret</span>.'
+
+        self.assertEqual(apply_formatting_cleanup(value), "Keep 5 < 10 > 3 and secret.")
+
+    def test_formatting_cleanup_allows_harmless_attribute_variants(self):
+        value = '<span style="background-color: yellow;" class="highlight extra">secret</span>'
+
+        self.assertEqual(apply_formatting_cleanup(value), "<mark>secret</mark>")
+
+    def test_formatting_cleanup_only_unwraps_red_span_inside_mark(self):
+        highlighted = '<mark><span data-color="#f00" style="color: #f00;">secret</span></mark>'
+        standalone = '<span data-color="#f00" style="color: #f00;">secret</span>'
+
+        self.assertEqual(apply_formatting_cleanup(highlighted), "<mark>secret</mark>")
+        self.assertEqual(apply_formatting_cleanup(standalone), standalone)
+
+    def test_formatting_cleanup_preserves_unconfigured_spans(self):
+        value = '<span class="note" style="background-color: yellow">secret</span>'
+
+        self.assertEqual(apply_formatting_cleanup(value), value)
+
+    def test_formatting_cleanup_runs_for_finding_and_observation_imports(self):
+        value = '<span class="highlight" style="background-color: yellow">secret</span>'
+
+        parsed_finding = Finding.from_dict(finding(description=value).to_dict())
+        parsed_observation = Observation.from_dict(
+            {
+                "id": 1,
+                "title": "Observation",
+                "description": value,
+                "tags": [],
+                "extra_fields": {},
+            }
+        )
+
+        self.assertEqual(parsed_finding.description, "<mark>secret</mark>")
+        self.assertEqual(parsed_observation.description, "<mark>secret</mark>")
+
+    def test_formatting_cleanup_removes_deprecated_markup_review_noise(self):
+        legacy = '<span class="highlight" style="background-color: yellow">secret</span>'
+        current = "<mark>secret</mark>"
+
+        legacy_finding = Finding.from_dict(finding(description=legacy).to_dict())
+        current_finding = Finding.from_dict(finding(description=current).to_dict())
+
+        self.assertEqual(legacy_finding.description, current_finding.description)
+
+    def test_default_sensitive_terms_do_not_contain_formatting_cleanup_rules(self):
+        terms = load_sensitive_terms("sensitive_terms.txt", PROJECT_ROOT)
+
+        formatting_terms = [term for term in terms if "<" in term and ">" in term and term != "{{.evidence}}"]
+
+        self.assertEqual(formatting_terms, [])
+
 
 class MatchingRegressionTests(unittest.TestCase):
     def setUp(self):
@@ -340,7 +406,13 @@ class SensitivityRegressionTests(unittest.TestCase):
 
         self.assertEqual(hits, [("acme", "[CLIENT]"), ("secret", None)])
 
-    def test_replacement_handles_literal_terms_and_html_tag_pairs(self):
+    def test_replacement_handles_literals_and_legacy_opening_tag_pairs(self):
+        configure_for_tests(
+            sensitivity_check_enabled=True,
+            remove_pointless_html_tags=False,
+            normalise_line_endings=False,
+        )
+
         self.assertEqual(
             apply_sensitive_replacement("ACME and acme", "acme", "[CLIENT]"),
             "[CLIENT] and [CLIENT]",
