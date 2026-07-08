@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import ipaddress
+import os
 import secrets
 import threading
 import uuid
@@ -576,6 +577,7 @@ def _start_api_source_check_thread(app: Flask, jobs_dir: Path, side: str) -> str
             "total": 0,
             "backup_filename": None,
             "record_count": None,
+            "worker_pid": os.getpid(),
         },
     )
     thread = threading.Thread(target=_check_api_source, args=(app, jobs_dir, check_id), daemon=True)
@@ -607,6 +609,7 @@ def _check_api_source(app: Flask, jobs_dir: Path, check_id: str) -> None:
                         "message": event.message,
                         "complete": event.complete,
                         "total": event.total,
+                        "worker_pid": os.getpid(),
                     }
                 )
                 _save_api_source_check_state(jobs_dir, check_id, current)
@@ -654,6 +657,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
             "input_sources": input_sources,
             "file_records": file_records,
             "job_id": None,
+            "worker_pid": os.getpid(),
         },
     )
     thread = threading.Thread(target=_import_job_sources, args=(app, jobs_dir, import_id), daemon=True)
@@ -689,6 +693,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                             "message": event.message,
                             "complete": current_index - 1,
                             "total": len(api_sides),
+                            "worker_pid": os.getpid(),
                         }
                     )
                     _save_import_state(jobs_dir, import_id, current)
@@ -702,6 +707,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                         "message": f"Fetched {side} API source.",
                         "complete": index,
                         "total": len(api_sides),
+                        "worker_pid": os.getpid(),
                     }
                 )
                 _save_import_state(jobs_dir, import_id, state)
@@ -751,7 +757,10 @@ def _load_api_source_check_state(jobs_dir: Path, check_id: str) -> dict:
     if not path.exists():
         raise WebMergeError("API source check not found.")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return _operation_state_with_liveness(
+            json.loads(path.read_text(encoding="utf-8")),
+            "API source check",
+        )
     except json.JSONDecodeError as exc:
         raise WebMergeError("API source check state could not be read. Please refresh and try again.") from exc
 
@@ -773,7 +782,7 @@ def _list_api_source_checks(jobs_dir: Path) -> list[dict[str, Any]]:
                 "message": f"API source check state could not be read: {exc}",
             }
         state.setdefault("check_id", check_id)
-        checks.append(state)
+        checks.append(_operation_state_with_liveness(state, "API source check"))
     return checks
 
 
@@ -790,7 +799,10 @@ def _load_import_state(jobs_dir: Path, import_id: str) -> dict:
     if not path.exists():
         raise WebMergeError("API import not found.")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return _operation_state_with_liveness(
+            json.loads(path.read_text(encoding="utf-8")),
+            "API import",
+        )
     except json.JSONDecodeError as exc:
         raise WebMergeError("API import state could not be read. Please refresh and try again.") from exc
 
@@ -812,8 +824,42 @@ def _list_api_imports(jobs_dir: Path) -> list[dict[str, Any]]:
                 "message": f"API import state could not be read: {exc}",
             }
         state.setdefault("import_id", import_id)
-        imports.append(state)
+        imports.append(_operation_state_with_liveness(state, "API import"))
     return imports
+
+
+def _operation_state_with_liveness(state: dict[str, Any], operation_name: str) -> dict[str, Any]:
+    if state.get("status") != "running":
+        return state
+    worker_pid = state.get("worker_pid")
+    if _worker_pid_is_alive(worker_pid):
+        return state
+    stale_state = dict(state)
+    stale_state.update(
+        {
+            "status": "stale",
+            "stage": "stale",
+            "message": (
+                f"{operation_name} was marked running, but its worker process is no longer active. "
+                "It may have been interrupted by a service restart."
+            ),
+        }
+    )
+    return stale_state
+
+
+def _worker_pid_is_alive(worker_pid: Any) -> bool:
+    try:
+        pid = int(worker_pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def _server_for_side(side: str):

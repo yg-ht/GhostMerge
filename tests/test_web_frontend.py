@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -384,6 +385,7 @@ class FlaskRouteTests(unittest.TestCase):
                     "message": "Fetched 192 backup record(s) from YGHT Ghostwriter",
                     "complete": 192,
                     "total": 0,
+                    "worker_pid": os.getpid(),
                 }
             ),
             encoding="utf-8",
@@ -396,6 +398,35 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"YGHT Ghostwriter", response.data)
         self.assertIn(b"Fetched 192 backup record", response.data)
         self.assertIn(b"/api-sources/checks/check123/status", response.data)
+
+    def test_home_marks_api_source_checks_without_live_worker_as_stale(self):
+        checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
+        checks_dir.mkdir()
+        (checks_dir / "stalecheck123.json").write_text(
+            json.dumps(
+                {
+                    "check_id": "stalecheck123",
+                    "side": "left",
+                    "server_name": "YGHT Ghostwriter",
+                    "status": "running",
+                    "stage": "backup_fetch",
+                    "message": "Fetched 192 backup record(s) from YGHT Ghostwriter",
+                    "complete": 192,
+                    "total": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.get("/")
+        status_response = self.client.get("/api-sources/checks/stalecheck123/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"stale", response.data)
+        self.assertIn(b"worker process is no longer active", response.data)
+        self.assertEqual(status_response.status_code, 200)
+        self.assertIn(b"stale", status_response.data)
+        self.assertNotIn(b'http-equiv="refresh"', status_response.data)
 
     def test_home_shows_api_import_status_links(self):
         imports_dir = Path(self.tmp_dir.name) / "api_imports"
@@ -410,6 +441,7 @@ class FlaskRouteTests(unittest.TestCase):
                     "complete": 0,
                     "total": 1,
                     "job_id": None,
+                    "worker_pid": os.getpid(),
                 }
             ),
             encoding="utf-8",
