@@ -298,6 +298,8 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
     if not any(row["different"] for row in rows):
         return None
 
+    rows.sort(key=lambda row: (0 if row["field_name"] == "title" else 1))
+
     return MatchPreviewItem(
         template_type=kind,
         match_index=_match_index_for_kind(job, kind),
