@@ -790,8 +790,9 @@ class FlaskRouteTests(unittest.TestCase):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Check API source", response.data)
+        self.assertNotIn(b"Check API source", response.data)
         self.assertIn(b"Fetch Left Test Ghostwriter", response.data)
+        self.assertIn(b'action="/api-sources/left/check"', response.data)
 
     def test_api_fetch_check_redirects_to_visible_status(self):
         config = get_config()

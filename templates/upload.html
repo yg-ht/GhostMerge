@@ -19,6 +19,9 @@
       </select>
       <label for="left_file">Left JSON</label>
       <input id="left_file" name="left_file" type="file" accept="application/json,.json">
+      {% with side="left", server=api_servers.left %}
+      {% include "_api_fetch_control.html" %}
+      {% endwith %}
     </div>
     <div>
       <label for="right_source">Right source</label>
@@ -28,40 +31,13 @@
       </select>
       <label for="right_file">Right JSON</label>
       <input id="right_file" name="right_file" type="file" accept="application/json,.json">
+      {% with side="right", server=api_servers.right %}
+      {% include "_api_fetch_control.html" %}
+      {% endwith %}
     </div>
   </div>
   <p><button type="submit">Create merge job</button></p>
 </form>
-<section class="panel">
-  <h2>Check API source</h2>
-  <p>Fetch configured API data and store a full backup without creating a merge job.</p>
-  {% if api_servers.left.configured or api_servers.right.configured %}
-    {% if api_servers.left.configured %}
-    {% set running_left_check = running_api_source_checks.get("left") %}
-    {% if running_left_check %}
-    <p><a class="button" href="{{ url_for('api_source_check_status', check_id=running_left_check.check_id) }}">Fetch {{ api_servers.left.name }}</a></p>
-    {% else %}
-    <form method="post" action="{{ url_for('check_api_source', side='left') }}">
-      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <button type="submit">Fetch {{ api_servers.left.name }}</button>
-    </form>
-    {% endif %}
-    {% endif %}
-    {% if api_servers.right.configured %}
-    {% set running_right_check = running_api_source_checks.get("right") %}
-    {% if running_right_check %}
-    <p><a class="button" href="{{ url_for('api_source_check_status', check_id=running_right_check.check_id) }}">Fetch {{ api_servers.right.name }}</a></p>
-    {% else %}
-    <form method="post" action="{{ url_for('check_api_source', side='right') }}">
-      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <button type="submit">Fetch {{ api_servers.right.name }}</button>
-    </form>
-    {% endif %}
-    {% endif %}
-  {% else %}
-  <p>No API sources are configured.</p>
-  {% endif %}
-</section>
 <section class="panel">
   <h2>API backups</h2>
   <p><a class="button secondary" href="{{ url_for('api_backups') }}">Open backup browser</a></p>

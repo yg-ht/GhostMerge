@@ -1,0 +1,11 @@
+{% set running_check = running_api_source_checks.get(side) %}
+{% if server.configured %}
+  {% if running_check %}
+  <p><a class="button" href="{{ url_for('api_source_check_status', check_id=running_check.check_id) }}">Fetch {{ server.name }}</a></p>
+  {% else %}
+  <form method="post" action="{{ url_for('check_api_source', side=side) }}">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Fetch {{ server.name }}</button>
+  </form>
+  {% endif %}
+{% endif %}
