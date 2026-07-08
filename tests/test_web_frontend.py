@@ -180,9 +180,9 @@ class WebServiceTests(unittest.TestCase):
         preview = get_current_match_preview(job)
         item = get_next_conflict(job)
 
-        self.assertIsNotNone(preview)
-        self.assertNotIn("id", [row["field_name"] for row in preview.rows])
+        self.assertIsNone(preview)
         self.assertIsNone(item)
+        self.assertTrue(job.conflict_phase_complete)
 
     def test_preview_selected_offered_values_leave_remaining_fields_for_review(self):
         job = create_merge_job(
@@ -614,10 +614,11 @@ class FlaskRouteTests(unittest.TestCase):
         )
         job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
 
-        preview = self.client.get(f"/jobs/{job_id}/conflicts")
+        preview = self.client.get(f"/jobs/{job_id}/conflicts", follow_redirects=True)
 
         self.assertEqual(preview.status_code, 200)
-        self.assertIn(b"Record preview", preview.data)
+        self.assertIn(b"Merge complete", preview.data)
+        self.assertNotIn(b"Record preview", preview.data)
         self.assertNotIn(b"<th class=\"field-cell\">id</th>", preview.data)
         self.assertNotIn(b"changed selectable", preview.data)
         self.assertNotIn(b"Accept offered id", preview.data)

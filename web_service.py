@@ -224,6 +224,8 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
                 ),
             }
         )
+    if not any(row["different"] for row in rows):
+        return None
 
     return MatchPreviewItem(
         match_index=job.match_index,
