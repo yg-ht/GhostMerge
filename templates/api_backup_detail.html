@@ -19,19 +19,21 @@
 </section>
 <section class="panel">
   <h2>Backed-up findings</h2>
-  <table class="record-table">
+  <label for="backup_finding_filter">Filter findings</label>
+  <input id="backup_finding_filter" type="search" placeholder="Filter by title, severity, type, or detail text" data-backup-finding-filter>
+  <table class="record-table" data-backup-findings-table>
     <thead>
       <tr>
-        <th>Title</th>
-        <th>Severity</th>
-        <th>Type</th>
+        <th><button class="table-sort" type="button" data-sort-column="title" aria-label="Sort by title">Title</button></th>
+        <th><button class="table-sort" type="button" data-sort-column="severity" aria-label="Sort by severity">Severity</button></th>
+        <th><button class="table-sort" type="button" data-sort-column="type" aria-label="Sort by type">Type</button></th>
         <th>Actions</th>
       </tr>
     </thead>
     <tbody>
       {% for record in backup.normalised_records %}
       {% set record_index = loop.index0 %}
-      <tr>
+      <tr class="finding-summary-row" data-title="{{ record.title }}" data-severity="{{ record.severity }}" data-type="{{ record.finding_type }}">
         <td>{{ record.title }}</td>
         <td>{{ record.severity }}</td>
         <td>{{ record.finding_type }}</td>
@@ -42,7 +44,7 @@
           </form>
         </td>
       </tr>
-      <tr>
+      <tr class="finding-detail-row">
         <td colspan="4">
           <details class="finding-detail">
             <summary>View finding detail</summary>
@@ -71,4 +73,93 @@
     </tbody>
   </table>
 </section>
+<script>
+  (function () {
+    const table = document.querySelector("[data-backup-findings-table]");
+    const filterInput = document.querySelector("[data-backup-finding-filter]");
+    if (!table || !filterInput) {
+      return;
+    }
+
+    const severityRank = {
+      informational: 1,
+      low: 2,
+      medium: 3,
+      high: 4,
+      critical: 5,
+    };
+    let activeSort = { column: "", direction: "asc" };
+
+    function groupedRows() {
+      return Array.from(table.querySelectorAll("tbody .finding-summary-row")).map(function (summaryRow) {
+        return {
+          summary: summaryRow,
+          detail: summaryRow.nextElementSibling && summaryRow.nextElementSibling.classList.contains("finding-detail-row")
+            ? summaryRow.nextElementSibling
+            : null,
+        };
+      });
+    }
+
+    function searchableText(group) {
+      return [
+        group.summary.dataset.title,
+        group.summary.dataset.severity,
+        group.summary.dataset.type,
+        group.detail ? group.detail.textContent : "",
+      ].join(" ").toLowerCase();
+    }
+
+    function sortValue(group, column) {
+      const value = (group.summary.dataset[column] || "").toLowerCase();
+      if (column === "severity") {
+        return severityRank[value] || 0;
+      }
+      return value;
+    }
+
+    function applyFilter() {
+      const query = filterInput.value.trim().toLowerCase();
+      groupedRows().forEach(function (group) {
+        const visible = !query || searchableText(group).includes(query);
+        group.summary.hidden = !visible;
+        if (group.detail) {
+          group.detail.hidden = !visible;
+        }
+      });
+    }
+
+    function applySort(column) {
+      const tbody = table.querySelector("tbody");
+      const direction = activeSort.column === column && activeSort.direction === "asc" ? "desc" : "asc";
+      activeSort = { column: column, direction: direction };
+      groupedRows()
+        .sort(function (left, right) {
+          const leftValue = sortValue(left, column);
+          const rightValue = sortValue(right, column);
+          if (leftValue < rightValue) {
+            return direction === "asc" ? -1 : 1;
+          }
+          if (leftValue > rightValue) {
+            return direction === "asc" ? 1 : -1;
+          }
+          return 0;
+        })
+        .forEach(function (group) {
+          tbody.appendChild(group.summary);
+          if (group.detail) {
+            tbody.appendChild(group.detail);
+          }
+        });
+      applyFilter();
+    }
+
+    filterInput.addEventListener("input", applyFilter);
+    table.querySelectorAll("[data-sort-column]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        applySort(button.dataset.sortColumn);
+      });
+    });
+  })();
+</script>
 {% endblock %}

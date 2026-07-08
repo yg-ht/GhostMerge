@@ -1045,6 +1045,11 @@ class FlaskRouteTests(unittest.TestCase):
         response = self.client.get("/api-backups/left/finding-detail.json")
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn(b'data-backup-finding-filter', response.data)
+        self.assertIn(b'data-sort-column="title"', response.data)
+        self.assertIn(b'data-sort-column="severity"', response.data)
+        self.assertIn(b'data-sort-column="type"', response.data)
+        self.assertNotIn(b'data-sort-column="actions"', response.data)
         self.assertIn(b"View finding detail", response.data)
         self.assertIn(b"Detailed description", response.data)
         self.assertIn(b"Detailed impact", response.data)
