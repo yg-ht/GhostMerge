@@ -254,7 +254,8 @@ Live sync is destructive. For the selected API-backed side, GhostMerge:
 
 If preflight or record preparation fails, GhostMerge stops before backup,
 deletion, or reload. If deletion or reload fails after the backup has been
-written, use the backup browser to inspect or restore individual records.
+written, use the backup browser to download the full original dataset, inspect
+the backup, or restore individual records.
 
 ### API backups and restore
 
@@ -264,9 +265,12 @@ normalised records, server name, GraphQL URL, creation timestamp, and record
 count.
 
 The web frontend includes an API backup browser. It lists available backups,
-shows normalised records, and can restore a selected record to the currently
-configured matching Ghostwriter server. Restore refuses to run if the backup's
-recorded GraphQL URL does not match the current server configuration.
+downloads the full backup JSON, shows normalised records, and can restore a
+selected record to the currently configured matching Ghostwriter server. The
+downloaded JSON includes both `raw_records` and `normalised_records`, so the full
+original dataset remains available even if the per-record restore workflow is
+not sufficient. Restore refuses to run if the backup's recorded GraphQL URL does
+not match the current server configuration.
 
 ### Preflight requirements
 

@@ -287,6 +287,15 @@ def create_app(test_config: dict | None = None) -> Flask:
         except (GhostwriterApiError, ValueError) as exc:
             return render_template("error.html", error=str(exc)), 400
 
+    @app.get("/api-backups/<side>/<filename>/download")
+    def api_backup_download(side: str, filename: str):
+        try:
+            backup_path = _safe_backup_path(side, filename)
+            verify_backup(backup_path)
+            return send_file(backup_path, as_attachment=True, download_name=filename, mimetype="application/json")
+        except (GhostwriterApiError, ValueError) as exc:
+            return render_template("error.html", error=str(exc)), 400
+
     @app.post("/api-backups/<side>/<filename>/<int:index>/restore")
     def api_backup_restore(side: str, filename: str, index: int):
         try:

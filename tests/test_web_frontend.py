@@ -564,6 +564,46 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Records", response.data)
         self.assertIn(b">0<", response.data)
 
+    def test_backup_download_returns_full_verified_backup_json(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "full-backup.json"
+        backup_data = {
+            "server_side": "left",
+            "server_name": "Left",
+            "graphql_url": "https://left.example/v1/graphql",
+            "created_at": "20260705T000000Z",
+            "record_count": 1,
+            "raw_records": [{"record": {"id": 1, "title": "Raw finding"}, "tags": ["web"]}],
+            "normalised_records": [record(title="Normalised finding", tags="web")],
+        }
+        backup_path.write_text(json.dumps(backup_data), encoding="utf-8")
+        get_config()["ghostwriter_api"]["backup_dir"] = str(backup_root)
+
+        response = self.client.get("/api-backups/left/full-backup.json/download")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("attachment", response.headers["Content-Disposition"])
+        self.assertIn("full-backup.json", response.headers["Content-Disposition"])
+        downloaded = response.get_json()
+        self.assertEqual(downloaded["record_count"], 1)
+        self.assertEqual(downloaded["raw_records"][0]["record"]["title"], "Raw finding")
+        self.assertEqual(downloaded["normalised_records"][0]["title"], "Normalised finding")
+
+    def test_backup_download_rejects_invalid_backup_json(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "invalid.json"
+        backup_path.write_text(json.dumps({"record_count": 1, "raw_records": []}), encoding="utf-8")
+        get_config()["ghostwriter_api"]["backup_dir"] = str(backup_root)
+
+        response = self.client.get("/api-backups/left/invalid.json/download")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"normalised_records", response.data)
+
     def test_backup_restore_rejects_mismatched_configured_target(self):
         backup_root = Path(self.tmp_dir.name) / "backups"
         backup_dir = backup_root / "left"

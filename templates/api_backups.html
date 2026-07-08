@@ -18,7 +18,10 @@
         <td>{{ backup.server_name }}</td>
         <td>{{ backup.created_at }}</td>
         <td>{{ backup.record_count }}</td>
-        <td><a class="button secondary" href="{{ url_for('api_backup_detail', side=backup.side, filename=backup.filename) }}">Open</a></td>
+        <td>
+          <a class="button secondary" href="{{ url_for('api_backup_detail', side=backup.side, filename=backup.filename) }}">Open</a>
+          <a class="button secondary" href="{{ url_for('api_backup_download', side=backup.side, filename=backup.filename) }}">Download JSON</a>
+        </td>
       </tr>
       {% endfor %}
     </tbody>
