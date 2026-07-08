@@ -315,6 +315,20 @@ class NormalisationRegressionTests(unittest.TestCase):
         self.assertEqual(apply_formatting_cleanup(highlighted), "<mark>secret</mark>")
         self.assertEqual(apply_formatting_cleanup(standalone), standalone)
 
+    def test_formatting_cleanup_adds_spellcheck_to_code_tags(self):
+        self.assertEqual(
+            apply_formatting_cleanup("<code>payload</code>"),
+            '<code spellcheck="false">payload</code>',
+        )
+        self.assertEqual(
+            apply_formatting_cleanup('<code class="language-python">payload</code>'),
+            '<code class="language-python" spellcheck="false">payload</code>',
+        )
+        self.assertEqual(
+            apply_formatting_cleanup('<code spellcheck="true">payload</code>'),
+            '<code spellcheck="false">payload</code>',
+        )
+
     def test_formatting_cleanup_preserves_unconfigured_spans(self):
         value = '<span class="note" style="background-color: yellow">secret</span>'
 

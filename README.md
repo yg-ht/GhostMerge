@@ -620,6 +620,15 @@ and replacement tag:
         "data-color": "#f00",
         "style": "color: #f00"
       }
+    },
+    {
+      "name": "normalise-code-spellcheck",
+      "action": "set_attrs",
+      "tag": "code",
+      "attrs": {},
+      "replacement_attrs": {
+        "spellcheck": "false"
+      }
     }
   ]
 }
