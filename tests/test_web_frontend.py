@@ -969,6 +969,27 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Fetch Left Test Ghostwriter", response.data)
         self.assertIn(b'action="/api-sources/left/check"', response.data)
 
+    def test_home_defaults_configured_api_sources_in_merge_form(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        response = self.client.get("/")
+        html = response.data.decode("utf-8")
+        left_select = html[html.index('id="left_source"') : html.index('id="left_file"')]
+        right_select = html[html.index('id="right_source"') : html.index('id="right_file"')]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<option value="api" selected>Left Test Ghostwriter API</option>', left_select)
+        self.assertIn('<option value="file" selected>JSON file</option>', right_select)
+        self.assertIn('<option value="api" disabled>Right API (not configured)</option>', right_select)
+
     def test_create_merge_form_is_not_nested_with_fetch_forms(self):
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(

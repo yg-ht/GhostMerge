@@ -18,8 +18,8 @@
     <div>
       <label for="left_source">Left source</label>
       <select id="left_source" name="left_source" form="create_merge_form">
-        <option value="file">JSON file</option>
-        <option value="api" {% if not api_servers.left.configured %}disabled{% endif %}>{{ api_servers.left.name }} API{% if not api_servers.left.configured %} (not configured){% endif %}</option>
+        <option value="file" {% if not api_servers.left.configured %}selected{% endif %}>JSON file</option>
+        <option value="api" {% if api_servers.left.configured %}selected{% else %}disabled{% endif %}>{{ api_servers.left.name }} API{% if not api_servers.left.configured %} (not configured){% endif %}</option>
       </select>
       <label for="left_file">Left JSON</label>
       <input id="left_file" name="left_file" type="file" accept="application/json,.json" form="create_merge_form">
@@ -30,8 +30,8 @@
     <div>
       <label for="right_source">Right source</label>
       <select id="right_source" name="right_source" form="create_merge_form">
-        <option value="file">JSON file</option>
-        <option value="api" {% if not api_servers.right.configured %}disabled{% endif %}>{{ api_servers.right.name }} API{% if not api_servers.right.configured %} (not configured){% endif %}</option>
+        <option value="file" {% if not api_servers.right.configured %}selected{% endif %}>JSON file</option>
+        <option value="api" {% if api_servers.right.configured %}selected{% else %}disabled{% endif %}>{{ api_servers.right.name }} API{% if not api_servers.right.configured %} (not configured){% endif %}</option>
       </select>
       <label for="right_file">Right JSON</label>
       <input id="right_file" name="right_file" type="file" accept="application/json,.json" form="create_merge_form">
