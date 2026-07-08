@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Conflict review</h1>
+<h1>Conflict review - {{ item.template_type|title }}</h1>
 <section class="panel">
   <dl>
+    <dt>Template type</dt><dd>{{ item.template_type|title }}</dd>
     <dt>Match</dt><dd>{{ item.match_index + 1 }}</dd>
     <dt>Field</dt><dd>{{ item.field_name }}</dd>
     <dt>Type</dt><dd>{{ item.field_type }}</dd>

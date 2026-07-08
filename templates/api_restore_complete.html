@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Finding restored</h1>
+<h1>{{ template_type|title }} restored</h1>
 <section class="panel">
-  <p>The selected Finding Template was {{ restore_mode|default("added") }} on {{ server_name }}.</p>
+  <p>The selected {{ template_type|title }} Template was {{ restore_mode|default("added") }} on {{ server_name }}.</p>
   <dl>
     <dt>Created ID</dt><dd>{{ created_id }}</dd>
     <dt>Title</dt><dd>{{ record.title }}</dd>

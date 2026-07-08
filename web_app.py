@@ -374,20 +374,27 @@ def create_app(test_config: dict | None = None) -> Flask:
             return render_template("error.html", error=str(exc)), 400
 
     @app.post("/api-backups/<side>/<filename>/<int:index>/restore")
-    def api_backup_restore(side: str, filename: str, index: int):
+    @app.post("/api-backups/<side>/<filename>/<template_type>/<int:index>/restore")
+    def api_backup_restore(side: str, filename: str, index: int, template_type: str = "finding"):
         try:
+            if template_type not in {"finding", "observation"}:
+                raise ValueError("Unknown backup template type.")
             backup_path = _safe_backup_path(side, filename)
-            record = load_backup_record(backup_path, index)
+            record = load_backup_record(backup_path, index, template_type=template_type)
             server = _server_for_side(side)
             _require_backup_target_match(record["backup"], server)
             api = GhostwriterApi(server)
             restore_action = request.form.get("restore_action") or "check"
             if restore_action not in {"check", "replace", "add", "skip"}:
                 raise ValueError("Unknown restore action.")
-            candidates = api.find_restore_candidates(record)
+            if template_type == "observation":
+                candidates = api.find_observation_restore_candidates(record)
+            else:
+                candidates = api.find_restore_candidates(record)
             if restore_action == "check" and candidates:
                 return render_template(
                     "api_restore_confirm.html",
+                    template_type=template_type,
                     side=side,
                     server_name=server.name,
                     filename=filename,
@@ -399,13 +406,20 @@ def create_app(test_config: dict | None = None) -> Flask:
                 return redirect(url_for("api_backup_detail", side=side, filename=filename))
             if restore_action == "replace":
                 existing_id = _selected_restore_candidate_id(request.form.get("existing_id"), candidates)
-                created_id = api.restore_backup_record(record, replace_existing_id=existing_id)
+                if template_type == "observation":
+                    created_id = api.restore_observation_backup_record(record, replace_existing_id=existing_id)
+                else:
+                    created_id = api.restore_backup_record(record, replace_existing_id=existing_id)
                 restore_mode = "replaced"
             else:
-                created_id = api.restore_backup_record(record)
+                if template_type == "observation":
+                    created_id = api.restore_observation_backup_record(record)
+                else:
+                    created_id = api.restore_backup_record(record)
                 restore_mode = "added"
             return render_template(
                 "api_restore_complete.html",
+                template_type=template_type,
                 side=side,
                 server_name=server.name,
                 filename=filename,
@@ -669,10 +683,16 @@ def _validate_input_sources(input_sources: dict[str, str]) -> None:
 def _load_records_for_side(side: str, uploaded_file, source: str) -> list[dict]:
     if source == "api":
         server = _server_for_side(side)
-        return GhostwriterApi(server).fetch_findings()
+        return _fetch_template_library(GhostwriterApi(server))
     if uploaded_file is None or uploaded_file.filename == "":
         raise WebMergeError(f"{side.title()} JSON file is required when that side is file-backed.")
     return load_records_from_json_text(uploaded_file.read().decode("utf-8"))
+
+
+def _fetch_template_library(api: GhostwriterApi) -> dict[str, list[dict[str, Any]]] | list[dict[str, Any]]:
+    if hasattr(api, "fetch_template_library"):
+        return api.fetch_template_library()
+    return api.fetch_findings()
 
 
 def _preview_field_choices_from_form(form) -> dict[str, str]:
@@ -753,11 +773,15 @@ def _check_api_source(app: Flask, jobs_dir: Path, check_id: str) -> None:
                 {
                     "status": "done",
                     "stage": "complete",
-                    "message": f"Fetched and backed up {backup['record_count']} findings from {server.name}.",
-                    "complete": backup["record_count"],
-                    "total": backup["record_count"],
+                    "message": (
+                        f"Fetched and backed up {backup['record_count']} findings from {server.name} "
+                        f"and {backup.get('observation_count', 0)} observations."
+                    ),
+                    "complete": backup["record_count"] + backup.get("observation_count", 0),
+                    "total": backup["record_count"] + backup.get("observation_count", 0),
                     "backup_filename": backup_path.name,
                     "record_count": backup["record_count"],
+                    "observation_count": backup.get("observation_count", 0),
                 }
             )
             _save_api_source_check_state(jobs_dir, check_id, state)
@@ -852,7 +876,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                     )
                     _save_import_state(jobs_dir, import_id, current)
 
-                records[side] = GhostwriterApi(server, progress=update).fetch_findings()
+                records[side] = _fetch_template_library(GhostwriterApi(server, progress=update))
                 state = _load_import_state(jobs_dir, import_id)
                 state.update(
                     {
@@ -866,8 +890,8 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                         "side_index": index,
                         "side_total": len(api_sides),
                         "api_stage": "fetch",
-                        "api_complete": len(records[side]),
-                        "api_total": len(records[side]),
+                        "api_complete": _template_record_count(records[side]),
+                        "api_total": _template_record_count(records[side]),
                         "api_estimated_total": api_estimated_totals.get(side),
                         "api_status": "done",
                         "worker_pid": os.getpid(),
@@ -1012,6 +1036,14 @@ def _optional_positive_int(value: Any) -> Optional[int]:
     return count if count >= 0 else None
 
 
+def _template_record_count(records: Any) -> int:
+    if isinstance(records, list):
+        return len(records)
+    if isinstance(records, dict):
+        return len(records.get("findings", [])) + len(records.get("observations", []))
+    return 0
+
+
 def _save_import_state(jobs_dir: Path, import_id: str, state: dict) -> None:
     path = _import_state_path(jobs_dir, import_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1138,15 +1170,19 @@ def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
             _require_api_backed_side(job, side)
             result = finalise_job(job)
             records = result.left_records if side == "left" else result.right_records
+            observations = (
+                result.left_observations if side == "left" else result.right_observations
+            ) if job.includes_observations else None
             api = GhostwriterApi(_server_for_side(side), progress=update)
-            backup_path = api.replace_all_findings(records, backup_root_from_config(CONFIG))
+            backup_path = api.replace_all_findings(records, backup_root_from_config(CONFIG), observations=observations)
             job = load_job(jobs_dir, job_id)
+            observation_count = 0 if observations is None else len(observations)
             job.sync_results[side] = {
                 "status": "done",
                 "stage": "complete",
                 "message": "Sync complete.",
-                "complete": len(records),
-                "total": len(records),
+                "complete": len(records) + observation_count,
+                "total": len(records) + observation_count,
                 "backup_path": str(backup_path),
             }
             save_job(job, jobs_dir)
@@ -1249,7 +1285,7 @@ def _selected_restore_candidate_id(raw_existing_id: str | None, candidates: list
         raise ValueError("Selected restore target is invalid.") from exc
     candidate_ids = {int(candidate["id"]) for candidate in candidates}
     if existing_id not in candidate_ids:
-        raise ValueError("Selected restore target is no longer a matching Finding Template.")
+        raise ValueError("Selected restore target is no longer a matching template.")
     return existing_id
 
 

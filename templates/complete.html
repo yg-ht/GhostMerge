@@ -10,7 +10,7 @@
 </section>
 <section class="panel">
   <h2>Live API synchronisation</h2>
-  <p>Live sync backs up the target server, removes its existing Finding Templates, then reloads this reviewed output.</p>
+  <p>Live sync backs up the target server, removes its existing Finding and Observation Templates, then reloads this reviewed output.</p>
   <div class="actions">
     {% if job.input_sources.left == "api" and api_servers.left.configured %}
     <a class="button" href="{{ url_for('sync_side', job_id=job.job_id, side='left') }}">Sync {{ api_servers.left.name }}</a>

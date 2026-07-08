@@ -1,8 +1,8 @@
 # GhostMerge
 
-GhostMerge is an interactive merge tool for GhostWriter finding-library JSON exports.
+GhostMerge is an interactive merge tool for GhostWriter finding and observation template JSON exports.
 
-It compares two finding sets, identifies likely matching findings, helps the
+It compares two template sets, identifies likely matching records, helps the
 analyst resolve field-level differences, checks for sensitive terms, renumbers
 IDs deterministically, then writes two aligned JSON output files that can be
 re-imported into downstream systems.
@@ -31,13 +31,13 @@ content.
 GhostMerge currently supports this workflow:
 
 1. Load two JSON files, two Ghostwriter API sources, or one of each.
-2. Validate and normalise GhostWriter-style finding records.
+2. Validate and normalise GhostWriter-style finding and observation records.
 3. Clean common formatting issues, including whitespace, line endings, and empty HTML wrappers.
-4. Fuzzy-match likely equivalent findings using weighted fields such as title, type, description, impact, and mitigation.
+4. Fuzzy-match likely equivalent findings and observations using weighted fields such as title, type, description, impact, and mitigation where available.
 5. Present matched records interactively so the analyst can choose the preferred field values.
-6. Append findings that only exist on one side into both outputs.
+6. Append templates that only exist on one side into both outputs.
 7. Check fields for configured sensitive terms and allow replacement, editing, or keeping the original value.
-8. Renumber finding IDs so the final output is deterministic and conflict-safe.
+8. Renumber template IDs so the final output is deterministic and conflict-safe.
 9. Write separate left and right output JSON files.
 10. Optionally live-sync reviewed output back to API-backed Ghostwriter sources.
 
@@ -246,7 +246,7 @@ from configured Ghostwriter API servers. Configure the relevant side under
 
 Use the home page's API source check buttons to fetch and back up a configured
 side before creating a merge job. This confirms GhostMerge can retrieve the
-current findings, stores the full backup JSON in the backup browser, and reports
+current findings and observations, stores the full backup JSON in the backup browser, and reports
 progress on a status page without saving a job. The Create merge job button
 still performs the API retrieval automatically for any side set to API.
 
@@ -259,9 +259,9 @@ Live sync is destructive. For the selected API-backed side, GhostMerge:
 
 1. Runs a non-destructive GraphQL preflight.
 2. Validates the reviewed records can be converted to Ghostwriter API inputs.
-3. Writes a local backup of existing target Finding Templates and tags.
-4. Deletes existing target Finding Templates.
-5. Recreates the reviewed output.
+3. Writes a local backup of existing target Finding Templates, Observation Templates, and tags.
+4. Deletes existing target Finding and Observation Templates.
+5. Recreates the reviewed output for both template types.
 6. Reapplies tags.
 
 If preflight or record preparation fails, GhostMerge stops before backup,
@@ -271,7 +271,7 @@ the backup, or restore individual records.
 
 ### Sync metadata
 
-When GhostMerge writes Finding Templates through live API sync, it records the
+When GhostMerge writes Finding or Observation Templates through live API sync, it records the
 write timestamp in `extra_fields.ghostmerge_last_synced_at`. GhostMerge is
 authoritative for this field. The value is a UTC ISO-8601 timestamp in
 `YYYY-MM-DDTHH:MM:SSZ` format. Existing `extra_fields` values are preserved, and
@@ -281,18 +281,20 @@ file import/export keeps the field as ordinary `extra_fields` data.
 
 API backups are written under `ghostwriter_api.backup_dir`, which defaults to
 `ghostmerge_api_backups`. Backups are stored per side and include raw API records,
-normalised records, server name, GraphQL URL, creation timestamp, and record
-count.
+normalised records, server name, GraphQL URL, creation timestamp, finding count,
+and observation count.
 
 The web frontend includes an API backup browser. It lists available backups,
-downloads the full backup JSON, shows normalised records, and can restore a
-selected record to the currently configured matching Ghostwriter server. The
-downloaded JSON includes both `raw_records` and `normalised_records`, so the full
-original dataset remains available even if the per-record restore workflow is
-not sufficient. Before restoring a single record, GhostMerge checks the current
-server for a matching Finding Template by original Ghostwriter ID or by exact
-title and finding type. If a match is found, the web UI asks whether to replace
-the existing finding, add the backup record as a duplicate, or skip the restore.
+downloads the full backup JSON, shows normalised findings and observations, and
+can restore a selected record to the currently configured matching Ghostwriter
+server. The downloaded JSON includes raw and normalised sections for findings and
+observations, so the full original dataset remains available even if the
+per-record restore workflow is not sufficient. Before restoring a single record,
+GhostMerge checks the current server for a matching Finding Template by original
+Ghostwriter ID or by exact title and finding type. Observation Templates are
+matched by original Ghostwriter ID or exact title. If a match is found, the web
+UI asks whether to replace the existing template, add the backup record as a
+duplicate, or skip the restore.
 Restore refuses to run if the backup's recorded GraphQL URL does not match the
 current server configuration.
 
@@ -303,12 +305,15 @@ The configured token must be able to see these GraphQL query fields:
 - `finding`
 - `findingSeverity`
 - `findingType`
+- `observation`
 - `tags`
 
 It must also be able to see these GraphQL mutation fields:
 
 - `delete_finding_by_pk`
 - `insert_finding_one`
+- `delete_observation_by_pk`
+- `insert_observation_one`
 - `setTags`
 
 If any required field is missing, sync stops before backup, deletion, or reload.
@@ -388,15 +393,15 @@ For regular GhostMerge live sync, use a `gwat_` user API token created from the
 Ghostwriter profile page's API Tokens card. A user API token inherits the
 creating user's current permissions, can have an explicit expiry, can be
 revoked, and works for accounts that use MFA. Because GhostMerge can make
-global, destructive changes to the findings library, create the token from a
+global, destructive changes to the template libraries, create the token from a
 dedicated Ghostwriter user whose permissions are limited to the environments and
-Finding Template operations GhostMerge genuinely needs.
+Finding and Observation Template operations GhostMerge genuinely needs.
 
 Ghostwriter also supports `gwst_` service tokens for non-human automation, but
 Ghostwriter cannot currently grant a service token all permissions required for
 GhostMerge live sync. Do not use a service token for this workflow unless that
 limitation changes and the token can be proven to read, delete, create, and tag
-Finding Templates.
+Finding and Observation Templates.
 
 Store the generated token in the server's `bearer_token` setting in local
 `ghostmerge_config.json` or `ghostmerge_config.json.local`; do not put real
@@ -414,14 +419,15 @@ mutation, which only creates short-lived JWTs.
 4. Create a new API token for GhostMerge with a descriptive name such as `ghostmerge-live-sync`.
 5. Set an expiry that matches your operational policy.
 6. Copy the generated `gwat_` token immediately and store it in the relevant server's `bearer_token` setting.
-7. Confirm the user account can perform these GraphQL operations for the findings library:
-   `finding`, `findingSeverity`, `findingType`, `tags`,
-   `delete_finding_by_pk`, `insert_finding_one`, and `setTags`.
+7. Confirm the user account can perform these GraphQL operations for the template libraries:
+   `finding`, `findingSeverity`, `findingType`, `observation`, `tags`,
+   `delete_finding_by_pk`, `insert_finding_one`, `delete_observation_by_pk`,
+   `insert_observation_one`, and `setTags`.
 8. Run a GhostMerge API import and then a live-sync preflight against a test
    Ghostwriter environment before using the token against production data.
 
 GhostMerge's preflight catches missing schema visibility before changes begin,
-but the final proof is a test sync against a non-production findings library
+but the final proof is a test sync against non-production template libraries
 with the exact user API token and account permissions.
 
 ### Web access configuration
@@ -453,7 +459,18 @@ Useful configuration areas include:
 
 ### Input format
 
-Each file-backed input must be a JSON list of finding records.
+Each file-backed input can be either a legacy JSON list of finding records or a
+combined template object:
+
+```json
+{
+  "findings": [],
+  "observations": []
+}
+```
+
+Use the list form for finding-only merges. Use the combined object when the
+same job should review and synchronise Observation Templates as well.
 
 Each finding is expected to use the GhostWriter-style fields represented by the
 `Finding` model:
@@ -480,6 +497,16 @@ extra_fields
 The included `test_data_left.json` and `test_data_right.json` files are useful
 minimal examples.
 
+Observation records use the smaller Ghostwriter Observation Template schema:
+
+```text
+id
+title
+description
+tags
+extra_fields
+```
+
 ### Output files
 
 GhostMerge writes two JSON files:
@@ -487,10 +514,10 @@ GhostMerge writes two JSON files:
 - one aligned output for the left input
 - one aligned output for the right input
 
-Matched and resolved findings are written to both outputs. Findings that only
-existed in one input are appended to both outputs. IDs are then resequenced so
-the final files remain compatible with systems that expect unique sequential
-finding IDs.
+Matched and resolved findings and observations are written to both outputs.
+Records that only existed in one input are appended to both outputs. IDs are
+then resequenced independently for each template type so the final files remain
+compatible with systems that expect unique sequential template IDs.
 
 ## Sensitive terms
 
@@ -653,7 +680,7 @@ ghostmerge.py             CLI entry point
 web_app.py                Flask web frontend
 web_service.py            Web workflow and job persistence service layer
 ghostwriter_api.py        Ghostwriter GraphQL client, API sync, backups, restore helpers
-model.py                  Finding dataclass, validation, coercion, serialisation
+model.py                  Finding and Observation dataclasses, validation, coercion, serialisation
 matching.py               Fuzzy matching and scoring logic
 merge.py                  Conflict resolution and ID renumbering
 tui.py                    Rich-based terminal user interface

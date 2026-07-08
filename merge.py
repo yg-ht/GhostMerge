@@ -5,7 +5,9 @@ from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
 from utils import log, normalise_tags, normalise_finding_record, is_blank, blank_for_type
-from model import Finding, is_optional_field, get_type_as_str
+from model import Finding, Observation, is_optional_field, get_type_as_str
+
+MergeRecord = Finding | Observation
 
 class ResolvedWinner(Enum):
     NONE = auto()
@@ -59,17 +61,18 @@ def get_single_sided_content_choice(value_from_left, value_from_right) -> Tuple[
 
     return False, ResolvedWinner.NONE, None
 
-def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Finding) -> Tuple[Finding, dict[str, ResolvedWinner]]:
+def get_auto_suggest_values(finding_from_left: MergeRecord, finding_from_right: MergeRecord) -> Tuple[MergeRecord, dict[str, ResolvedWinner]]:
     """
     Performs a detailed, field-by-field selection process of two Finding objects to determine an auto-suggest value.
     """
     log("INFO", f"Determining auto-value for findings: {finding_from_left.id} (Left) <-> {finding_from_right.id} (Right)", prefix="MERGE")
 
-    auto_fields_values = Finding()
+    record_class = type(finding_from_left)
+    auto_fields_values = record_class()
     auto_fields_winner = dict[str, ResolvedWinner | dict[str, ResolvedWinner]]()
 
     # Get auto-value for each field
-    for field_def in fields(Finding):
+    for field_def in fields(record_class):
         field_name = field_def.name
         auto_fields_values[field_name] = {}
         value_from_left = getattr(finding_from_left, field_name, None)
@@ -112,10 +115,10 @@ def get_auto_suggest_values(finding_from_left: Finding, finding_from_right: Find
     return auto_fields_values, auto_fields_winner
 
 def renumber_findings(
-    left_findings: List[Finding],
-    right_findings: List[Finding],
+    left_findings: List[MergeRecord],
+    right_findings: List[MergeRecord],
     start_id: int = 1,
-) -> tuple[List[Finding], List[Finding]]:
+) -> tuple[List[MergeRecord], List[MergeRecord]]:
     """
     Reassign IDs so that each pair of left/right findings share a new, unique ID.
     IDs are allocated sequentially starting at start_id.
@@ -135,16 +138,25 @@ def renumber_findings(
 
     return left_findings, right_findings
 
-def normalise_merge_pair(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinner]]) -> Dict[str, Finding | float | Dict[str, ResolvedWinner]]:
+
+def renumber_records(
+    left_records: List[MergeRecord],
+    right_records: List[MergeRecord],
+    start_id: int = 1,
+) -> tuple[List[MergeRecord], List[MergeRecord]]:
+    """Reassign aligned record IDs regardless of reviewed template type."""
+    return renumber_findings(left_records, right_records, start_id=start_id)
+
+def normalise_merge_pair(finding_pair: Dict[str, MergeRecord | float | Dict[str, ResolvedWinner]]) -> Dict[str, MergeRecord | float | Dict[str, ResolvedWinner]]:
     """Normalise both sides of a matched pair in-place before merge comparison or display."""
     for side in ("left", "right"):
         finding = finding_pair.get(side)
-        if isinstance(finding, Finding):
+        if isinstance(finding, (Finding, Observation)):
             normalise_finding_record(finding)
             log("DEBUG", f"Normalised {side} finding before merge boundary", prefix="MERGE")
 
     auto_value = finding_pair.get("auto_value")
-    if isinstance(auto_value, Finding):
+    if isinstance(auto_value, (Finding, Observation)):
         normalise_finding_record(auto_value)
         log("DEBUG", "Normalised offered merge value before display", prefix="MERGE")
 

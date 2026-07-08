@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from globals import get_config
-from web_app import create_app, _check_api_source, _import_job_sources
+from web_app import create_app, _check_api_source, _import_job_sources, _sync_job_side
 from web_service import (
     WebMergeError,
     accept_offered_fields_for_current_match,
@@ -109,6 +109,18 @@ def record(**overrides):
     return data
 
 
+def observation(**overrides):
+    data = {
+        "id": "1",
+        "title": "Suspicious process execution",
+        "description": "A process launched from a temporary directory.",
+        "tags": "edr, process",
+        "extra_fields": None,
+    }
+    data.update(overrides)
+    return data
+
+
 class WebServiceTests(unittest.TestCase):
     def setUp(self):
         configure_for_web_tests()
@@ -151,6 +163,32 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(result.right_records[0]["id"], "1")
         self.assertEqual(result.left_records[0]["description"], "Right detail")
         self.assertEqual(result.right_records[0]["description"], "Right detail")
+
+    def test_observations_are_reviewed_and_finalised_with_findings(self):
+        job = create_merge_job(
+            {
+                "findings": [record(description="Same finding")],
+                "observations": [observation(description="Left observation")],
+            },
+            {
+                "findings": [record(id="2", description="Same finding")],
+                "observations": [observation(id="2", description="Right observation")],
+            },
+            job_id="observations123",
+        )
+
+        while not job.conflict_phase_complete:
+            item = get_next_conflict(job)
+            if item is not None:
+                self.assertEqual(item.template_type, "observation")
+                apply_conflict_decision(job, {"field_name": item.field_name, "action": "left"})
+
+        result = finalise_job(job)
+
+        self.assertEqual(result.left_observations[0]["id"], "1")
+        self.assertEqual(result.right_observations[0]["id"], "1")
+        self.assertEqual(result.left_observations[0]["description"], "Left observation")
+        self.assertEqual(result.right_observations[0]["description"], "Left observation")
 
     def test_preview_and_diff_expose_changed_fields_for_review(self):
         job = create_merge_job(
@@ -843,6 +881,79 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"already running", response.data)
+
+    def test_live_sync_worker_preserves_observations_for_legacy_finding_only_job(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record()], [], job_id="findingonlysync123", input_sources={"left": "api", "right": "file"})
+        self.assertIsNone(get_next_conflict(job))
+        result = finalise_job(job)
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+        save_outputs(job, jobs_dir, result)
+
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+        captured = {}
+
+        class CaptureSyncApi:
+            def __init__(self, server, progress):
+                self.server = server
+                self.progress = progress
+
+            def replace_all_findings(self, records, backup_root, observations=None):
+                captured["records"] = records
+                captured["observations"] = observations
+                return backup_root / "finding-only-backup.json"
+
+        with patch("web_app.GhostwriterApi", CaptureSyncApi):
+            _sync_job_side(self.app, jobs_dir, "findingonlysync123", "left")
+
+        self.assertIsNone(captured["observations"])
+
+    def test_live_sync_worker_replaces_empty_observations_for_observation_aware_job(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            {"findings": [record()], "observations": []},
+            {"findings": [], "observations": []},
+            job_id="emptyobssync123",
+            input_sources={"left": "api", "right": "file"},
+        )
+        self.assertIsNone(get_next_conflict(job))
+        result = finalise_job(job)
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+        save_outputs(job, jobs_dir, result)
+
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+        captured = {}
+
+        class CaptureSyncApi:
+            def __init__(self, server, progress):
+                self.server = server
+                self.progress = progress
+
+            def replace_all_findings(self, records, backup_root, observations=None):
+                captured["records"] = records
+                captured["observations"] = observations
+                return backup_root / "observation-aware-backup.json"
+
+        with patch("web_app.GhostwriterApi", CaptureSyncApi):
+            _sync_job_side(self.app, jobs_dir, "emptyobssync123", "left")
+
+        self.assertEqual(captured["observations"], [])
 
     def test_complete_page_links_to_existing_sync_status(self):
         jobs_dir = Path(self.tmp_dir.name)

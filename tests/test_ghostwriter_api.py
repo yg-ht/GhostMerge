@@ -52,11 +52,25 @@ def finding_record(**overrides):
     return data
 
 
+def observation_record(**overrides):
+    data = {
+        "id": "1",
+        "title": "Suspicious process execution",
+        "description": "A process launched from a temporary directory.",
+        "tags": "edr, process",
+        "extra_fields": {},
+    }
+    data.update(overrides)
+    return data
+
+
 class FakeGraphQLClient:
     def __init__(self, missing_query_fields=None, missing_mutation_fields=None):
         self.calls = []
         self.deleted_ids = []
+        self.deleted_observation_ids = []
         self.created_objects = []
+        self.created_observations = []
         self.tag_sets = []
         self.missing_query_fields = set(missing_query_fields or [])
         self.missing_mutation_fields = set(missing_mutation_fields or [])
@@ -65,8 +79,14 @@ class FakeGraphQLClient:
         variables = variables or {}
         self.calls.append((query, variables))
         if "SyncPreflight" in query:
-            query_fields = {"finding", "findingSeverity", "findingType", "tags"} - self.missing_query_fields
-            mutation_fields = {"delete_finding_by_pk", "insert_finding_one", "setTags"} - self.missing_mutation_fields
+            query_fields = {"finding", "findingSeverity", "findingType", "observation", "tags"} - self.missing_query_fields
+            mutation_fields = {
+                "delete_finding_by_pk",
+                "insert_finding_one",
+                "delete_observation_by_pk",
+                "insert_observation_one",
+                "setTags",
+            } - self.missing_mutation_fields
             return {
                 "__schema": {
                     "queryType": {"fields": [{"name": name} for name in sorted(query_fields)]},
@@ -121,8 +141,36 @@ class FakeGraphQLClient:
                     }
                 ]
             }
+        if "FetchRawObservations" in query:
+            if variables.get("offset", 0) > 0:
+                return {"observation": []}
+            return {
+                "observation": [
+                    {
+                        "id": 77,
+                        "title": "Existing observation",
+                        "description": "Existing observation detail",
+                        "extraFields": {},
+                    }
+                ]
+            }
+        if "FetchObservations" in query:
+            if variables.get("offset", 0) > 0:
+                return {"observation": []}
+            return {
+                "observation": [
+                    {
+                        "id": 77,
+                        "title": "Existing observation",
+                        "description": "Existing observation detail",
+                        "extraFields": {},
+                    }
+                ]
+            }
         if "FindingIds" in query:
             return {"finding": [{"id": 99}]}
+        if "ObservationIds" in query:
+            return {"observation": [{"id": 77}]}
         if "FindingLookups" in query:
             return {
                 "findingSeverity": [{"id": 3, "severity": "Medium"}],
@@ -131,9 +179,15 @@ class FakeGraphQLClient:
         if "DeleteFinding" in query:
             self.deleted_ids.append(variables["id"])
             return {"delete_finding_by_pk": {"id": variables["id"]}}
+        if "DeleteObservation" in query:
+            self.deleted_observation_ids.append(variables["id"])
+            return {"delete_observation_by_pk": {"id": variables["id"]}}
         if "CreateFinding" in query:
             self.created_objects.append(variables["object"])
             return {"insert_finding_one": {"id": 101}}
+        if "CreateObservation" in query:
+            self.created_observations.append(variables["object"])
+            return {"insert_observation_one": {"id": 202}}
         if "SetFindingTags" in query:
             self.tag_sets.append((variables["id"], variables["tags"]))
             return {"setTags": {"tags": variables["tags"]}}
@@ -447,6 +501,45 @@ class GhostwriterApiTests(unittest.TestCase):
         self.assertEqual(fake_client.deleted_ids, [99])
         self.assertEqual(len(fake_client.created_objects), 1)
         self.assertEqual(fake_client.tag_sets, [(101, ["web", "xss"])])
+
+    def test_replace_all_reloads_reviewed_observations_with_findings(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_client = FakeGraphQLClient()
+            api = GhostwriterApi(server_config(), client=fake_client)
+
+            api.replace_all_findings([finding_record()], Path(tmp_dir), observations=[observation_record()])
+
+            self.assertEqual(fake_client.deleted_ids, [99])
+            self.assertEqual(fake_client.deleted_observation_ids, [77])
+            self.assertEqual(fake_client.created_observations[0]["title"], "Suspicious process execution")
+            self.assertIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, fake_client.created_observations[0]["extraFields"])
+            self.assertIn((202, ["edr", "process"]), fake_client.tag_sets)
+
+    def test_replace_all_finding_only_sync_preserves_existing_observations(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_client = FakeGraphQLClient()
+            api = GhostwriterApi(server_config(), client=fake_client)
+
+            api.replace_all_findings([finding_record()], Path(tmp_dir))
+
+            self.assertEqual(fake_client.deleted_ids, [99])
+            self.assertEqual(fake_client.deleted_observation_ids, [])
+            self.assertEqual(fake_client.created_observations, [])
+            self.assertFalse(any("ObservationIds" in query for query, _ in fake_client.calls))
+
+    def test_restore_backup_record_can_replace_existing_observation(self):
+        fake_client = FakeGraphQLClient()
+        api = GhostwriterApi(server_config(), client=fake_client)
+
+        created_id = api.restore_observation_backup_record(
+            {"normalised_record": observation_record(title="Replacement observation")},
+            replace_existing_id=77,
+        )
+
+        self.assertEqual(created_id, 202)
+        self.assertEqual(fake_client.deleted_observation_ids, [77])
+        self.assertEqual(fake_client.created_observations[0]["title"], "Replacement observation")
+        self.assertEqual(fake_client.tag_sets, [(202, ["edr", "process"])])
 
 
 if __name__ == "__main__":

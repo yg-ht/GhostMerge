@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 {% block main_class %}wide-main{% endblock %}
 {% block content %}
-<h1>Record preview</h1>
+<h1>Record preview - {{ preview.template_type|title }}</h1>
 <form class="panel" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <dl>
     <dt>Match</dt><dd>{{ preview.match_index + 1 }}</dd>
+    <dt>Template type</dt><dd>{{ preview.template_type|title }}</dd>
     <dt>Score</dt><dd>{{ "%.2f"|format(preview.score) }}%</dd>
   </dl>
   <div class="record-preview-scroll">

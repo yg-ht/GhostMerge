@@ -249,6 +249,145 @@ class Finding:
         # if not definitively successful, return False
         return False
 
+
+@dataclass
+class Observation:
+    """
+    Represents a single GhostWriter Observation Template.
+
+    Observations intentionally mirror the small Ghostwriter schema exposed
+    through Hasura: title, description, tags, and extraFields.  The helper
+    methods match Finding closely so the review and sensitivity workflow can
+    treat both template types consistently.
+    """
+    id: int = 0
+    title: str = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = field(default_factory=list)
+    extra_fields: Optional[Dict[str, Any]] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Observation' or None:
+        """Convert a raw dict into an Observation instance with light coercion."""
+        try:
+            log("DEBUG", f"Parsing observation from data: {data}", prefix="MODEL")
+            coerced_data = {}
+            hints = get_type_hints(cls)
+
+            for field_def in fields(Observation):
+                field_name = field_def.name
+                field_type = hints.get(field_name, Any)
+                expected_type_str = get_type_as_str(field_type)
+                raw_value = data.get(field_name, None)
+
+                if isinstance(raw_value, str):
+                    if CONFIG['remove_double_spaces']:
+                        raw_value = remove_double_spaces_from_string(raw_value)
+                    if CONFIG['remove_lead_and_trail_whitespace']:
+                        raw_value = raw_value.strip()
+                    if CONFIG['remove_pointless_html_tags']:
+                        raw_value = remove_pointless_html_tags(raw_value)
+                    if CONFIG['normalise_line_endings']:
+                        raw_value = normalise_line_endings(raw_value)
+
+                origin = get_origin(field_type)
+                args = get_args(field_type)
+                matches = False
+
+                if field_type in (Any, object):
+                    matches = True
+                elif origin is None:
+                    try:
+                        matches = isinstance(raw_value, field_type)
+                    except TypeError:
+                        matches = True
+                elif origin is Union:
+                    bases = tuple((get_origin(a) or a) for a in args)
+                    bases = tuple(b for b in bases if isinstance(b, type))
+                    matches = isinstance(raw_value, bases) if bases else True
+                else:
+                    try:
+                        matches = isinstance(raw_value, origin)
+                    except TypeError:
+                        matches = True
+
+                if matches:
+                    coerced_data[field_name] = raw_value
+                    continue
+
+                try:
+                    coerced_data[field_name] = coerce_value(raw_value, field_type, field_name)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Observation field '{field_name}' expected {expected_type_str}."
+                    ) from exc
+
+            observation = cls(**coerced_data)
+            log("DEBUG", f"Created Observation object: {observation}", prefix="MODEL")
+            return observation
+        except Exception as e:
+            log("ERROR", "Failed to parse observation from dict", prefix="MODEL", exception=e)
+            raise Aborting()
+
+    def to_dict(self) -> dict:
+        """Serialise this Observation instance back into import-compatible JSON."""
+        id_as_str = str(self.id)
+
+        if self.extra_fields in (None, {}):
+            serialised_extra = None
+        elif isinstance(self.extra_fields, str):
+            serialised_extra = self.extra_fields
+        else:
+            serialised_extra = json.dumps(self.extra_fields)
+
+        if self.tags in (None, []):
+            serialised_tags = ''
+        elif isinstance(self.tags, str):
+            serialised_tags = self.tags
+        else:
+            serialised_tags = ", ".join(str(t) for t in self.tags)
+
+        return {
+            "id": id_as_str,
+            "title": self.title,
+            "description": self.description,
+            "tags": serialised_tags,
+            "extra_fields": serialised_extra,
+        }
+
+    def __getitem__(self, key: str) -> Any:
+        value = self.get(key, default=None)
+        if value is None and not hasattr(self, key) and key not in (self.extra_fields or {}):
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        ok = self.set(key, value)
+        if not ok:
+            if self.extra_fields is None:
+                self.extra_fields = {}
+            self.extra_fields[key] = value
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Mimic dict.get() for dataclass attributes and extra fields."""
+        if isinstance(key, NoneType):
+            log("WARN", f"Attempted to get observation attribute with None key: {key}", prefix="MODEL")
+            return False
+        if hasattr(self, key):
+            return getattr(self, key)
+        return self.extra_fields.get(key, default) if self.extra_fields else default
+
+    def set(self, key: str, value: Any = None) -> Any:
+        """Mimic dict.set() for dataclass attributes."""
+        if not key or key == '':
+            log("WARN", f'Attempted to set observation attribute with blank key: "{str(key)}"', prefix='MODEL')
+        elif not hasattr(self, key):
+            log("WARN", f'Attempted to set unknown observation key: "{str(key)}"', prefix='MODEL')
+        else:
+            setattr(self, key, value)
+            return True
+        return False
+
 def prompt_user_to_fix_field(field_name: str, expected_type: type, current_value: Any) -> tuple[int, Any]:
     """Prompt user to correct an invalid field inline"""
     tui = get_tui()

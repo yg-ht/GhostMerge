@@ -5,7 +5,9 @@
   <dl>
     <dt>Server</dt><dd>{{ backup.server_name }}</dd>
     <dt>Created</dt><dd>{{ backup.created_at }}</dd>
-    <dt>Records</dt><dd>{{ backup.record_count }}</dd>
+    <dt>Records</dt><dd>{{ backup.record_count + backup.observation_count|default(0) }}</dd>
+    <dt>Findings</dt><dd>{{ backup.record_count }}</dd>
+    <dt>Observations</dt><dd>{{ backup.observation_count|default(0) }}</dd>
   </dl>
 </section>
 <section class="panel">
@@ -64,6 +66,45 @@
               <dt>Network detection</dt><dd><pre>{{ record.network_detection_techniques }}</pre></dd>
               <dt>References</dt><dd><pre>{{ record.references }}</pre></dd>
               <dt>Finding guidance</dt><dd><pre>{{ record.finding_guidance }}</pre></dd>
+              <dt>Extra fields</dt><dd><pre>{{ record.extra_fields }}</pre></dd>
+            </dl>
+          </details>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="panel">
+  <h2>Backed-up observations</h2>
+  <table class="record-table">
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for record in backup.observations.normalised_records %}
+      {% set record_index = loop.index0 %}
+      <tr>
+        <td>{{ record.title }}</td>
+        <td>
+          <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, template_type='observation', index=record_index) }}">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit">Restore this observation</button>
+          </form>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="2">
+          <details class="finding-detail">
+            <summary>View observation detail</summary>
+            <dl>
+              <dt>ID</dt><dd>{{ record.id }}</dd>
+              <dt>Title</dt><dd>{{ record.title }}</dd>
+              <dt>Tags</dt><dd>{{ record.tags }}</dd>
+              <dt>Description</dt><dd><pre>{{ record.description }}</pre></dd>
               <dt>Extra fields</dt><dd><pre>{{ record.extra_fields }}</pre></dd>
             </dl>
           </details>

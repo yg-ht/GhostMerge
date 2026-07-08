@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Sensitivity review</h1>
+<h1>{{ item.template_type|title }} sensitivity review</h1>
 <section class="panel">
   <dl>
+    <dt>Template type</dt><dd>{{ item.template_type|title }}</dd>
     <dt>Side</dt><dd>{{ item.side }}</dd>
     <dt>Record</dt><dd>{{ item.record_index + 1 }}</dd>
     <dt>Field</dt><dd>{{ item.field_name }}</dd>
@@ -13,6 +14,7 @@
 </section>
 <form class="panel" action="{{ url_for('apply_sensitivity', job_id=job.job_id) }}" method="post">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="template_type" value="{{ item.template_type }}">
   <input type="hidden" name="side" value="{{ item.side }}">
   <input type="hidden" name="record_index" value="{{ item.record_index }}">
   <input type="hidden" name="field_name" value="{{ item.field_name }}">

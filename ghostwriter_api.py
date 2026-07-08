@@ -34,8 +34,16 @@ FINDING_FIELDS = (
     "extra_fields",
 )
 
-SYNC_PREFLIGHT_QUERY_FIELDS = {"finding", "findingSeverity", "findingType", "tags"}
-SYNC_PREFLIGHT_MUTATION_FIELDS = {"delete_finding_by_pk", "insert_finding_one", "setTags"}
+OBSERVATION_FIELDS = ("id", "title", "description", "tags", "extra_fields")
+
+SYNC_PREFLIGHT_QUERY_FIELDS = {"finding", "findingSeverity", "findingType", "observation", "tags"}
+SYNC_PREFLIGHT_MUTATION_FIELDS = {
+    "delete_finding_by_pk",
+    "insert_finding_one",
+    "delete_observation_by_pk",
+    "insert_observation_one",
+    "setTags",
+}
 GHOSTMERGE_LAST_SYNCED_AT_FIELD = "ghostmerge_last_synced_at"
 
 
@@ -125,7 +133,7 @@ class GhostwriterGraphQLClient:
 
 
 class GhostwriterApi:
-    """High-level API operations for finding-library synchronisation."""
+    """High-level API operations for Ghostwriter template-library synchronisation."""
 
     def __init__(
         self,
@@ -186,18 +194,65 @@ class GhostwriterApi:
         self.progress(SyncEvent("fetch", f"Fetched {len(records)} findings from {self.server.name}", len(records), len(records), "done"))
         return records
 
-    def fetch_tags(self, finding_id: int) -> list[str]:
+    def fetch_template_library(self) -> dict[str, list[dict[str, Any]]]:
+        """Fetch both reviewed template libraries from Ghostwriter."""
+        return {
+            "findings": self.fetch_findings(),
+            "observations": self.fetch_observations(),
+        }
+
+    def fetch_observations(self) -> list[dict[str, Any]]:
         query = """
-        query Tags($id: bigint!) {
-          tags(model: "finding", id: $id) { tags }
+        query FetchObservations($limit: Int!, $offset: Int!) {
+          observation(limit: $limit, offset: $offset, order_by: {id: asc}) {
+            id
+            title
+            description
+            extraFields
+          }
         }
         """
-        data = self.client.execute(query, {"id": finding_id})
+        records: list[dict[str, Any]] = []
+        offset = 0
+        limit = 100
+        while True:
+            self.progress(SyncEvent("fetch", f"Fetching observations from {self.server.name}", len(records), 0))
+            data = self.client.execute(query, {"limit": limit, "offset": offset})
+            batch = data.get("observation") or []
+            if not batch:
+                break
+            for item in batch:
+                record = self._api_observation_to_ghostmerge(item)
+                record["tags"] = ", ".join(self.fetch_tags(int(item["id"]), model="observation"))
+                records.append(record)
+                self.progress(
+                    SyncEvent(
+                        "fetch",
+                        f"Fetched {len(records)} observation(s) from {self.server.name}",
+                        len(records),
+                        0,
+                    )
+                )
+            if len(batch) < limit:
+                break
+            offset += limit
+        self.progress(SyncEvent("fetch", f"Fetched {len(records)} observations from {self.server.name}", len(records), len(records), "done"))
+        return records
+
+    def fetch_tags(self, finding_id: int, model: str = "finding") -> list[str]:
+        query = """
+        query Tags($model: String!, $id: bigint!) {
+          tags(model: $model, id: $id) { tags }
+        }
+        """
+        data = self.client.execute(query, {"model": model, "id": finding_id})
         return list((data.get("tags") or {}).get("tags") or [])
 
     def create_backup(self, backup_root: Path) -> Path:
-        raw_records = self.fetch_raw_findings_with_tags()
-        normalised_records = [self._api_record_to_ghostmerge(item["record"]) | {"tags": ", ".join(item["tags"])} for item in raw_records]
+        raw_findings = self.fetch_raw_findings_with_tags()
+        raw_observations = self.fetch_raw_observations_with_tags()
+        normalised_findings = [self._api_record_to_ghostmerge(item["record"]) | {"tags": ", ".join(item["tags"])} for item in raw_findings]
+        normalised_observations = [self._api_observation_to_ghostmerge(item["record"]) | {"tags": ", ".join(item["tags"])} for item in raw_observations]
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup_dir = backup_root / self.server.side
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -207,14 +262,25 @@ class GhostwriterApi:
             "server_name": self.server.name,
             "graphql_url": self.server.graphql_url,
             "created_at": timestamp,
-            "record_count": len(raw_records),
-            "raw_records": raw_records,
-            "normalised_records": normalised_records,
+            "record_count": len(raw_findings),
+            "observation_count": len(raw_observations),
+            "findings": {
+                "raw_records": raw_findings,
+                "normalised_records": normalised_findings,
+            },
+            "observations": {
+                "raw_records": raw_observations,
+                "normalised_records": normalised_observations,
+            },
+            # Preserve top-level finding keys so older tools and tests can still read the backup.
+            "raw_records": raw_findings,
+            "normalised_records": normalised_findings,
         }
         with backup_path.open("x", encoding="utf-8") as handle:
             json.dump(backup_data, handle, indent=2)
         verify_backup(backup_path)
-        self.progress(SyncEvent("backup", f"Backup written for {self.server.name}", len(raw_records), len(raw_records), "done"))
+        total_records = len(raw_findings) + len(raw_observations)
+        self.progress(SyncEvent("backup", f"Backup written for {self.server.name}", total_records, total_records, "done"))
         return backup_path
 
     def fetch_raw_findings_with_tags(self) -> list[dict[str, Any]]:
@@ -249,7 +315,7 @@ class GhostwriterApi:
             if not batch:
                 break
             for item in batch:
-                raw_records.append({"record": item, "tags": self.fetch_tags(int(item["id"]))})
+                raw_records.append({"record": item, "tags": self.fetch_tags(int(item["id"]), model="finding")})
                 self.progress(
                     SyncEvent(
                         "backup_fetch",
@@ -265,6 +331,50 @@ class GhostwriterApi:
             SyncEvent(
                 "backup_fetch",
                 f"Fetched {len(raw_records)} backup record(s) from {self.server.name}",
+                len(raw_records),
+                len(raw_records),
+                "done",
+            )
+        )
+        return raw_records
+
+    def fetch_raw_observations_with_tags(self) -> list[dict[str, Any]]:
+        query = """
+        query FetchRawObservations($limit: Int!, $offset: Int!) {
+          observation(limit: $limit, offset: $offset, order_by: {id: asc}) {
+            id
+            title
+            description
+            extraFields
+          }
+        }
+        """
+        raw_records: list[dict[str, Any]] = []
+        offset = 0
+        limit = 100
+        while True:
+            self.progress(SyncEvent("backup_fetch", f"Fetching observation backup records from {self.server.name}", len(raw_records), 0))
+            data = self.client.execute(query, {"limit": limit, "offset": offset})
+            batch = data.get("observation") or []
+            if not batch:
+                break
+            for item in batch:
+                raw_records.append({"record": item, "tags": self.fetch_tags(int(item["id"]), model="observation")})
+                self.progress(
+                    SyncEvent(
+                        "backup_fetch",
+                        f"Fetched {len(raw_records)} observation backup record(s) from {self.server.name}",
+                        len(raw_records),
+                        0,
+                    )
+                )
+            if len(batch) < limit:
+                break
+            offset += limit
+        self.progress(
+            SyncEvent(
+                "backup_fetch",
+                f"Fetched {len(raw_records)} observation backup record(s) from {self.server.name}",
                 len(raw_records),
                 len(raw_records),
                 "done",
@@ -302,24 +412,47 @@ class GhostwriterApi:
             raise GhostwriterApiError(
                 "Ghostwriter API sync preflight failed for "
                 f"{self.server.name}; {'; '.join(details)}. "
-                "Use a Ghostwriter API token or service token with read/write access to Finding Templates and tags."
+                "Use a Ghostwriter API token or service token with read/write access to Finding Templates, "
+                "Observation Templates, and tags."
             )
 
-    def replace_all_findings(self, records: list[dict[str, Any]], backup_root: Path) -> Path:
+    def replace_all_findings(
+        self,
+        records: list[dict[str, Any]],
+        backup_root: Path,
+        observations: Optional[list[dict[str, Any]]] = None,
+    ) -> Path:
+        replace_observations = observations is not None
         self.preflight_sync_permissions()
         lookups = self.fetch_lookup_ids()
         sync_timestamp = _utc_timestamp()
         prepared_records = self.prepare_records_for_reload(records, lookups, last_synced_at=sync_timestamp)
+        prepared_observations = (
+            self.prepare_observations_for_reload(observations, last_synced_at=sync_timestamp)
+            if replace_observations
+            else []
+        )
         backup_path = self.create_backup(backup_root)
         existing_ids = self.fetch_finding_ids()
+        existing_observation_ids = self.fetch_observation_ids() if replace_observations else []
         for index, finding_id in enumerate(existing_ids, start=1):
             self.progress(SyncEvent("delete", f"Deleting existing findings from {self.server.name}", index, len(existing_ids)))
             self.delete_finding(finding_id)
+        if replace_observations:
+            for index, observation_id in enumerate(existing_observation_ids, start=1):
+                self.progress(SyncEvent("delete", f"Deleting existing observations from {self.server.name}", index, len(existing_observation_ids)))
+                self.delete_observation(observation_id)
         for index, prepared in enumerate(prepared_records, start=1):
             self.progress(SyncEvent("create", f"Creating reviewed findings on {self.server.name}", index, len(records)))
             created_id = self.create_prepared_finding(prepared["api_record"])
-            self.set_tags(created_id, prepared["tags"])
-        self.progress(SyncEvent("complete", f"Sync complete for {self.server.name}", len(records), len(records), "done"))
+            self.set_tags(created_id, prepared["tags"], model="finding")
+        if replace_observations:
+            for index, prepared in enumerate(prepared_observations, start=1):
+                self.progress(SyncEvent("create", f"Creating reviewed observations on {self.server.name}", index, len(prepared_observations)))
+                created_id = self.create_prepared_observation(prepared["api_record"])
+                self.set_tags(created_id, prepared["tags"], model="observation")
+        total_records = len(records) + len(prepared_observations)
+        self.progress(SyncEvent("complete", f"Sync complete for {self.server.name}", total_records, total_records, "done"))
         return backup_path
 
     def prepare_records_for_reload(
@@ -339,6 +472,22 @@ class GhostwriterApi:
             prepared_records.append({"api_record": api_record, "tags": tags})
         return prepared_records
 
+    def prepare_observations_for_reload(
+        self,
+        records: list[dict[str, Any]],
+        last_synced_at: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        prepared_records = []
+        for index, record in enumerate(records, start=1):
+            try:
+                api_record = ghostmerge_observation_to_api_input(record, last_synced_at=last_synced_at)
+                tags = _split_tags(record.get("tags"))
+            except Exception as exc:
+                title = record.get("title") or f"record {index}"
+                raise GhostwriterApiError(f"Cannot prepare Observation Template {index} ({title}) for reload: {exc}") from exc
+            prepared_records.append({"api_record": api_record, "tags": tags})
+        return prepared_records
+
     def fetch_finding_ids(self) -> list[int]:
         query = """
         query FindingIds {
@@ -348,6 +497,15 @@ class GhostwriterApi:
         data = self.client.execute(query)
         return [int(item["id"]) for item in data.get("finding", [])]
 
+    def fetch_observation_ids(self) -> list[int]:
+        query = """
+        query ObservationIds {
+          observation(order_by: {id: asc}) { id }
+        }
+        """
+        data = self.client.execute(query)
+        return [int(item["id"]) for item in data.get("observation", [])]
+
     def delete_finding(self, finding_id: int) -> None:
         mutation = """
         mutation DeleteFinding($id: bigint!) {
@@ -355,6 +513,14 @@ class GhostwriterApi:
         }
         """
         self.client.execute(mutation, {"id": finding_id})
+
+    def delete_observation(self, observation_id: int) -> None:
+        mutation = """
+        mutation DeleteObservation($id: bigint!) {
+          delete_observation_by_pk(id: $id) { id }
+        }
+        """
+        self.client.execute(mutation, {"id": observation_id})
 
     def fetch_lookup_ids(self) -> dict[str, dict[str, int]]:
         query = """
@@ -384,13 +550,25 @@ class GhostwriterApi:
             raise GhostwriterApiError("Ghostwriter did not return the created finding ID.")
         return int(created["id"])
 
-    def set_tags(self, finding_id: int, tags: list[str]) -> None:
+    def create_prepared_observation(self, api_record: dict[str, Any]) -> int:
         mutation = """
-        mutation SetFindingTags($id: bigint!, $tags: [String!]!) {
-          setTags(model: "finding", id: $id, tags: $tags) { tags }
+        mutation CreateObservation($object: observation_insert_input!) {
+          insert_observation_one(object: $object) { id }
         }
         """
-        self.client.execute(mutation, {"id": finding_id, "tags": tags})
+        data = self.client.execute(mutation, {"object": api_record})
+        created = data.get("insert_observation_one")
+        if not created:
+            raise GhostwriterApiError("Ghostwriter did not return the created observation ID.")
+        return int(created["id"])
+
+    def set_tags(self, finding_id: int, tags: list[str], model: str = "finding") -> None:
+        mutation = """
+        mutation SetFindingTags($model: String!, $id: bigint!, $tags: [String!]!) {
+          setTags(model: $model, id: $id, tags: $tags) { tags }
+        }
+        """
+        self.client.execute(mutation, {"model": model, "id": finding_id, "tags": tags})
 
     def restore_backup_record(self, backup_record: dict[str, Any], replace_existing_id: Optional[int] = None) -> int:
         if replace_existing_id is not None:
@@ -399,6 +577,14 @@ class GhostwriterApi:
         record = backup_record.get("normalised_record") or backup_record
         created_id = self.create_finding(record, lookups)
         self.set_tags(created_id, _split_tags(record.get("tags")))
+        return created_id
+
+    def restore_observation_backup_record(self, backup_record: dict[str, Any], replace_existing_id: Optional[int] = None) -> int:
+        if replace_existing_id is not None:
+            self.delete_observation(int(replace_existing_id))
+        record = backup_record.get("normalised_record") or backup_record
+        created_id = self.create_prepared_observation(ghostmerge_observation_to_api_input(record))
+        self.set_tags(created_id, _split_tags(record.get("tags")), model="observation")
         return created_id
 
     def find_restore_candidates(self, backup_record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -438,6 +624,37 @@ class GhostwriterApi:
                 seen_ids.add(existing_id)
         return candidates
 
+    def find_observation_restore_candidates(self, backup_record: dict[str, Any]) -> list[dict[str, Any]]:
+        record = backup_record.get("normalised_record") or backup_record
+        raw_record = (backup_record.get("raw_record") or {}).get("record") or {}
+        original_id = _optional_int(raw_record.get("id") or record.get("id"))
+        title = str(record.get("title") or "").strip()
+        candidates = []
+        seen_ids = set()
+        for existing in self.fetch_observations():
+            existing_id = _optional_int(existing.get("id"))
+            if existing_id is None or existing_id in seen_ids:
+                continue
+            id_matches = original_id is not None and existing_id == original_id
+            title_matches = title and str(existing.get("title") or "").strip() == title
+            if id_matches or title_matches:
+                reasons = []
+                if id_matches:
+                    reasons.append("same original Ghostwriter ID")
+                if title_matches:
+                    reasons.append("same title")
+                candidates.append(
+                    {
+                        "id": existing_id,
+                        "title": existing.get("title") or "",
+                        "finding_type": "",
+                        "severity": "",
+                        "match_reason": ", ".join(reasons),
+                    }
+                )
+                seen_ids.add(existing_id)
+        return candidates
+
     def _api_record_to_ghostmerge(self, record: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": str(record.get("id", "")),
@@ -454,6 +671,15 @@ class GhostwriterApi:
             "network_detection_techniques": record.get("networkDetectionTechniques") or "",
             "references": record.get("references") or "",
             "finding_guidance": record.get("findingGuidance") or "",
+            "tags": "",
+            "extra_fields": record.get("extraFields") or {},
+        }
+
+    def _api_observation_to_ghostmerge(self, record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(record.get("id", "")),
+            "title": record.get("title") or "",
+            "description": record.get("description") or "",
             "tags": "",
             "extra_fields": record.get("extraFields") or {},
         }
@@ -485,6 +711,17 @@ def ghostmerge_record_to_api_input(
         "networkDetectionTechniques": record.get("network_detection_techniques") or "",
         "references": record.get("references") or "",
         "findingGuidance": record.get("finding_guidance") or "",
+        "extraFields": _extra_fields(record.get("extra_fields"), last_synced_at=last_synced_at),
+    }
+
+
+def ghostmerge_observation_to_api_input(
+    record: dict[str, Any],
+    last_synced_at: Optional[str] = None,
+) -> dict[str, Any]:
+    return {
+        "title": record.get("title") or "",
+        "description": record.get("description") or "",
         "extraFields": _extra_fields(record.get("extra_fields"), last_synced_at=last_synced_at),
     }
 
@@ -550,14 +787,36 @@ def backup_root_from_config(config: dict[str, Any]) -> Path:
 
 def verify_backup(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data.get("raw_records"), list):
-        raise GhostwriterApiError("Backup does not contain raw_records.")
-    if not isinstance(data.get("normalised_records"), list):
-        raise GhostwriterApiError("Backup does not contain normalised_records.")
-    if data.get("record_count") != len(data["raw_records"]):
+    findings = data.get("findings") or {
+        "raw_records": data.get("raw_records"),
+        "normalised_records": data.get("normalised_records"),
+    }
+    observations = data.get("observations") or {"raw_records": [], "normalised_records": []}
+
+    if not isinstance(findings.get("raw_records"), list):
+        raise GhostwriterApiError("Backup does not contain finding raw_records.")
+    if not isinstance(findings.get("normalised_records"), list):
+        raise GhostwriterApiError("Backup does not contain finding normalised_records.")
+    if not isinstance(observations.get("raw_records"), list):
+        raise GhostwriterApiError("Backup does not contain observation raw_records.")
+    if not isinstance(observations.get("normalised_records"), list):
+        raise GhostwriterApiError("Backup does not contain observation normalised_records.")
+
+    data["findings"] = findings
+    data["observations"] = observations
+    data["raw_records"] = findings["raw_records"]
+    data["normalised_records"] = findings["normalised_records"]
+    data.setdefault("record_count", len(findings["raw_records"]))
+    data.setdefault("observation_count", len(observations["raw_records"]))
+
+    if data.get("record_count") != len(findings["raw_records"]):
         raise GhostwriterApiError("Backup record count does not match its contents.")
-    if len(data["normalised_records"]) != len(data["raw_records"]):
+    if len(findings["normalised_records"]) != len(findings["raw_records"]):
         raise GhostwriterApiError("Backup raw and normalised record counts do not match.")
+    if data.get("observation_count") != len(observations["raw_records"]):
+        raise GhostwriterApiError("Backup observation count does not match its contents.")
+    if len(observations["normalised_records"]) != len(observations["raw_records"]):
+        raise GhostwriterApiError("Backup observation raw and normalised record counts do not match.")
     return data
 
 
@@ -578,21 +837,26 @@ def list_backups(backup_root: Path) -> list[dict[str, Any]]:
                 "server_name": data.get("server_name"),
                 "created_at": data.get("created_at"),
                 "record_count": data.get("record_count"),
+                "observation_count": data.get("observation_count", 0),
             }
         )
     return backups
 
 
-def load_backup_record(path: Path, index: int) -> dict[str, Any]:
+def load_backup_record(path: Path, index: int, template_type: str = "finding") -> dict[str, Any]:
     data = verify_backup(path)
-    records = data["normalised_records"]
+    if template_type not in {"finding", "observation"}:
+        raise GhostwriterApiError("Unknown backup template type.")
+    section = data["findings"] if template_type == "finding" else data["observations"]
+    records = section["normalised_records"]
     if index < 0 or index >= len(records):
         raise GhostwriterApiError("Backup record index is out of range.")
     return {
         "backup": data,
         "normalised_record": records[index],
-        "raw_record": data["raw_records"][index],
+        "raw_record": section["raw_records"][index],
         "index": index,
+        "template_type": template_type,
     }
 
 

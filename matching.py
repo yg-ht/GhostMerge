@@ -5,7 +5,9 @@ from globals import get_config
 CONFIG = get_config()
 # local module imports
 from utils import log, normalise_tags
-from model import Finding
+from model import Finding, Observation
+
+MergeRecord = Finding | Observation
 
 def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> float:
     """
@@ -137,6 +139,48 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
 
     return combined_score
 
+
+def score_observation_similarity(observation_left: Observation, observation_right: Observation) -> float:
+    """
+    Computes a similarity score between two observations.
+
+    Observations have a smaller schema than findings, so matching is deliberately
+    title-led with description as supporting evidence.
+    """
+    log(
+        "DEBUG",
+        f"Scoring similarity between Observation Left (ID: {observation_left.id}) and "
+        f"Observation Right (ID: {observation_right.id})",
+        prefix="MATCHING",
+    )
+    title_weight = CONFIG.get("match_weight_title", 0.6)
+    description_weight = CONFIG.get("match_weight_description", 0.4)
+    total_weight = title_weight + description_weight
+    if total_weight <= 0:
+        title_weight = 0.6
+        description_weight = 0.4
+        total_weight = 1.0
+
+    title_score_raw = fuzz.token_set_ratio(observation_left.title, observation_right.title)
+    if title_score_raw < CONFIG.get("match_min_threshold_title"):
+        return title_score_raw * (title_weight / total_weight)
+
+    description_score_raw = 0
+    if observation_left.description and observation_right.description:
+        description_score_raw = fuzz.token_set_ratio(observation_left.description, observation_right.description)
+
+    return (
+        title_score_raw * (title_weight / total_weight)
+        + description_score_raw * (description_weight / total_weight)
+    )
+
+
+def score_record_similarity(record_left: MergeRecord, record_right: MergeRecord) -> float:
+    """Dispatch similarity scoring by reviewed template type."""
+    if isinstance(record_left, Observation) and isinstance(record_right, Observation):
+        return score_observation_similarity(record_left, record_right)
+    return score_finding_similarity(record_left, record_right)
+
 def fuzzy_match_findings(
     list_Left: List[Finding],
     list_Right: List[Finding],
@@ -194,4 +238,41 @@ def fuzzy_match_findings(
     log("INFO", f"Unmatched: {len(unmatched_left)} in Left, {len(unmatched_right)} in Right", prefix="MATCHING")
     log("INFO", f"=== Fuzzing matching round complete ===", prefix="MATCHING")
 
+    return matches, unmatched_left, unmatched_right
+
+
+def fuzzy_match_records(
+    list_left: List[MergeRecord],
+    list_right: List[MergeRecord],
+    threshold: float,
+) -> Tuple[List[Dict[str, MergeRecord | str]], List[MergeRecord], List[MergeRecord]]:
+    """
+    Matches records from two lists using the scoring routine for their type.
+    """
+    matches: List[Dict[str, MergeRecord | float]] = []
+    unmatched_left: List[MergeRecord] = []
+    matched_indices_right = set()
+
+    for idx_left, record_left in enumerate(list_left):
+        best_match = None
+        best_score = 0
+        best_idx_right = -1
+
+        for idx_right, record_right in enumerate(list_right):
+            if idx_right in matched_indices_right:
+                continue
+
+            score = score_record_similarity(record_left, record_right)
+            if score > best_score:
+                best_score = score
+                best_match = record_right
+                best_idx_right = idx_right
+
+        if best_score >= threshold and best_match:
+            matches.append({"left": record_left, "right": best_match, "score": best_score})
+            matched_indices_right.add(best_idx_right)
+        else:
+            unmatched_left.append(record_left)
+
+    unmatched_right = [right for idx, right in enumerate(list_right) if idx not in matched_indices_right]
     return matches, unmatched_left, unmatched_right
