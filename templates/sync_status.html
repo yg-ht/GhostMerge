@@ -16,7 +16,7 @@
   <meta http-equiv="refresh" content="2">
   {% endif %}
   <div class="actions">
-    <a class="button secondary" href="{{ url_for('complete', job_id=job.job_id) }}">Back to completed job</a>
+    <a class="button secondary" href="{{ url_for('summary', job_id=job.job_id) }}">Back to merge job</a>
   </div>
 </section>
 {% endblock %}

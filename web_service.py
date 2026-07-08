@@ -98,6 +98,7 @@ class PreviousJobItem:
     completed_matches: int
     has_left_output: bool
     has_right_output: bool
+    sync_results: dict[str, Any] = field(default_factory=dict)
 
 
 def load_records_from_json_text(json_text: str) -> list[dict[str, Any]]:
@@ -454,6 +455,7 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
                 completed_matches=min(int(progress["completed_matches"]), int(progress["total_matches"])),
                 has_left_output=(job_dir / "left.json").exists(),
                 has_right_output=(job_dir / "right.json").exists(),
+                sync_results=job.sync_results,
             )
         )
     return jobs
@@ -476,6 +478,7 @@ def job_summary(job: MergeJob) -> dict[str, int | bool | str]:
         "merged": len(job.merged_left),
         "conflict_phase_complete": job.conflict_phase_complete,
         "sensitivity_phase_complete": job.sensitivity_phase_complete,
+        "sync_results": job.sync_results,
     })
     return summary
 

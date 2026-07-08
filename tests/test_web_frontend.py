@@ -202,6 +202,7 @@ class WebServiceTests(unittest.TestCase):
             job = create_merge_job([record()], [], job_id="oldjob123")
             get_next_conflict(job)
             result = finalise_job(job)
+            job.sync_results["left"] = {"status": "running", "message": "Creating reviewed findings"}
             save_job(job, jobs_dir)
             save_outputs(job, jobs_dir, result)
 
@@ -210,6 +211,7 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(previous_jobs[0].job_id, "oldjob123")
         self.assertTrue(previous_jobs[0].has_left_output)
         self.assertTrue(previous_jobs[0].has_right_output)
+        self.assertEqual(previous_jobs[0].sync_results["left"]["status"], "running")
 
     def test_sensitivity_review_can_apply_offered_replacement(self):
         configure_for_web_tests(sensitivity_check_enabled=True)
@@ -324,6 +326,7 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="homejob123")
         get_next_conflict(job)
+        job.sync_results["left"] = {"status": "running", "message": "Creating reviewed findings"}
         save_job(job, jobs_dir)
 
         response = self.client.get("/")
@@ -339,6 +342,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"https://yougottahackthat.com", response.data)
         self.assertIn(b"homejob123", response.data)
         self.assertIn(b"Matched pairs reviewed", response.data)
+        self.assertIn(b"Left sync status", response.data)
+        self.assertIn(b"/jobs/homejob123/sync/left/status", response.data)
 
     def test_upload_review_complete_and_download_outputs(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")
@@ -512,6 +517,11 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"View sync status", response.data)
         self.assertIn(b"/jobs/rejoin123/sync/left/status", response.data)
+
+        summary_response = self.client.get("/jobs/rejoin123/summary")
+        self.assertEqual(summary_response.status_code, 200)
+        self.assertIn(b"Left sync status", summary_response.data)
+        self.assertIn(b"/jobs/rejoin123/sync/left/status", summary_response.data)
 
     def test_live_sync_rejects_existing_side_lock(self):
         jobs_dir = Path(self.tmp_dir.name)

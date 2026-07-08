@@ -11,5 +11,12 @@
     <dt>Completed matches</dt><dd>{{ summary.completed_matches }}</dd>
   </dl>
   <p><a class="button" href="{{ url_for('conflicts', job_id=summary.job_id) }}">Resume review</a></p>
+  {% if summary.sync_results %}
+  <div class="actions">
+    {% for sync_side, sync_state in summary.sync_results.items() %}
+    <a class="button secondary" href="{{ url_for('sync_status', job_id=summary.job_id, side=sync_side) }}">{{ sync_side|title }} sync status</a>
+    {% endfor %}
+  </div>
+  {% endif %}
 </section>
 {% endblock %}
