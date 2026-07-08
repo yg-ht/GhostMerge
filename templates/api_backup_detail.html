@@ -30,15 +30,41 @@
     </thead>
     <tbody>
       {% for record in backup.normalised_records %}
+      {% set record_index = loop.index0 %}
       <tr>
         <td>{{ record.title }}</td>
         <td>{{ record.severity }}</td>
         <td>{{ record.finding_type }}</td>
         <td>
-          <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, index=loop.index0) }}">
+          <form method="post" action="{{ url_for('api_backup_restore', side=side, filename=filename, index=record_index) }}">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <button type="submit">Restore this finding</button>
           </form>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="4">
+          <details class="finding-detail">
+            <summary>View finding detail</summary>
+            <dl>
+              <dt>ID</dt><dd>{{ record.id }}</dd>
+              <dt>Title</dt><dd>{{ record.title }}</dd>
+              <dt>Severity</dt><dd>{{ record.severity }}</dd>
+              <dt>CVSS score</dt><dd>{{ record.cvss_score }}</dd>
+              <dt>CVSS vector</dt><dd>{{ record.cvss_vector }}</dd>
+              <dt>Type</dt><dd>{{ record.finding_type }}</dd>
+              <dt>Tags</dt><dd>{{ record.tags }}</dd>
+              <dt>Description</dt><dd><pre>{{ record.description }}</pre></dd>
+              <dt>Impact</dt><dd><pre>{{ record.impact }}</pre></dd>
+              <dt>Mitigation</dt><dd><pre>{{ record.mitigation }}</pre></dd>
+              <dt>Replication steps</dt><dd><pre>{{ record.replication_steps }}</pre></dd>
+              <dt>Host detection</dt><dd><pre>{{ record.host_detection_techniques }}</pre></dd>
+              <dt>Network detection</dt><dd><pre>{{ record.network_detection_techniques }}</pre></dd>
+              <dt>References</dt><dd><pre>{{ record.references }}</pre></dd>
+              <dt>Finding guidance</dt><dd><pre>{{ record.finding_guidance }}</pre></dd>
+              <dt>Extra fields</dt><dd><pre>{{ record.extra_fields }}</pre></dd>
+            </dl>
+          </details>
         </td>
       </tr>
       {% endfor %}

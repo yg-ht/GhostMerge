@@ -1011,6 +1011,48 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b">0<", response.data)
         self.assertIn(b"Delete this API backup? This cannot be undone.", response.data)
 
+    def test_backup_detail_shows_expandable_finding_detail(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "finding-detail.json"
+        backup_path.write_text(
+            json.dumps(
+                {
+                    "server_side": "left",
+                    "server_name": "Left",
+                    "graphql_url": "https://left.example/v1/graphql",
+                    "created_at": "20260705T000000Z",
+                    "record_count": 1,
+                    "raw_records": [{"record": {"id": 1}, "tags": []}],
+                    "normalised_records": [
+                        record(
+                            title="Detailed finding",
+                            description="Detailed description",
+                            impact="Detailed impact",
+                            mitigation="Detailed mitigation",
+                            replication_steps="Detailed steps",
+                            references="https://example.test/reference",
+                            extra_fields={"owner": "security"},
+                        )
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        get_config()["ghostwriter_api"]["backup_dir"] = str(backup_root)
+
+        response = self.client.get("/api-backups/left/finding-detail.json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"View finding detail", response.data)
+        self.assertIn(b"Detailed description", response.data)
+        self.assertIn(b"Detailed impact", response.data)
+        self.assertIn(b"Detailed mitigation", response.data)
+        self.assertIn(b"Detailed steps", response.data)
+        self.assertIn(b"https://example.test/reference", response.data)
+        self.assertIn(b"owner", response.data)
+
     def test_backup_list_delete_button_requires_confirmation(self):
         backup_root = Path(self.tmp_dir.name) / "backups"
         backup_dir = backup_root / "left"
