@@ -595,6 +595,10 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Use right", conflict.data)
         self.assertIn(b'value="offered"', conflict.data)
         self.assertIn(b"Use offered", conflict.data)
+        self.assertIn(b"data-choice-cell", conflict.data)
+        self.assertIn(b'data-choice-value="left"', conflict.data)
+        self.assertIn(b'data-choice-value="right"', conflict.data)
+        self.assertIn(b'data-choice-value="offered"', conflict.data)
         self.assertIn(b"Apply selected field choices", conflict.data)
 
         conflict = self.client.post(

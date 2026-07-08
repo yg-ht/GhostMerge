@@ -22,7 +22,7 @@
         {% for row in preview.rows %}
         <tr class="{{ 'changed selectable' if row.different else '' }}" data-choice-row>
           <th class="field-cell">{{ row.field_name }}</th>
-          <td class="value-cell">
+          <td class="value-cell{% if row.different %} choice-cell{% endif %}"{% if row.different %} data-choice-cell data-choice-value="left"{% endif %}>
             {% if row.different %}
             <label class="choice-control">
               <input type="radio" name="field_choice:{{ row.field_name }}" value="left">
@@ -38,7 +38,7 @@
             </div>
             {% endif %}
           </td>
-          <td class="value-cell">
+          <td class="value-cell{% if row.different %} choice-cell{% endif %}"{% if row.different %} data-choice-cell data-choice-value="right"{% endif %}>
             {% if row.different %}
             <label class="choice-control">
               <input type="radio" name="field_choice:{{ row.field_name }}" value="right">
@@ -54,7 +54,7 @@
             </div>
             {% endif %}
           </td>
-          <td class="value-cell">
+          <td class="value-cell{% if row.different %} choice-cell{% endif %}"{% if row.different %} data-choice-cell data-choice-value="offered"{% endif %}>
             {% if row.different %}
             <label class="choice-control">
               <input type="radio" name="field_choice:{{ row.field_name }}" value="offered">
