@@ -56,6 +56,65 @@
   <h2>API backups</h2>
   <p><a class="button secondary" href="{{ url_for('api_backups') }}">Open backup browser</a></p>
 </section>
+{% if api_source_checks %}
+<section class="panel">
+  <h2>API source checks</h2>
+  <table class="record-table">
+    <thead>
+      <tr>
+        <th>Check</th>
+        <th>Source</th>
+        <th>Status</th>
+        <th>Message</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for check in api_source_checks %}
+      <tr>
+        <td>{{ check.check_id }}</td>
+        <td>{{ check.server_name|default(check.side|default("Ghostwriter")) }}</td>
+        <td>{{ check.status|default("queued") }}</td>
+        <td>{{ check.message|default("Queued") }}</td>
+        <td class="actions">
+          <a class="button secondary" href="{{ url_for('api_source_check_status', check_id=check.check_id) }}">View status</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% if api_imports %}
+<section class="panel">
+  <h2>API imports</h2>
+  <table class="record-table">
+    <thead>
+      <tr>
+        <th>Import</th>
+        <th>Status</th>
+        <th>Message</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for import_state in api_imports %}
+      <tr>
+        <td>{{ import_state.import_id }}</td>
+        <td>{{ import_state.status|default("queued") }}</td>
+        <td>{{ import_state.message|default("Queued") }}</td>
+        <td class="actions">
+          <a class="button secondary" href="{{ url_for('import_status', import_id=import_state.import_id) }}">View status</a>
+          {% if import_state.status == "done" and import_state.job_id %}
+          <a class="button secondary" href="{{ url_for('summary', job_id=import_state.job_id) }}">Open merge job</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
 <section class="panel">
   <h2>Previous merge jobs</h2>
   {% if previous_jobs %}

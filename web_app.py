@@ -6,6 +6,7 @@ import secrets
 import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 from flask import Flask, Response, redirect, render_template, request, send_file, session, url_for
 
@@ -104,6 +105,8 @@ def create_app(test_config: dict | None = None) -> Flask:
         return render_template(
             "upload.html",
             previous_jobs=list_previous_jobs(jobs_dir),
+            api_source_checks=_list_api_source_checks(jobs_dir),
+            api_imports=_list_api_imports(jobs_dir),
             api_servers=configured_server_summary(CONFIG),
             backups=list_backups(backup_root_from_config(CONFIG)),
             root_page=True,
@@ -130,6 +133,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "upload.html",
                 error=str(exc),
                 previous_jobs=list_previous_jobs(jobs_dir),
+                api_source_checks=_list_api_source_checks(jobs_dir),
+                api_imports=_list_api_imports(jobs_dir),
                 api_servers=configured_server_summary(CONFIG),
                 backups=list_backups(backup_root_from_config(CONFIG)),
                 root_page=True,
@@ -147,6 +152,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "upload.html",
                 error=str(exc),
                 previous_jobs=list_previous_jobs(jobs_dir),
+                api_source_checks=_list_api_source_checks(jobs_dir),
+                api_imports=_list_api_imports(jobs_dir),
                 api_servers=configured_server_summary(CONFIG),
                 backups=list_backups(backup_root_from_config(CONFIG)),
                 root_page=True,
@@ -749,6 +756,27 @@ def _load_api_source_check_state(jobs_dir: Path, check_id: str) -> dict:
         raise WebMergeError("API source check state could not be read. Please refresh and try again.") from exc
 
 
+def _list_api_source_checks(jobs_dir: Path) -> list[dict[str, Any]]:
+    checks = []
+    checks_dir = jobs_dir / "api_source_checks"
+    if not checks_dir.exists():
+        return checks
+    for path in sorted(checks_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        check_id = path.stem
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            state = {
+                "check_id": check_id,
+                "status": "error",
+                "stage": "error",
+                "message": f"API source check state could not be read: {exc}",
+            }
+        state.setdefault("check_id", check_id)
+        checks.append(state)
+    return checks
+
+
 def _save_import_state(jobs_dir: Path, import_id: str, state: dict) -> None:
     path = _import_state_path(jobs_dir, import_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -765,6 +793,27 @@ def _load_import_state(jobs_dir: Path, import_id: str) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise WebMergeError("API import state could not be read. Please refresh and try again.") from exc
+
+
+def _list_api_imports(jobs_dir: Path) -> list[dict[str, Any]]:
+    imports = []
+    imports_dir = jobs_dir / "api_imports"
+    if not imports_dir.exists():
+        return imports
+    for path in sorted(imports_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        import_id = path.stem
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            state = {
+                "import_id": import_id,
+                "status": "error",
+                "stage": "error",
+                "message": f"API import state could not be read: {exc}",
+            }
+        state.setdefault("import_id", import_id)
+        imports.append(state)
+    return imports
 
 
 def _server_for_side(side: str):

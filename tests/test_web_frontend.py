@@ -370,6 +370,58 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"corrupt123", response.data)
         self.assertIn(b"Job state could not be read", response.data)
 
+    def test_home_shows_api_source_check_status_links(self):
+        checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
+        checks_dir.mkdir()
+        (checks_dir / "check123.json").write_text(
+            json.dumps(
+                {
+                    "check_id": "check123",
+                    "side": "left",
+                    "server_name": "YGHT Ghostwriter",
+                    "status": "running",
+                    "stage": "backup_fetch",
+                    "message": "Fetched 192 backup record(s) from YGHT Ghostwriter",
+                    "complete": 192,
+                    "total": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"API source checks", response.data)
+        self.assertIn(b"YGHT Ghostwriter", response.data)
+        self.assertIn(b"Fetched 192 backup record", response.data)
+        self.assertIn(b"/api-sources/checks/check123/status", response.data)
+
+    def test_home_shows_api_import_status_links(self):
+        imports_dir = Path(self.tmp_dir.name) / "api_imports"
+        imports_dir.mkdir()
+        (imports_dir / "import123.json").write_text(
+            json.dumps(
+                {
+                    "import_id": "import123",
+                    "status": "running",
+                    "stage": "fetch_left",
+                    "message": "Fetching left API source.",
+                    "complete": 0,
+                    "total": 1,
+                    "job_id": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"API imports", response.data)
+        self.assertIn(b"Fetching left API source", response.data)
+        self.assertIn(b"/imports/import123/status", response.data)
+
     def test_upload_review_complete_and_download_outputs(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")
         right = json.dumps([record(id="2", description="Right detail")]).encode("utf-8")
