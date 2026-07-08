@@ -27,7 +27,10 @@
   <dl>
     {% for side, state in job.sync_results.items() %}
     <dt>{{ side|title }}</dt>
-    <dd>{{ state.status }} - {{ state.message }}</dd>
+    <dd>
+      {{ state.status }} - {{ state.message }}
+      <a href="{{ url_for('sync_status', job_id=job.job_id, side=side) }}">View sync status</a>
+    </dd>
     {% endfor %}
   </dl>
   {% endif %}

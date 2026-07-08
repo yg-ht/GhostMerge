@@ -482,6 +482,37 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"already running", response.data)
 
+    def test_complete_page_links_to_existing_sync_status(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record()], [], job_id="rejoin123", input_sources={"left": "api", "right": "file"})
+        self.assertIsNone(get_next_conflict(job))
+        result = finalise_job(job)
+        job.sensitivity_phase_complete = True
+        job.sync_results["left"] = {
+            "status": "running",
+            "stage": "create",
+            "message": "Creating reviewed findings",
+            "complete": 1,
+            "total": 2,
+        }
+        save_job(job, jobs_dir)
+        save_outputs(job, jobs_dir, result)
+
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        response = self.client.get("/jobs/rejoin123/complete")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"View sync status", response.data)
+        self.assertIn(b"/jobs/rejoin123/sync/left/status", response.data)
+
     def test_live_sync_rejects_existing_side_lock(self):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="locked123", input_sources={"left": "api", "right": "file"})
