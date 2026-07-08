@@ -170,6 +170,24 @@ class WebServiceTests(unittest.TestCase):
         self.assertIn("added", [row["class"] for row in diff])
         self.assertIn("offered", [row["class"] for row in diff])
 
+    def test_preview_excludes_id_from_reviewable_differences(self):
+        job = create_merge_job(
+            [record(id="1", description="Same detail")],
+            [record(id="99", description="Same detail")],
+            job_id="previewid123",
+        )
+
+        preview = get_current_match_preview(job)
+        item = get_next_conflict(job)
+
+        self.assertIsNotNone(preview)
+        id_row = next(row for row in preview.rows if row["field_name"] == "id")
+        self.assertEqual(id_row["left_value"], "1")
+        self.assertEqual(id_row["right_value"], "99")
+        self.assertFalse(id_row["different"])
+        self.assertEqual(id_row["diff_rows"], [])
+        self.assertIsNone(item)
+
     def test_preview_selected_offered_values_leave_remaining_fields_for_review(self):
         job = create_merge_job(
             [record(description="Left detail", impact="Left impact")],

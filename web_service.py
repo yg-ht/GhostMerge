@@ -206,16 +206,17 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
         left_value = getattr(match["left"], field_def.name, blank_for_type(expected_type))
         right_value = getattr(match["right"], field_def.name, blank_for_type(expected_type))
         offered_value = match["auto_value"].get(field_def.name)
+        requires_review = field_def.name != "id" and left_value != right_value
         rows.append(
             {
                 "field_name": field_def.name,
                 "left_value": stringify_field(left_value),
                 "right_value": stringify_field(right_value),
                 "offered_value": stringify_field(offered_value),
-                "different": left_value != right_value,
+                "different": requires_review,
                 "diff_rows": (
                     build_field_diff(left_value, right_value, offered_value)
-                    if left_value != right_value
+                    if requires_review
                     else []
                 ),
             }
