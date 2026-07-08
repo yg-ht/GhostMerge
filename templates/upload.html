@@ -8,36 +8,37 @@
   <p>Backup file: {{ api_check.backup_filename }}. <a href="{{ url_for('api_backups') }}">Open backup browser</a></p>
 </div>
 {% endif %}
-<form class="panel" action="{{ url_for('create_job_route') }}" method="post" enctype="multipart/form-data">
-  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+<form id="create_merge_form" action="{{ url_for('create_job_route') }}" method="post" enctype="multipart/form-data"></form>
+<section class="panel">
+  <input form="create_merge_form" type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <div class="grid">
     <div>
       <label for="left_source">Left source</label>
-      <select id="left_source" name="left_source">
+      <select id="left_source" name="left_source" form="create_merge_form">
         <option value="file">JSON file</option>
         <option value="api" {% if not api_servers.left.configured %}disabled{% endif %}>{{ api_servers.left.name }} API{% if not api_servers.left.configured %} (not configured){% endif %}</option>
       </select>
       <label for="left_file">Left JSON</label>
-      <input id="left_file" name="left_file" type="file" accept="application/json,.json">
+      <input id="left_file" name="left_file" type="file" accept="application/json,.json" form="create_merge_form">
       {% with side="left", server=api_servers.left %}
       {% include "_api_fetch_control.html" %}
       {% endwith %}
     </div>
     <div>
       <label for="right_source">Right source</label>
-      <select id="right_source" name="right_source">
+      <select id="right_source" name="right_source" form="create_merge_form">
         <option value="file">JSON file</option>
         <option value="api" {% if not api_servers.right.configured %}disabled{% endif %}>{{ api_servers.right.name }} API{% if not api_servers.right.configured %} (not configured){% endif %}</option>
       </select>
       <label for="right_file">Right JSON</label>
-      <input id="right_file" name="right_file" type="file" accept="application/json,.json">
+      <input id="right_file" name="right_file" type="file" accept="application/json,.json" form="create_merge_form">
       {% with side="right", server=api_servers.right %}
       {% include "_api_fetch_control.html" %}
       {% endwith %}
     </div>
   </div>
-  <p><button type="submit">Create merge job</button></p>
-</form>
+  <p><button type="submit" form="create_merge_form">Create merge job</button></p>
+</section>
 <section class="panel">
   <h2>API backups</h2>
   <p><a class="button secondary" href="{{ url_for('api_backups') }}">Open backup browser</a></p>

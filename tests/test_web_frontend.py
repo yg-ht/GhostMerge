@@ -794,6 +794,27 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Fetch Left Test Ghostwriter", response.data)
         self.assertIn(b'action="/api-sources/left/check"', response.data)
 
+    def test_create_merge_form_is_not_nested_with_fetch_forms(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        response = self.client.get("/")
+        html = response.data.decode("utf-8")
+        create_form = '<form id="create_merge_form" action="/jobs" method="post" enctype="multipart/form-data"></form>'
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(create_form, html)
+        self.assertIn('form="create_merge_form"', html)
+        self.assertIn('action="/api-sources/left/check"', html)
+        self.assertLess(html.index(create_form), html.index('action="/api-sources/left/check"'))
+
     def test_api_fetch_check_redirects_to_visible_status(self):
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(
