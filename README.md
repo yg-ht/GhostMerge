@@ -333,12 +333,22 @@ Enable only the sides you intend to use:
         "name": "Left Ghostwriter",
         "base_url": "https://left-ghostwriter.example",
         "graphql_endpoint": "/v1/graphql",
-        "bearer_token": "gwat_replace-with-local-token"
+        "bearer_token": "gwat_replace-with-local-token",
+        "verify_tls": true,
+        "strict_x509_verification": true
       }
     }
   }
 }
 ```
+
+Leave `verify_tls` enabled for normal deployments. If an internal CA chain is
+trusted by the operating system but fails with an OpenSSL strict-mode error such
+as `Basic Constraints of CA cert not marked critical`, set
+`strict_x509_verification` to `false` for that Ghostwriter side. That keeps
+normal CA trust and hostname verification enabled while relaxing OpenSSL's
+strict X.509 extension checks. Set `verify_tls` to `false` only as a temporary
+last resort, because it disables certificate verification entirely.
 
 ### GhostWriter API tokens
 

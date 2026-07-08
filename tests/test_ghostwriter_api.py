@@ -142,6 +142,7 @@ class GhostwriterApiTests(unittest.TestCase):
                         "graphql_endpoint": "/v1/graphql",
                         "bearer_token": "left-token",
                         "rate_limit_per_second": 2.5,
+                        "strict_x509_verification": False,
                     },
                     "right": {"enabled": False, "base_url": "https://right.example", "bearer_token": "right-token"},
                 },
@@ -152,6 +153,7 @@ class GhostwriterApiTests(unittest.TestCase):
 
         self.assertEqual(servers["left"].graphql_url, "https://left.example/v1/graphql")
         self.assertEqual(servers["left"].rate_limit_per_second, 2.5)
+        self.assertFalse(servers["left"].strict_x509_verification)
         self.assertIsNone(servers["right"])
 
     def test_server_config_accepts_full_graphql_endpoint(self):
@@ -193,6 +195,20 @@ class GhostwriterApiTests(unittest.TestCase):
             GhostwriterGraphQLClient(server_config()).execute("query Test { ok }")
 
         self.assertIsNone(urlopen.call_args.kwargs["context"])
+
+    def test_graphql_client_can_relax_strict_x509_without_disabling_tls_verification(self):
+        import ssl
+
+        with patch("ghostwriter_api.urllib.request.urlopen", return_value=FakeUrlResponse()) as urlopen:
+            from ghostwriter_api import GhostwriterGraphQLClient
+
+            GhostwriterGraphQLClient(server_config(strict_x509_verification=False)).execute("query Test { ok }")
+
+        context = urlopen.call_args.kwargs["context"]
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+        if hasattr(ssl, "VERIFY_X509_STRICT"):
+            self.assertFalse(context.verify_flags & ssl.VERIFY_X509_STRICT)
 
     def test_graphql_client_sends_opaque_token_as_bearer_header(self):
         with patch("ghostwriter_api.urllib.request.urlopen", return_value=FakeUrlResponse()) as urlopen:

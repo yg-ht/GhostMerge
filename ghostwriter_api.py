@@ -50,6 +50,7 @@ class GhostwriterServerConfig:
     bearer_token: str
     timeout_seconds: float = 30.0
     verify_tls: bool = True
+    strict_x509_verification: bool = True
     rate_limit_per_second: float = 1.0
 
     @property
@@ -102,7 +103,7 @@ class GhostwriterGraphQLClient:
             method="POST",
         )
         try:
-            ssl_context = None if self.server.verify_tls else ssl._create_unverified_context()
+            ssl_context = _ssl_context_for_server(self.server)
             with urllib.request.urlopen(request, timeout=self.server.timeout_seconds, context=ssl_context) as response:
                 response_body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
@@ -440,6 +441,7 @@ def load_server_configs(config: dict[str, Any]) -> dict[str, Optional[Ghostwrite
             bearer_token=token,
             timeout_seconds=float(server.get("timeout_seconds", 30.0)),
             verify_tls=bool(server.get("verify_tls", True)),
+            strict_x509_verification=bool(server.get("strict_x509_verification", True)),
             rate_limit_per_second=float(server.get("rate_limit_per_second", default_rate)),
         )
     return parsed
@@ -552,6 +554,17 @@ def _split_tags(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def _ssl_context_for_server(server: GhostwriterServerConfig):
+    if not server.verify_tls:
+        return ssl._create_unverified_context()
+    if server.strict_x509_verification:
+        return None
+    context = ssl.create_default_context()
+    if hasattr(ssl, "VERIFY_X509_STRICT"):
+        context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    return context
 
 
 def _schema_field_names(fields: list[dict[str, Any]]) -> set[str]:

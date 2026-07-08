@@ -64,7 +64,8 @@
         "bearer_token": "",
         "timeout_seconds": 30,
         "rate_limit_per_second": 1.0,
-        "verify_tls": true
+        "verify_tls": true,
+        "strict_x509_verification": true
       },
       "right": {
         "enabled": false,
@@ -74,7 +75,8 @@
         "bearer_token": "",
         "timeout_seconds": 30,
         "rate_limit_per_second": 1.0,
-        "verify_tls": true
+        "verify_tls": true,
+        "strict_x509_verification": true
       }
     }
   },
