@@ -99,6 +99,7 @@ class PreviousJobItem:
     has_left_output: bool
     has_right_output: bool
     sync_results: dict[str, Any] = field(default_factory=dict)
+    error: Optional[str] = None
 
 
 def load_records_from_json_text(json_text: str) -> list[dict[str, Any]]:
@@ -441,12 +442,23 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
 
     jobs = []
     for job_path in sorted(jobs_dir.glob("*/job.json"), key=lambda path: path.stat().st_mtime, reverse=True):
+        job_dir = job_path.parent
         try:
             job = job_from_dict(json.loads(job_path.read_text(encoding="utf-8")))
-        except Exception:
+        except Exception as exc:
+            jobs.append(
+                PreviousJobItem(
+                    job_id=job_dir.name,
+                    phase="error",
+                    matches=0,
+                    completed_matches=0,
+                    has_left_output=(job_dir / "left.json").exists(),
+                    has_right_output=(job_dir / "right.json").exists(),
+                    error=f"Job state could not be read: {exc}",
+                )
+            )
             continue
         progress = get_review_progress(job)
-        job_dir = job_path.parent
         jobs.append(
             PreviousJobItem(
                 job_id=job.job_id,

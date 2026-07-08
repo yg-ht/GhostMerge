@@ -213,6 +213,19 @@ class WebServiceTests(unittest.TestCase):
         self.assertTrue(previous_jobs[0].has_right_output)
         self.assertEqual(previous_jobs[0].sync_results["left"]["status"], "running")
 
+    def test_previous_jobs_include_unreadable_job_state(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            corrupt_job_dir = jobs_dir / "corrupt123"
+            corrupt_job_dir.mkdir()
+            (corrupt_job_dir / "job.json").write_text("{partial", encoding="utf-8")
+
+            previous_jobs = list_previous_jobs(jobs_dir)
+
+        self.assertEqual(previous_jobs[0].job_id, "corrupt123")
+        self.assertEqual(previous_jobs[0].phase, "error")
+        self.assertIn("Job state could not be read", previous_jobs[0].error)
+
     def test_sensitivity_review_can_apply_offered_replacement(self):
         configure_for_web_tests(sensitivity_check_enabled=True)
         job = create_merge_job([record(description="ACME detail")], [], job_id="sens123")
@@ -344,6 +357,18 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Matched pairs reviewed", response.data)
         self.assertIn(b"Left sync status", response.data)
         self.assertIn(b"/jobs/homejob123/sync/left/status", response.data)
+
+    def test_home_shows_unreadable_previous_jobs(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        corrupt_job_dir = jobs_dir / "corrupt123"
+        corrupt_job_dir.mkdir()
+        (corrupt_job_dir / "job.json").write_text("{partial", encoding="utf-8")
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"corrupt123", response.data)
+        self.assertIn(b"Job state could not be read", response.data)
 
     def test_upload_review_complete_and_download_outputs(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")
