@@ -135,6 +135,35 @@ def create_app(test_config: dict | None = None) -> Flask:
                 root_page=True,
             ), 400
 
+    @app.post("/api-sources/<side>/check")
+    def check_api_source(side: str):
+        try:
+            if side not in {"left", "right"}:
+                return render_template("error.html", error="Unknown API source side."), 404
+            server = _server_for_side(side)
+            records = GhostwriterApi(server).fetch_findings()
+            return render_template(
+                "upload.html",
+                api_check={
+                    "side": side,
+                    "server_name": server.name,
+                    "record_count": len(records),
+                },
+                previous_jobs=list_previous_jobs(jobs_dir),
+                api_servers=configured_server_summary(CONFIG),
+                backups=list_backups(backup_root_from_config(CONFIG)),
+                root_page=True,
+            )
+        except GhostwriterApiError as exc:
+            return render_template(
+                "upload.html",
+                error=str(exc),
+                previous_jobs=list_previous_jobs(jobs_dir),
+                api_servers=configured_server_summary(CONFIG),
+                backups=list_backups(backup_root_from_config(CONFIG)),
+                root_page=True,
+            ), 400
+
     @app.get("/imports/<import_id>/status")
     def import_status(import_id: str):
         try:

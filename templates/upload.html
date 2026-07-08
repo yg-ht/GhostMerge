@@ -2,6 +2,11 @@
 {% block content %}
 <h1>Merge finding libraries</h1>
 {% if error %}<div class="panel error">{{ error }}</div>{% endif %}
+{% if api_check %}
+<div class="panel">
+  <p>Fetched {{ api_check.record_count }} findings from {{ api_check.server_name }}.</p>
+</div>
+{% endif %}
 <form class="panel" action="{{ url_for('create_job_route') }}" method="post" enctype="multipart/form-data">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <div class="grid">
@@ -26,6 +31,26 @@
   </div>
   <p><button type="submit">Create merge job</button></p>
 </form>
+<section class="panel">
+  <h2>Check API source</h2>
+  <p>Fetch configured API data without creating a merge job.</p>
+  {% if api_servers.left.configured or api_servers.right.configured %}
+    {% if api_servers.left.configured %}
+    <form method="post" action="{{ url_for('check_api_source', side='left') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button type="submit">Fetch {{ api_servers.left.name }}</button>
+    </form>
+    {% endif %}
+    {% if api_servers.right.configured %}
+    <form method="post" action="{{ url_for('check_api_source', side='right') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button type="submit">Fetch {{ api_servers.right.name }}</button>
+    </form>
+    {% endif %}
+  {% else %}
+  <p>No API sources are configured.</p>
+  {% endif %}
+</section>
 <section class="panel">
   <h2>API backups</h2>
   <p><a class="button secondary" href="{{ url_for('api_backups') }}">Open backup browser</a></p>

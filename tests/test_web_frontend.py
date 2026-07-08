@@ -516,6 +516,43 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"API import status", status.data)
         self.assertIn(b"Queued API import", status.data)
 
+    def test_home_shows_api_fetch_check_for_configured_sources(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Check API source", response.data)
+        self.assertIn(b"Fetch Left Test Ghostwriter", response.data)
+
+    def test_api_fetch_check_retrieves_records_without_creating_merge_job(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+
+        with patch("web_app.GhostwriterApi") as api_class:
+            api_class.return_value.fetch_findings.return_value = [record(), record(id="2")]
+            response = self.client.post("/api-sources/left/check", data=self.with_csrf())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Fetched 2 findings from Left Test Ghostwriter", response.data)
+        self.assertEqual(list_previous_jobs(Path(self.tmp_dir.name)), [])
+        api_class.return_value.fetch_findings.assert_called_once_with()
+
     def test_api_import_status_handles_partial_import_state(self):
         import_dir = Path(self.tmp_dir.name) / "api_imports"
         import_dir.mkdir(parents=True)
