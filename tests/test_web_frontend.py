@@ -986,6 +986,64 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"normalised_records", response.data)
 
+    def test_backup_delete_removes_verified_backup(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "delete-me.json"
+        backup_path.write_text(
+            json.dumps(
+                {
+                    "server_side": "left",
+                    "server_name": "Left",
+                    "graphql_url": "https://left.example/v1/graphql",
+                    "created_at": "20260705T000000Z",
+                    "record_count": 1,
+                    "raw_records": [{"record": {"id": 1}, "tags": []}],
+                    "normalised_records": [record()],
+                }
+            ),
+            encoding="utf-8",
+        )
+        get_config()["ghostwriter_api"]["backup_dir"] = str(backup_root)
+
+        response = self.client.post(
+            "/api-backups/left/delete-me.json/delete",
+            data=self.with_csrf(),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(backup_path.exists())
+        self.assertIn(b"Deleted backup delete-me.json.", response.data)
+
+    def test_backup_delete_rejects_missing_csrf_token(self):
+        backup_root = Path(self.tmp_dir.name) / "backups"
+        backup_dir = backup_root / "left"
+        backup_dir.mkdir(parents=True)
+        backup_path = backup_dir / "csrf-delete.json"
+        backup_path.write_text(
+            json.dumps(
+                {
+                    "server_side": "left",
+                    "server_name": "Left",
+                    "graphql_url": "https://left.example/v1/graphql",
+                    "created_at": "20260705T000000Z",
+                    "record_count": 0,
+                    "raw_records": [],
+                    "normalised_records": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        get_config()["ghostwriter_api"]["backup_dir"] = str(backup_root)
+
+        response = self.client.post("/api-backups/left/csrf-delete.json/delete")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(backup_path.exists())
+        self.assertIn(b"Invalid or missing form token", response.data)
+
     def test_backup_restore_complete_names_configured_server(self):
         backup_root = Path(self.tmp_dir.name) / "backups"
         backup_dir = backup_root / "left"

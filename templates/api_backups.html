@@ -2,6 +2,9 @@
 {% block content %}
 <h1>API backups</h1>
 <section class="panel">
+  {% if deleted_backup %}
+  <p>Deleted backup {{ deleted_backup }}.</p>
+  {% endif %}
   {% if backups %}
   <table class="record-table">
     <thead>
@@ -21,6 +24,10 @@
         <td>
           <a class="button secondary" href="{{ url_for('api_backup_detail', side=backup.side, filename=backup.filename) }}">Open</a>
           <a class="button secondary" href="{{ url_for('api_backup_download', side=backup.side, filename=backup.filename) }}">Download JSON</a>
+          <form method="post" action="{{ url_for('api_backup_delete', side=backup.side, filename=backup.filename) }}">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button class="danger" type="submit">Delete</button>
+          </form>
         </td>
       </tr>
       {% endfor %}

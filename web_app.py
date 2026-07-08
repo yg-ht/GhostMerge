@@ -330,7 +330,11 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/api-backups")
     def api_backups():
-        return render_template("api_backups.html", backups=list_backups(backup_root_from_config(CONFIG)))
+        return render_template(
+            "api_backups.html",
+            backups=list_backups(backup_root_from_config(CONFIG)),
+            deleted_backup=request.args.get("deleted"),
+        )
 
     @app.get("/api-backups/<side>/<filename>")
     def api_backup_detail(side: str, filename: str):
@@ -348,6 +352,16 @@ def create_app(test_config: dict | None = None) -> Flask:
             verify_backup(backup_path)
             return send_file(backup_path, as_attachment=True, download_name=filename, mimetype="application/json")
         except (GhostwriterApiError, ValueError) as exc:
+            return render_template("error.html", error=str(exc)), 400
+
+    @app.post("/api-backups/<side>/<filename>/delete")
+    def api_backup_delete(side: str, filename: str):
+        try:
+            backup_path = _safe_backup_path(side, filename)
+            verify_backup(backup_path)
+            backup_path.unlink()
+            return redirect(url_for("api_backups", deleted=filename))
+        except (GhostwriterApiError, ValueError, OSError) as exc:
             return render_template("error.html", error=str(exc)), 400
 
     @app.post("/api-backups/<side>/<filename>/<int:index>/restore")

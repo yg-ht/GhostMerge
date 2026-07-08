@@ -9,7 +9,13 @@
   </dl>
 </section>
 <section class="panel">
-  <p><a class="button secondary" href="{{ url_for('api_backup_download', side=side, filename=filename) }}">Download full backup JSON</a></p>
+  <div class="actions">
+    <a class="button secondary" href="{{ url_for('api_backup_download', side=side, filename=filename) }}">Download full backup JSON</a>
+    <form method="post" action="{{ url_for('api_backup_delete', side=side, filename=filename) }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button class="danger" type="submit">Delete backup</button>
+    </form>
+  </div>
 </section>
 <section class="panel">
   <h2>Backed-up findings</h2>
