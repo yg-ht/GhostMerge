@@ -362,6 +362,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             return render_template(
                 "api_restore_complete.html",
                 side=side,
+                server_name=server.name,
                 filename=filename,
                 record=record["normalised_record"],
                 created_id=created_id,
