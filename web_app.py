@@ -212,6 +212,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                         "match_preview.html",
                         job=job,
                         preview=preview,
+                        preview_source_labels=_preview_source_labels(job),
                         progress=get_review_progress(job),
                     )
             item = get_next_conflict(job)
@@ -702,6 +703,20 @@ def _preview_field_choices_from_form(form) -> dict[str, str]:
         for key, value in form.items()
         if key.startswith(prefix) and value
     }
+
+
+def _preview_source_labels(job) -> dict[str, str]:
+    """Return Record Preview side labels while preserving file-backed names."""
+    labels = {"left": "Left", "right": "Right"}
+    api_servers = configured_server_summary(CONFIG)
+
+    for side in ("left", "right"):
+        if job.input_sources.get(side) == "api":
+            server = api_servers.get(side)
+            if server and server.get("configured"):
+                labels[side] = server.get("name") or labels[side]
+
+    return labels
 
 
 def _start_api_source_check_thread(app: Flask, jobs_dir: Path, side: str) -> str:

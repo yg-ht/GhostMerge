@@ -637,6 +637,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b'data-choice-value="left"', conflict.data)
         self.assertIn(b'data-choice-value="right"', conflict.data)
         self.assertIn(b'data-choice-value="offered"', conflict.data)
+        self.assertIn(b"<th class=\"value-cell\">Left</th>", conflict.data)
+        self.assertIn(b"<th class=\"value-cell\">Right</th>", conflict.data)
         self.assertIn(b"Apply selected field choices", conflict.data)
 
         conflict = self.client.post(
@@ -664,6 +666,57 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(right_download.status_code, 200)
         self.assertEqual(left_download.get_json()[0]["description"], "Right detail")
         self.assertEqual(right_download.get_json()[0]["description"], "Right detail")
+
+    def test_record_preview_uses_api_server_names_for_api_backed_columns(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+        config["ghostwriter_api"]["servers"]["right"].update(
+            {
+                "enabled": True,
+                "name": "Right Test Ghostwriter",
+                "base_url": "https://right.example",
+                "bearer_token": "right-token",
+            }
+        )
+        job = create_merge_job(
+            [record(description="Left detail")],
+            [record(id="2", description="Right detail")],
+            job_id="apipreviewlabels123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        save_job(job, Path(self.tmp_dir.name))
+
+        response = self.client.get("/jobs/apipreviewlabels123/conflicts")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"<th class=\"value-cell\">Left Test Ghostwriter</th>", response.data)
+        self.assertIn(b"<th class=\"value-cell\">Right Test Ghostwriter</th>", response.data)
+        self.assertNotIn(b"<th class=\"value-cell\">Left</th>", response.data)
+        self.assertNotIn(b"<th class=\"value-cell\">Right</th>", response.data)
+
+    def test_record_preview_displays_title_row_first(self):
+        job = create_merge_job(
+            [record(title="Left title", description="Left detail")],
+            [record(id="2", title="Right title", description="Right detail")],
+            job_id="previewtitlefirst123",
+        )
+        save_job(job, Path(self.tmp_dir.name))
+
+        response = self.client.get("/jobs/previewtitlefirst123/conflicts")
+        html = response.data.decode("utf-8")
+        body_start = html.index("<tbody>")
+        first_field = html.index('<th class="field-cell">title</th>', body_start)
+        description_field = html.index('<th class="field-cell">description</th>', body_start)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertLess(first_field, description_field)
 
     def test_record_preview_does_not_mark_id_only_difference_for_review(self):
         left = json.dumps([record(id="1", description="Same detail")]).encode("utf-8")
