@@ -5,7 +5,23 @@
   <dl>
     <dt>Status</dt><dd>{{ state.status|default("queued") }}</dd>
     <dt>Stage</dt><dd>{{ state.stage|default("queued") }}</dd>
-    <dt>Progress</dt><dd>{{ state.complete|default(0) }} / {{ state.total|default(0) }}</dd>
+    <dt>Source progress</dt><dd>{{ state.complete|default(0) }} / {{ state.total|default(0) }}</dd>
+    {% if state.side_name %}
+    <dt>Current source</dt><dd>{{ state.side_name }} ({{ state.side|title }}, {{ state.side_index|default(0) }} / {{ state.side_total|default(state.total|default(0)) }})</dd>
+    {% endif %}
+    {% if state.api_stage %}
+    <dt>Current API stage</dt><dd>{{ state.api_stage }}</dd>
+    {% endif %}
+    {% if state.api_complete is defined %}
+    <dt>Records fetched</dt>
+    <dd>
+      {% if state.api_total|default(0) %}
+      {{ state.api_complete|default(0) }} / {{ state.api_total }}
+      {% else %}
+      At least {{ state.api_complete|default(0) }}
+      {% endif %}
+    </dd>
+    {% endif %}
     <dt>Message</dt><dd>{{ state.message|default("Queued") }}</dd>
   </dl>
   {% if state.status == "running" %}

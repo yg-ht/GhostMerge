@@ -776,6 +776,96 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"API import status", status.data)
         self.assertIn(b"Queued API import", status.data)
 
+    def test_api_import_status_shows_current_source_and_record_progress(self):
+        imports_dir = Path(self.tmp_dir.name) / "api_imports"
+        imports_dir.mkdir()
+        (imports_dir / "importprogress123.json").write_text(
+            json.dumps(
+                {
+                    "import_id": "importprogress123",
+                    "status": "running",
+                    "stage": "fetch_left",
+                    "message": "Fetched 42 finding(s) from YGHT Ghostwriter",
+                    "complete": 0,
+                    "total": 2,
+                    "side": "left",
+                    "side_name": "YGHT Ghostwriter",
+                    "side_index": 1,
+                    "side_total": 2,
+                    "api_stage": "fetch",
+                    "api_complete": 42,
+                    "api_total": 0,
+                    "api_status": "running",
+                    "worker_pid": os.getpid(),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.get("/imports/importprogress123/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Source progress", response.data)
+        self.assertIn(b"Current source", response.data)
+        self.assertIn(b"YGHT Ghostwriter", response.data)
+        self.assertIn(b"Current API stage", response.data)
+        self.assertIn(b"Records fetched", response.data)
+        self.assertIn(b"At least 42", response.data)
+
+    def test_api_import_worker_records_incremental_fetch_progress(self):
+        config = get_config()
+        config["ghostwriter_api"]["servers"]["left"].update(
+            {
+                "enabled": True,
+                "name": "Left Test Ghostwriter",
+                "base_url": "https://left.example",
+                "bearer_token": "left-token",
+            }
+        )
+        captured_progress_state = {}
+        jobs_dir = Path(self.tmp_dir.name)
+
+        class ProgressApi:
+            def __init__(self, server, progress):
+                self.server = server
+                self.progress = progress
+
+            def fetch_findings(self):
+                event = type("Event", (), {})()
+                event.stage = "fetch"
+                event.message = f"Fetched 7 finding(s) from {self.server.name}"
+                event.complete = 7
+                event.total = 0
+                event.status = "running"
+                self.progress(event)
+                progress_files = list((jobs_dir / "api_imports").glob("*.json"))
+                captured_progress_state.update(json.loads(progress_files[0].read_text(encoding="utf-8")))
+                return [record()]
+
+        with patch("web_app.threading.Thread") as thread_class:
+            thread_class.return_value.start.return_value = None
+            response = self.client.post(
+                "/jobs",
+                data=self.with_csrf({
+                    "left_source": "api",
+                    "right_source": "file",
+                    "right_file": (io.BytesIO(json.dumps([record(id="2")]).encode("utf-8")), "right.json"),
+                }),
+                content_type="multipart/form-data",
+                follow_redirects=False,
+            )
+        import_id = response.headers["Location"].rsplit("/", 2)[-2]
+
+        with patch("web_app.GhostwriterApi", ProgressApi):
+            _import_job_sources(self.app, jobs_dir, import_id)
+
+        self.assertEqual(captured_progress_state["api_complete"], 7)
+        self.assertEqual(captured_progress_state["api_total"], 0)
+        state = json.loads((jobs_dir / "api_imports" / f"{import_id}.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["api_complete"], 1)
+        self.assertEqual(state["api_total"], 1)
+        self.assertEqual(state["side_name"], "Left Test Ghostwriter")
+
     def test_home_shows_api_fetch_check_for_configured_sources(self):
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(

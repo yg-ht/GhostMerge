@@ -803,6 +803,14 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                             "message": event.message,
                             "complete": current_index - 1,
                             "total": len(api_sides),
+                            "side": current_side,
+                            "side_name": server.name,
+                            "side_index": current_index,
+                            "side_total": len(api_sides),
+                            "api_stage": event.stage,
+                            "api_complete": event.complete,
+                            "api_total": event.total,
+                            "api_status": event.status,
                             "worker_pid": os.getpid(),
                         }
                     )
@@ -817,6 +825,14 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                         "message": f"Fetched {side} API source.",
                         "complete": index,
                         "total": len(api_sides),
+                        "side": side,
+                        "side_name": server.name,
+                        "side_index": index,
+                        "side_total": len(api_sides),
+                        "api_stage": "fetch",
+                        "api_complete": len(records[side]),
+                        "api_total": len(records[side]),
+                        "api_status": "done",
                         "worker_pid": os.getpid(),
                     }
                 )
@@ -831,6 +847,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                     "message": "API import complete.",
                     "complete": len(api_sides),
                     "total": len(api_sides),
+                    "api_status": "done",
                     "job_id": job.job_id,
                 }
             )

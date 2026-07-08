@@ -172,6 +172,14 @@ class GhostwriterApi:
                 record = self._api_record_to_ghostmerge(item)
                 record["tags"] = ", ".join(self.fetch_tags(int(item["id"])))
                 records.append(record)
+                self.progress(
+                    SyncEvent(
+                        "fetch",
+                        f"Fetched {len(records)} finding(s) from {self.server.name}",
+                        len(records),
+                        0,
+                    )
+                )
             if len(batch) < limit:
                 break
             offset += limit
