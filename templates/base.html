@@ -182,14 +182,11 @@
         min-width: max(1600px, 100%);
         table-layout: fixed;
       }
-      .record-preview-table .select-cell {
-        width: 4%;
-      }
       .record-preview-table .field-cell {
-        width: 12%;
+        width: 10%;
       }
       .record-preview-table .value-cell {
-        width: 28%;
+        width: 30%;
       }
       .record-preview-table pre {
         max-height: 420px;
@@ -203,6 +200,22 @@
       .preview-diff .diff-line {
         grid-template-columns: 84px 1fr;
         font-size: 13px;
+      }
+      .choice-control {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 8px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--panel-raised);
+        color: var(--text);
+        font-weight: 700;
+      }
+      .choice-control input {
+        width: auto;
+        margin: 0;
       }
       .record-table th,
       .record-table td {

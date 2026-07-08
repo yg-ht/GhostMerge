@@ -31,6 +31,7 @@ from web_service import (
     accept_offered_fields_for_current_match,
     accept_offered_for_current_match,
     acknowledge_current_preview,
+    apply_preview_field_choices,
     apply_conflict_decision,
     apply_sensitivity_decision,
     create_merge_job,
@@ -238,6 +239,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                 accept_offered_for_current_match(job)
             elif request.form.get("preview_action") == "accept_selected_offered":
                 accept_offered_fields_for_current_match(job, request.form.getlist("selected_fields"))
+            elif request.form.get("preview_action") == "apply_field_choices":
+                apply_preview_field_choices(job, _preview_field_choices_from_form(request.form))
             else:
                 apply_conflict_decision(job, request.form.to_dict())
             save_job(job, jobs_dir)
@@ -670,6 +673,15 @@ def _load_records_for_side(side: str, uploaded_file, source: str) -> list[dict]:
     if uploaded_file is None or uploaded_file.filename == "":
         raise WebMergeError(f"{side.title()} JSON file is required when that side is file-backed.")
     return load_records_from_json_text(uploaded_file.read().decode("utf-8"))
+
+
+def _preview_field_choices_from_form(form) -> dict[str, str]:
+    prefix = "field_choice:"
+    return {
+        key[len(prefix) :]: value
+        for key, value in form.items()
+        if key.startswith(prefix) and value
+    }
 
 
 def _start_api_source_check_thread(app: Flask, jobs_dir: Path, side: str) -> str:

@@ -283,6 +283,35 @@ def accept_offered_fields_for_current_match(job: MergeJob, field_names: list[str
     return applied
 
 
+def apply_preview_field_choices(job: MergeJob, choices: dict[str, str]) -> int:
+    """Apply explicit left/right/offered choices made on the whole-record preview."""
+    if job.conflict_phase_complete or job.match_index >= len(job.matches):
+        raise WebMergeError("There is no active match to update.")
+
+    valid_fields = {field_def.name for field_def in _reviewable_field_defs()}
+    valid_actions = {"left", "right", "offered"}
+    match = job.matches[job.match_index]
+    applied = 0
+    for field_name, action in choices.items():
+        if field_name not in valid_fields:
+            raise WebMergeError(f"Unknown field selected: {field_name}")
+        if action not in valid_actions:
+            raise WebMergeError("Unsupported preview field choice.")
+
+        if action == "left":
+            value = getattr(match["left"], field_name)
+        elif action == "right":
+            value = getattr(match["right"], field_name)
+        else:
+            value = match["auto_value"].get(field_name)
+        match["left"].set(field_name, value)
+        match["right"].set(field_name, value)
+        applied += 1
+
+    job.preview_acknowledged = True
+    return applied
+
+
 def apply_conflict_decision(job: MergeJob, decision: dict[str, Any]) -> None:
     """Apply a submitted field decision to the current matched pair."""
     if job.conflict_phase_complete or job.match_index >= len(job.matches):
@@ -610,8 +639,6 @@ def _prepare_conflict_for_field(match_index: int, match: dict[str, Any], field_d
     offered_side = match["auto_side"].get(field_name)
 
     if left_value == right_value:
-        match["left"].set(field_name, offered_value)
-        match["right"].set(field_name, offered_value)
         return None
 
     should_auto_accept, _, populated_value = get_single_sided_content_choice(left_value, right_value)

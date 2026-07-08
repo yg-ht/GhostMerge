@@ -12,6 +12,7 @@ from web_service import (
     WebMergeError,
     accept_offered_fields_for_current_match,
     apply_conflict_decision,
+    apply_preview_field_choices,
     apply_sensitivity_decision,
     build_field_diff,
     create_merge_job,
@@ -197,6 +198,23 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(applied, 1)
         self.assertEqual(job.matches[0]["left"].description, job.matches[0]["auto_value"].description)
         self.assertEqual(item.field_name, "impact")
+
+    def test_preview_field_choices_can_apply_left_and_right_values(self):
+        job = create_merge_job(
+            [record(description="Left detail", impact="Left impact")],
+            [record(id="2", description="Right detail", impact="Right impact")],
+            job_id="choices123",
+        )
+
+        applied = apply_preview_field_choices(job, {"description": "left", "impact": "right"})
+        item = get_next_conflict(job)
+
+        self.assertEqual(applied, 2)
+        self.assertEqual(job.matches[0]["left"].description, "Left detail")
+        self.assertEqual(job.matches[0]["right"].description, "Left detail")
+        self.assertEqual(job.matches[0]["left"].impact, "Right impact")
+        self.assertEqual(job.matches[0]["right"].impact, "Right impact")
+        self.assertIsNone(item)
 
     def test_job_persistence_round_trips_review_state(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -571,7 +589,13 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Highlighted difference for description", conflict.data)
         self.assertIn(b"class=\"diff-line removed\"", conflict.data)
         self.assertIn(b"class=\"diff-line added\"", conflict.data)
-        self.assertIn(b"Accept selected offered values", conflict.data)
+        self.assertIn(b'value="left"', conflict.data)
+        self.assertIn(b"Use left", conflict.data)
+        self.assertIn(b'value="right"', conflict.data)
+        self.assertIn(b"Use right", conflict.data)
+        self.assertIn(b'value="offered"', conflict.data)
+        self.assertIn(b"Use offered", conflict.data)
+        self.assertIn(b"Apply selected field choices", conflict.data)
 
         conflict = self.client.post(
             f"/jobs/{job_id}/conflicts",
@@ -716,6 +740,39 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Merge complete", response.data)
+
+    def test_preview_can_apply_explicit_left_right_field_choices(self):
+        left = json.dumps([record(description="Left detail", impact="Left impact")]).encode("utf-8")
+        right = json.dumps([record(id="2", description="Right detail", impact="Right impact")]).encode("utf-8")
+
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+        response = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data=self.with_csrf({
+                "preview_action": "apply_field_choices",
+                "field_choice:description": "left",
+                "field_choice:impact": "right",
+            }),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Merge complete", response.data)
+        left_result = self.client.get(f"/jobs/{job_id}/download/left").get_json()[0]
+        right_result = self.client.get(f"/jobs/{job_id}/download/right").get_json()[0]
+        self.assertEqual(left_result["description"], "Left detail")
+        self.assertEqual(right_result["description"], "Left detail")
+        self.assertEqual(left_result["impact"], "Right impact")
+        self.assertEqual(right_result["impact"], "Right impact")
 
     def test_live_sync_rejects_completed_file_backed_job(self):
         jobs_dir = Path(self.tmp_dir.name)

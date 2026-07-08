@@ -12,7 +12,6 @@
     <table class="record-table record-preview-table">
       <thead>
         <tr>
-          <th class="select-cell">Use</th>
           <th class="field-cell">Field</th>
           <th class="value-cell">Left</th>
           <th class="value-cell">Right</th>
@@ -21,14 +20,15 @@
       </thead>
       <tbody>
         {% for row in preview.rows %}
-        <tr class="{{ 'changed selectable' if row.different and row.field_name != 'id' else '' }}" data-select-row>
-          <td class="select-cell">
-            {% if row.different and row.field_name != 'id' %}
-            <input type="checkbox" name="selected_fields" value="{{ row.field_name }}" aria-label="Accept offered {{ row.field_name }}">
-            {% endif %}
-          </td>
+        <tr class="{{ 'changed selectable' if row.different else '' }}" data-choice-row>
           <th class="field-cell">{{ row.field_name }}</th>
           <td class="value-cell">
+            {% if row.different %}
+            <label class="choice-control">
+              <input type="radio" name="field_choice:{{ row.field_name }}" value="left">
+              <span>Use left</span>
+            </label>
+            {% endif %}
             <pre>{{ row.left_value }}</pre>
             {% if row.diff_rows %}
             <div class="preview-diff" aria-label="Highlighted difference for {{ row.field_name }}">
@@ -39,6 +39,12 @@
             {% endif %}
           </td>
           <td class="value-cell">
+            {% if row.different %}
+            <label class="choice-control">
+              <input type="radio" name="field_choice:{{ row.field_name }}" value="right">
+              <span>Use right</span>
+            </label>
+            {% endif %}
             <pre>{{ row.right_value }}</pre>
             {% if row.diff_rows %}
             <div class="preview-diff" aria-label="Highlighted difference for {{ row.field_name }}">
@@ -49,6 +55,12 @@
             {% endif %}
           </td>
           <td class="value-cell">
+            {% if row.different %}
+            <label class="choice-control">
+              <input type="radio" name="field_choice:{{ row.field_name }}" value="offered">
+              <span>Use offered</span>
+            </label>
+            {% endif %}
             <pre>{{ row.offered_value }}</pre>
             {% set offered_diff_rows = row.diff_rows | selectattr("side", "equalto", "offered") | list %}
             {% if offered_diff_rows %}
@@ -65,7 +77,7 @@
     </table>
   </div>
   <div class="actions">
-    <button type="submit" name="preview_action" value="accept_selected_offered">Accept selected offered values</button>
+    <button type="submit" name="preview_action" value="apply_field_choices">Apply selected field choices</button>
     <button class="secondary" type="submit" name="preview_action" value="continue" data-shortcut="Enter">Review remaining fields</button>
     <button class="secondary" type="submit" name="preview_action" value="accept_offered" data-shortcut=" ">Accept all offered for this match</button>
   </div>

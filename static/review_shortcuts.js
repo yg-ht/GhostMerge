@@ -46,4 +46,18 @@
     checkbox.addEventListener("change", syncSelectedClass);
     syncSelectedClass();
   });
+
+  document.querySelectorAll("[data-choice-row]").forEach((row) => {
+    const choices = row.querySelectorAll("input[type='radio']");
+    if (!choices.length) {
+      return;
+    }
+    function syncSelectedClass() {
+      row.classList.toggle("selected", Array.from(choices).some((choice) => choice.checked));
+    }
+    choices.forEach((choice) => {
+      choice.addEventListener("change", syncSelectedClass);
+    });
+    syncSelectedClass();
+  });
 })();
