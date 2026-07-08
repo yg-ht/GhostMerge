@@ -1,0 +1,39 @@
+<table class="record-table">
+  <thead>
+    <tr>
+      <th>Job</th>
+      <th>Phase</th>
+      <th>Review progress</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for previous in previous_jobs %}
+    <tr>
+      <td>{{ previous.job_id }}</td>
+      <td>{{ previous.phase }}</td>
+      <td>
+        {% if previous.error %}
+        {{ previous.error }}
+        {% else %}
+        Matched pairs reviewed: {{ previous.completed_matches }} of {{ previous.matches }}
+        {% endif %}
+      </td>
+      <td class="actions">
+        {% if not previous.error %}
+        <a class="button secondary" href="{{ url_for('summary', job_id=previous.job_id) }}">Open</a>
+        {% endif %}
+        {% if previous.has_left_output %}
+        <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='left') }}">Left output</a>
+        {% endif %}
+        {% if previous.has_right_output %}
+        <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='right') }}">Right output</a>
+        {% endif %}
+        {% for sync_side, sync_state in previous.sync_results.items() %}
+        <a class="button secondary" href="{{ url_for('sync_status', job_id=previous.job_id, side=sync_side) }}">{{ sync_side|title }} sync status</a>
+        {% endfor %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>

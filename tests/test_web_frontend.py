@@ -354,6 +354,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"A project by", response.data)
         self.assertIn(b"You Gotta Hack That", response.data)
         self.assertIn(b"https://yougottahackthat.com", response.data)
+        self.assertIn(b">Home<", response.data)
+        self.assertNotIn(b"New merge", response.data)
         self.assertIn(b"homejob123", response.data)
         self.assertIn(b"Matched pairs reviewed", response.data)
         self.assertIn(b"Left sync status", response.data)
@@ -370,6 +372,30 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"corrupt123", response.data)
         self.assertIn(b"Job state could not be read", response.data)
+
+    def test_home_limits_previous_jobs_and_links_to_full_history(self):
+        get_config()["web_ui"]["home_previous_jobs_limit"] = 2
+        jobs_dir = Path(self.tmp_dir.name)
+        for index, job_id in enumerate(("oldjob", "midjob", "newjob"), start=1):
+            job_dir = jobs_dir / job_id
+            job_dir.mkdir()
+            job_path = job_dir / "job.json"
+            job_path.write_text("{partial", encoding="utf-8")
+            os.utime(job_path, (index, index))
+
+        response = self.client.get("/")
+        full_response = self.client.get("/jobs")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"newjob", response.data)
+        self.assertIn(b"midjob", response.data)
+        self.assertNotIn(b"oldjob", response.data)
+        self.assertIn(b"Showing 2 of 3 previous merge jobs.", response.data)
+        self.assertIn(b"/jobs", response.data)
+        self.assertEqual(full_response.status_code, 200)
+        self.assertIn(b"oldjob", full_response.data)
+        self.assertIn(b"midjob", full_response.data)
+        self.assertIn(b"newjob", full_response.data)
 
     def test_home_shows_api_source_check_status_links(self):
         checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
@@ -398,6 +424,43 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"YGHT Ghostwriter", response.data)
         self.assertIn(b"worker process is no longer active", response.data)
         self.assertIn(b"/api-sources/checks/check123/status", response.data)
+
+    def test_home_limits_api_source_checks_and_links_to_full_history(self):
+        get_config()["web_ui"]["home_api_source_checks_limit"] = 2
+        checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
+        checks_dir.mkdir()
+        for index, check_id in enumerate(("oldcheck", "midcheck", "newcheck"), start=1):
+            check_path = checks_dir / f"{check_id}.json"
+            check_path.write_text(
+                json.dumps(
+                    {
+                        "check_id": check_id,
+                        "side": "left",
+                        "server_name": f"Server {check_id}",
+                        "status": "done",
+                        "stage": "done",
+                        "message": f"Finished {check_id}",
+                        "complete": 1,
+                        "total": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.utime(check_path, (index, index))
+
+        response = self.client.get("/")
+        full_response = self.client.get("/api-sources/checks")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"newcheck", response.data)
+        self.assertIn(b"midcheck", response.data)
+        self.assertNotIn(b"oldcheck", response.data)
+        self.assertIn(b"Showing 2 of 3 API source checks.", response.data)
+        self.assertIn(b"/api-sources/checks", response.data)
+        self.assertEqual(full_response.status_code, 200)
+        self.assertIn(b"oldcheck", full_response.data)
+        self.assertIn(b"midcheck", full_response.data)
+        self.assertIn(b"newcheck", full_response.data)
 
     def test_home_marks_api_source_checks_without_live_worker_as_stale(self):
         checks_dir = Path(self.tmp_dir.name) / "api_source_checks"

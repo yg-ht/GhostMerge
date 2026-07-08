@@ -48,6 +48,8 @@ from web_service import (
 CONFIG = get_config()
 SOURCE_IP_MODES = {"direct", "trusted_header", "both"}
 RUNNING_OPERATION_STATUSES = {"running", "cancelling"}
+DEFAULT_HOME_API_SOURCE_CHECKS_LIMIT = 10
+DEFAULT_HOME_PREVIOUS_JOBS_LIMIT = 10
 _ACTIVE_API_SOURCE_CHECKS: set[str] = set()
 _ACTIVE_API_IMPORTS: set[str] = set()
 
@@ -110,16 +112,15 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/")
     def index():
-        return render_template(
-            "upload.html",
-            previous_jobs=list_previous_jobs(jobs_dir),
-            api_source_checks=_list_api_source_checks(jobs_dir),
-            api_imports=_list_api_imports(jobs_dir),
-            running_api_source_checks=_running_api_source_checks_by_side(jobs_dir),
-            api_servers=configured_server_summary(CONFIG),
-            backups=list_backups(backup_root_from_config(CONFIG)),
-            root_page=True,
-        )
+        return render_template("upload.html", **_home_context(jobs_dir), root_page=True)
+
+    @app.get("/api-sources/checks")
+    def api_source_checks_history():
+        return render_template("api_source_checks.html", api_source_checks=_list_api_source_checks(jobs_dir))
+
+    @app.get("/jobs")
+    def jobs_history():
+        return render_template("jobs.html", previous_jobs=list_previous_jobs(jobs_dir))
 
     @app.post("/jobs")
     def create_job_route():
@@ -141,12 +142,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             return render_template(
                 "upload.html",
                 error=str(exc),
-                previous_jobs=list_previous_jobs(jobs_dir),
-                api_source_checks=_list_api_source_checks(jobs_dir),
-                api_imports=_list_api_imports(jobs_dir),
-                running_api_source_checks=_running_api_source_checks_by_side(jobs_dir),
-                api_servers=configured_server_summary(CONFIG),
-                backups=list_backups(backup_root_from_config(CONFIG)),
+                **_home_context(jobs_dir),
                 root_page=True,
             ), 400
 
@@ -164,12 +160,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             return render_template(
                 "upload.html",
                 error=str(exc),
-                previous_jobs=list_previous_jobs(jobs_dir),
-                api_source_checks=_list_api_source_checks(jobs_dir),
-                api_imports=_list_api_imports(jobs_dir),
-                running_api_source_checks=_running_api_source_checks_by_side(jobs_dir),
-                api_servers=configured_server_summary(CONFIG),
-                backups=list_backups(backup_root_from_config(CONFIG)),
+                **_home_context(jobs_dir),
                 root_page=True,
             ), 400
 
@@ -435,6 +426,48 @@ class ConfiguredReverseProxyPrefixMiddleware:
 
 def _web_access_config() -> dict:
     return CONFIG.get("web_access") or {}
+
+
+def _home_context(jobs_dir: Path) -> dict[str, Any]:
+    previous_jobs = list_previous_jobs(jobs_dir)
+    api_source_checks = _list_api_source_checks(jobs_dir)
+    history_limits = _home_history_limits()
+    previous_jobs_limit = history_limits["previous_jobs"]
+    api_source_checks_limit = history_limits["api_source_checks"]
+    return {
+        "previous_jobs": previous_jobs[:previous_jobs_limit],
+        "previous_jobs_total": len(previous_jobs),
+        "previous_jobs_limit": previous_jobs_limit,
+        "api_source_checks": api_source_checks[:api_source_checks_limit],
+        "api_source_checks_total": len(api_source_checks),
+        "api_source_checks_limit": api_source_checks_limit,
+        "api_imports": _list_api_imports(jobs_dir),
+        "running_api_source_checks": _running_api_source_checks_by_side(jobs_dir),
+        "api_servers": configured_server_summary(CONFIG),
+        "backups": list_backups(backup_root_from_config(CONFIG)),
+    }
+
+
+def _home_history_limits() -> dict[str, int]:
+    web_ui_config = CONFIG.get("web_ui") or {}
+    return {
+        "api_source_checks": _positive_int_config(
+            web_ui_config.get("home_api_source_checks_limit"),
+            DEFAULT_HOME_API_SOURCE_CHECKS_LIMIT,
+        ),
+        "previous_jobs": _positive_int_config(
+            web_ui_config.get("home_previous_jobs_limit"),
+            DEFAULT_HOME_PREVIOUS_JOBS_LIMIT,
+        ),
+    }
+
+
+def _positive_int_config(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 
 def _normalise_reverse_proxy_prefix(raw_prefix) -> str:

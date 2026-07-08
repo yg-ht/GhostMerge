@@ -1,0 +1,24 @@
+<table class="record-table">
+  <thead>
+    <tr>
+      <th>Check</th>
+      <th>Source</th>
+      <th>Status</th>
+      <th>Message</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for check in api_source_checks %}
+    <tr>
+      <td>{{ check.check_id }}</td>
+      <td>{{ check.server_name|default(check.side|default("Ghostwriter")) }}</td>
+      <td>{{ check.status|default("queued") }}</td>
+      <td>{{ check.message|default("Queued") }}</td>
+      <td class="actions">
+        <a class="button secondary" href="{{ url_for('api_source_check_status', check_id=check.check_id) }}">View status</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>

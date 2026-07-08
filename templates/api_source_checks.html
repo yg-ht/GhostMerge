@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>API source checks</h1>
+<section class="panel">
+  {% if api_source_checks %}
+  {% include "_api_source_checks_table.html" %}
+  {% else %}
+  <p>No API source checks found.</p>
+  {% endif %}
+</section>
+{% endblock %}

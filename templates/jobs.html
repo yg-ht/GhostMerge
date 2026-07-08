@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Previous merge jobs</h1>
+<section class="panel">
+  {% if previous_jobs %}
+  {% include "_previous_jobs_table.html" %}
+  {% else %}
+  <p>No previous merge jobs found.</p>
+  {% endif %}
+</section>
+{% endblock %}

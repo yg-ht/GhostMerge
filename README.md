@@ -196,6 +196,12 @@ E            focus the custom edit field
 The home page can start a new merge, reopen previous local jobs, download
 completed outputs, and open the API backup browser.
 
+The API source checks and previous merge jobs panes on the home page show a
+limited number of recent rows. Use the dedicated `API source checks` and
+`Previous merge jobs` links shown under those panes when more rows exist.
+Configure the home-page limits with `web_ui.home_api_source_checks_limit` and
+`web_ui.home_previous_jobs_limit`; both default to `10`.
+
 ### Web access controls
 
 The web frontend is protected by the `web_access` block in
@@ -434,6 +440,7 @@ Useful configuration areas include:
 | Interaction | Enable or disable interactive handling. |
 | Normalisation | Strip whitespace, remove empty HTML tags, and normalise line endings. |
 | Sensitivity checks | Enable term scanning and configure the terms file. |
+| Web UI | Limit how many API source checks and previous merge jobs are shown on the home page. |
 | Web access | Restrict browser access by source IP, API key, frame policy, and proxy prefix. |
 | Ghostwriter API | Configure API-backed merge sources, live sync targets, tokens, rate limits, TLS, and backups. |
 | TUI layout | Tune render width, refresh rate, and display limits. |
