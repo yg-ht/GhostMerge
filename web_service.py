@@ -13,6 +13,7 @@ from globals import get_config
 from matching import fuzzy_match_records
 from merge import (
     ResolvedWinner,
+    get_compliance_reference_placeholder_choice,
     get_auto_suggest_values,
     get_single_sided_content_choice,
     normalise_merge_pair,
@@ -831,6 +832,12 @@ def _prepare_conflict_for_field(kind: str, match_index: int, match: dict[str, An
     if CONFIG.get("auto_accept_single_sided_content", False) and should_auto_accept:
         match["left"].set(field_name, populated_value)
         match["right"].set(field_name, populated_value)
+        return None
+
+    should_accept_placeholder, _, placeholder_value = get_compliance_reference_placeholder_choice(left_value, right_value)
+    if field_name == "extra_fields" and should_accept_placeholder:
+        match["left"].set(field_name, placeholder_value)
+        match["right"].set(field_name, placeholder_value)
         return None
 
     return ConflictReviewItem(

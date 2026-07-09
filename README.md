@@ -622,10 +622,20 @@ and replacement tag:
       }
     },
     {
+      "name": "normalise-pre-to-code",
+      "tag": "pre",
+      "attrs": {},
+      "replacement_tag": "code",
+      "replacement_attrs": {
+        "spellcheck": "false"
+      }
+    },
+    {
       "name": "normalise-code-spellcheck",
       "action": "set_attrs",
       "tag": "code",
       "attrs": {},
+      "drop_attrs": ["data-end", "start"],
       "replacement_attrs": {
         "spellcheck": "false"
       }

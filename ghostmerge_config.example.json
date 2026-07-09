@@ -90,6 +90,15 @@
       "replacement_tag": "ul"
     },
     {
+      "name": "normalise-pre-to-code",
+      "tag": "pre",
+      "attrs": {},
+      "replacement_tag": "code",
+      "replacement_attrs": {
+        "spellcheck": "false"
+      }
+    },
+    {
       "name": "remove-xhtml-namespace-from-pre",
       "tag": "pre",
       "attrs": {
@@ -114,6 +123,7 @@
       "action": "set_attrs",
       "tag": "code",
       "attrs": {},
+      "drop_attrs": ["data-end", "start"],
       "replacement_attrs": {
         "spellcheck": "false"
       }

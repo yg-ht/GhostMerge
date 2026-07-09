@@ -569,6 +569,22 @@ def _format_html_opening_tag(tag_name: str, attrs: dict[str, Any]) -> str:
 
     return f"<{tag_name} {' '.join(attr_parts)}>"
 
+def _normalise_configured_attr_names(value: Any) -> list[str]:
+    """Return lower-case attribute names that are safe to remove from tags."""
+    if not isinstance(value, list):
+        return []
+
+    attr_names: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+
+        attr_name = item.strip().lower()
+        if re.fullmatch(r"[a-z_:][a-z0-9:_.-]*", attr_name):
+            attr_names.append(attr_name)
+
+    return attr_names
+
 def _iter_formatting_cleanup_rules() -> list[dict[str, Any]]:
     """Return validated formatting cleanup rules from config."""
     rules = CONFIG.get("formatting_cleanup_rules", [])
@@ -588,8 +604,9 @@ def _iter_formatting_cleanup_rules() -> list[dict[str, Any]]:
         parent_tag = _normalise_configured_tag_name(rule.get("parent_tag"))
         attrs = rule.get("attrs", {})
         replacement_attrs = rule.get("replacement_attrs", {})
+        drop_attrs = _normalise_configured_attr_names(rule.get("drop_attrs", []))
 
-        if action not in {"replace_tag", "unwrap", "set_attrs"}:
+        if action not in {"replace_tag", "unwrap", "set_attrs", "drop_attrs"}:
             log("WARN", f"Formatting cleanup rule {index} has an invalid action; skipping", prefix="UTILS")
             continue
 
@@ -610,6 +627,7 @@ def _iter_formatting_cleanup_rules() -> list[dict[str, Any]]:
                 "attrs": attrs,
                 "replacement_tag": replacement_tag,
                 "replacement_attrs": replacement_attrs,
+                "drop_attrs": drop_attrs,
             }
         )
 
@@ -658,8 +676,14 @@ def apply_formatting_cleanup(input_string: str) -> str:
                 replacements.append((match.start(), match.end(), ""))
                 if closing_span is not None:
                     replacements.append((closing_span[0], closing_span[1], ""))
-            elif rule["action"] == "set_attrs":
-                merged_attrs = dict(attrs)
+            elif rule["action"] in {"set_attrs", "drop_attrs"}:
+                # Attribute cleanup works from the parsed opening tag so source
+                # ordering and quote style do not affect deterministic output.
+                merged_attrs = {
+                    attr_name: attr_value
+                    for attr_name, attr_value in attrs.items()
+                    if str(attr_name).strip().lower() not in rule["drop_attrs"]
+                }
                 merged_attrs.update(rule["replacement_attrs"])
                 replacements.append(
                     (
@@ -699,6 +723,35 @@ def apply_formatting_cleanup(input_string: str) -> str:
         return normalise_html_tag_spacing("".join(result_parts).strip())
 
     return input_string
+
+def _normalise_list_item_paragraph_wrappers(soup: BeautifulSoup) -> None:
+    """Unwrap redundant single paragraph wrappers inside list items.
+
+    Ghostwriter exports can alternate between `<li>item</li>` and
+    `<li><p>item</p></li>`. A single direct paragraph with only whitespace
+    siblings is cosmetic, but multiple paragraphs or nested content may carry
+    useful structure and are left alone.
+    """
+    for list_item in soup.find_all("li"):
+        direct_child_tags = [
+            child
+            for child in list_item.children
+            if not isinstance(child, NavigableString)
+        ]
+        meaningful_text_siblings = [
+            child
+            for child in list_item.children
+            if isinstance(child, NavigableString) and str(child).replace("\xa0", " ").strip()
+        ]
+
+        if len(direct_child_tags) != 1 or meaningful_text_siblings:
+            continue
+
+        paragraph = direct_child_tags[0]
+        if getattr(paragraph, "name", None) != "p":
+            continue
+
+        paragraph.unwrap()
 
 def remove_pointless_html_tags(input_string: str) -> str:
     """
@@ -752,6 +805,8 @@ def remove_pointless_html_tags(input_string: str) -> str:
         if not has_meaningful_text:
             # No nested tags and no non whitespace text: pointless wrapper
             tag.decompose()
+
+    _normalise_list_item_paragraph_wrappers(soup)
 
     # Normalise leading/trailing whitespace and harmless tag formatting differences.
     return normalise_html_tag_spacing(str(soup).strip())

@@ -61,6 +61,23 @@ def get_single_sided_content_choice(value_from_left, value_from_right) -> Tuple[
 
     return False, ResolvedWinner.NONE, None
 
+def get_compliance_reference_placeholder_choice(value_from_left, value_from_right) -> Tuple[bool, ResolvedWinner, Any]:
+    """Auto-select richer extra_fields over the empty compliance placeholder.
+
+    Ghostwriter can emit `{"compliance_reference": None}` as structural noise.
+    When the opposite side has additional content, this placeholder should not
+    force analyst review because it does not carry useful merge information.
+    """
+    placeholder = {"compliance_reference": None}
+
+    if value_from_left == placeholder and isinstance(value_from_right, dict) and len(value_from_right) > 1:
+        return True, ResolvedWinner.RIGHT, value_from_right
+
+    if value_from_right == placeholder and isinstance(value_from_left, dict) and len(value_from_left) > 1:
+        return True, ResolvedWinner.LEFT, value_from_left
+
+    return False, ResolvedWinner.NONE, None
+
 def get_auto_suggest_values(finding_from_left: MergeRecord, finding_from_right: MergeRecord) -> Tuple[MergeRecord, dict[str, ResolvedWinner]]:
     """
     Performs a detailed, field-by-field selection process of two Finding objects to determine an auto-suggest value.
@@ -85,6 +102,20 @@ def get_auto_suggest_values(finding_from_left: MergeRecord, finding_from_right: 
             log("DEBUG", f"Tags normalised and combined for auto-value", prefix="MERGE")
 
         elif field_name == "extra_fields":
+            should_accept_placeholder, placeholder_side, placeholder_value = get_compliance_reference_placeholder_choice(
+                value_from_left,
+                value_from_right,
+            )
+            if should_accept_placeholder:
+                auto_fields_winner["extra_fields"] = placeholder_side
+                auto_fields_values["extra_fields"] = placeholder_value
+                log(
+                    "DEBUG",
+                    "Auto-selected richer extra_fields over empty compliance_reference placeholder",
+                    prefix="MERGE",
+                )
+                continue
+
             if not value_from_left or not value_from_right:
                 if value_from_left:
                     auto_fields_winner["extra_fields"] = ResolvedWinner.LEFT
@@ -250,6 +281,20 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
                 log(
                     'INFO',
                     f"Field '{field.name}' auto-accepted from {populated_side.name.lower()} because the other side was blank.",
+                    prefix='MERGE',
+                )
+                continue
+
+            should_accept_placeholder, placeholder_side, placeholder_value = get_compliance_reference_placeholder_choice(
+                left_value,
+                right_value,
+            )
+            if field.name == "extra_fields" and should_accept_placeholder:
+                finding_pair['left'].set(field.name, placeholder_value)
+                finding_pair['right'].set(field.name, placeholder_value)
+                log(
+                    'INFO',
+                    f"Field '{field.name}' auto-accepted from {placeholder_side.name.lower()} because the other side only had the compliance_reference placeholder.",
                     prefix='MERGE',
                 )
                 continue

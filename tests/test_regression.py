@@ -15,6 +15,7 @@ from globals import get_config
 from matching import fuzzy_match_findings, score_finding_similarity
 from merge import (
     ResolvedWinner,
+    get_compliance_reference_placeholder_choice,
     get_auto_suggest_values,
     get_single_sided_content_choice,
     renumber_findings,
@@ -329,6 +330,36 @@ class NormalisationRegressionTests(unittest.TestCase):
             '<code spellcheck="false">payload</code>',
         )
 
+    def test_formatting_cleanup_replaces_pre_tags_with_code_tags(self):
+        self.assertEqual(
+            apply_formatting_cleanup('<pre class="rich-code">payload</pre>'),
+            '<code spellcheck="false">payload</code>',
+        )
+        self.assertEqual(
+            apply_formatting_cleanup("<pre>payload</pre>"),
+            '<code spellcheck="false">payload</code>',
+        )
+
+    def test_formatting_cleanup_removes_editor_offsets_from_code_tags(self):
+        self.assertEqual(
+            apply_formatting_cleanup('<code data-end="653" start="645" spellcheck="false">payload</code>'),
+            '<code spellcheck="false">payload</code>',
+        )
+        self.assertEqual(
+            apply_formatting_cleanup('<code class="language-python" data-end="1" start="0">payload</code>'),
+            '<code class="language-python" spellcheck="false">payload</code>',
+        )
+
+    def test_list_item_normalisation_unwraps_single_inner_paragraphs(self):
+        self.assertEqual(
+            remove_pointless_html_tags("<ul><li><p>First</p></li><li>Second</li></ul>"),
+            "<ul><li>First</li><li>Second</li></ul>",
+        )
+        self.assertEqual(
+            remove_pointless_html_tags("<ul><li><p>First</p><p>Second</p></li></ul>"),
+            "<ul><li><p>First</p><p>Second</p></li></ul>",
+        )
+
     def test_formatting_cleanup_preserves_unconfigured_spans(self):
         value = '<span class="note" style="background-color: yellow">secret</span>'
 
@@ -427,6 +458,19 @@ class MergeRegressionTests(unittest.TestCase):
         self.assertEqual(winners["extra_fields"]["owner"], ResolvedWinner.RIGHT)
         self.assertEqual(suggested.extra_fields["left_only"], "yes")
         self.assertEqual(suggested.extra_fields["right_only"], "yes")
+
+    def test_compliance_reference_placeholder_auto_accepts_richer_extra_fields(self):
+        left = finding(extra_fields={"compliance_reference": None})
+        right = finding(extra_fields={"compliance_reference": "PCI DSS", "owner": "right team"})
+
+        should_accept, winner, value = get_compliance_reference_placeholder_choice(left.extra_fields, right.extra_fields)
+        suggested, winners = get_auto_suggest_values(left, right)
+
+        self.assertTrue(should_accept)
+        self.assertEqual(winner, ResolvedWinner.RIGHT)
+        self.assertEqual(value, right.extra_fields)
+        self.assertEqual(suggested.extra_fields, right.extra_fields)
+        self.assertEqual(winners["extra_fields"], ResolvedWinner.RIGHT)
 
     def test_renumber_findings_aligns_ids_and_rejects_mismatched_lengths(self):
         left = [finding(id=9), finding(id=10)]
