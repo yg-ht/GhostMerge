@@ -11,7 +11,7 @@ tui = TUI()
 from utils import load_config, log, load_json, write_json, return_ASCII_art, Aborting
 from model import Finding
 from matching import fuzzy_match_findings
-from merge import append_unmatched_records, merge_main, reject_matched_record, renumber_findings
+from merge import append_unmatched_records, merge_main, reject_matched_record, renumber_findings, reprocess_orphan_matches
 from sensitivity import sensitivities_checker_single_record, load_sensitive_terms, sensitivities_checker_records
 
 # run the app
@@ -146,7 +146,11 @@ def ghostmerge(
     log("INFO", f"Starting interactive merge for {len(matches)} fuzzy matched findings", prefix="CLI")
 
     merged_left, merged_right = [], []
-    for match in matches:
+    rejected_match_keys = []
+    match_review_index = 0
+    while match_review_index < len(matches):
+        match = matches[match_review_index]
+        match_review_index += 1
         log("INFO", f"Processing matched pair: ID Left={match['left'].id} ↔ ID Right={match['right'].id} (score: {match['score']:.2f})", prefix="CLI")
 
         if CONFIG['interactive_mode']:
@@ -158,8 +162,15 @@ def ghostmerge(
                 "Matched pair review",
             )
             if match_choice == "r":
-                reject_matched_record(match, unmatched_left, unmatched_right)
+                rejected_match_keys.append(reject_matched_record(match, unmatched_left, unmatched_right))
                 log("INFO", "Rejected matched pair and returned both findings to unmatched pools", prefix="CLI")
+                if match_review_index == len(matches):
+                    matches, unmatched_left, unmatched_right = _maybe_reprocess_cli_orphans(
+                        matches,
+                        unmatched_left,
+                        unmatched_right,
+                        rejected_match_keys,
+                    )
                 continue
 
         # Separate merge decisions for each side
@@ -167,6 +178,14 @@ def ghostmerge(
 
         merged_left.append(result_left)
         merged_right.append(result_right)
+
+        if match_review_index == len(matches):
+            matches, unmatched_left, unmatched_right = _maybe_reprocess_cli_orphans(
+                matches,
+                unmatched_left,
+                unmatched_right,
+                rejected_match_keys,
+            )
 
     append_unmatched_records(merged_left, merged_right, unmatched_left, unmatched_right)
 
@@ -195,6 +214,33 @@ def ghostmerge(
     log("INFO", "#########################", prefix="CLI")
     log("INFO", "", prefix="CLI")
     get_tui().stop()
+
+
+def _maybe_reprocess_cli_orphans(matches, unmatched_left, unmatched_right, rejected_match_keys):
+    if not CONFIG.get("orphan_reprocessing_enabled", True):
+        return matches, unmatched_left, unmatched_right
+    if not unmatched_left or not unmatched_right:
+        return matches, unmatched_left, unmatched_right
+
+    if CONFIG['interactive_mode']:
+        choice = tui.render_user_choice(
+            "Reprocess currently unmatched records?",
+            ["Reprocess orphans", "Stop orphan reprocessing"],
+            "r",
+            "Orphan reprocessing",
+        )
+        if choice == "s":
+            return matches, unmatched_left, unmatched_right
+
+    new_matches, unmatched_left, unmatched_right = reprocess_orphan_matches(
+        unmatched_left,
+        unmatched_right,
+        list(CONFIG.get("fuzzy_match_threshold", [])),
+        set(rejected_match_keys),
+    )
+    matches.extend(new_matches)
+    return matches, unmatched_left, unmatched_right
+
 
 if __name__ == "__main__":
     try:

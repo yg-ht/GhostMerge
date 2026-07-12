@@ -16,6 +16,7 @@
   "sensitivity_check_before_matching": true,
   "sensitivity_check_terms_file": "sensitive_terms.txt",
   "fuzzy_match_threshold": [100,90,80,70],
+  "orphan_reprocessing_enabled": true,
   "match_weight_common": 0.05,
   "match_weight_title": 0.6,
   "match_min_threshold_title": 60,

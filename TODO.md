@@ -57,7 +57,7 @@
 - [x] Expose `match_score` to user where it is useful information
 - [x] Allow user to reject a match entirely, not just resolve fields
 - [x] When a match is rejected, return both findings to unmatched pool
-- [ ] Add logic to optionally re-process orphans after all initial matches are reviewed
+- [x] Add logic to optionally re-process orphans after all initial matches are reviewed
 - [x] Process unmatched findings after main merge effort completed
 - [ ] Allow manual matching of unmatched findings
 - [x] Implement config file `threshold` override to adjust sensitivity of fuzzy matching

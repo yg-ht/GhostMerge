@@ -8,6 +8,7 @@ CONFIG = get_config()
 # local module imports
 from utils import log, normalise_tags, normalise_finding_record, is_blank, blank_for_type
 from model import Finding, Observation, is_optional_field, get_type_as_str
+from matching import score_record_similarity
 
 MergeRecord = Finding | Observation
 
@@ -219,7 +220,7 @@ def reject_matched_record(
     match: dict[str, MergeRecord | float | dict[str, ResolvedWinner]],
     unmatched_left: list[MergeRecord],
     unmatched_right: list[MergeRecord],
-) -> None:
+) -> str:
     """Return both sides of a bad match to the unmatched pools."""
     left_record = match.get("left")
     right_record = match.get("right")
@@ -231,6 +232,82 @@ def reject_matched_record(
     # handling can later copy each orphan into both outputs.
     unmatched_left.append(left_record)
     unmatched_right.append(right_record)
+    return match_rejection_key(left_record, right_record)
+
+
+def match_rejection_key(left_record: MergeRecord, right_record: MergeRecord) -> str:
+    """Build a stable same-run key for a left/right candidate pair."""
+    return f"{_record_identity(left_record)}::{_record_identity(right_record)}"
+
+
+def reprocess_orphan_matches(
+    unmatched_left: list[MergeRecord],
+    unmatched_right: list[MergeRecord],
+    thresholds: list[float],
+    rejected_match_keys: set[str],
+) -> tuple[list[dict[str, MergeRecord | float]], list[MergeRecord], list[MergeRecord]]:
+    """Run one bounded fuzzy-match pass over orphans without recreating rejected pairs."""
+    matches: list[dict[str, MergeRecord | float]] = []
+    remaining_left = unmatched_left
+    remaining_right = unmatched_right
+
+    for threshold in thresholds:
+        threshold_matches, remaining_left, remaining_right = _match_orphans_excluding_rejected(
+            remaining_left,
+            remaining_right,
+            threshold,
+            rejected_match_keys,
+        )
+        matches.extend(threshold_matches)
+
+    return matches, remaining_left, remaining_right
+
+
+def _match_orphans_excluding_rejected(
+    unmatched_left: list[MergeRecord],
+    unmatched_right: list[MergeRecord],
+    threshold: float,
+    rejected_match_keys: set[str],
+) -> tuple[list[dict[str, MergeRecord | float]], list[MergeRecord], list[MergeRecord]]:
+    """Match one threshold pass while ignoring pairs rejected earlier in the job."""
+    matches: list[dict[str, MergeRecord | float]] = []
+    still_unmatched_left: list[MergeRecord] = []
+    matched_right_indices = set()
+
+    for left_record in unmatched_left:
+        best_match = None
+        best_score = 0.0
+        best_right_index = -1
+        for right_index, right_record in enumerate(unmatched_right):
+            if right_index in matched_right_indices:
+                continue
+            if match_rejection_key(left_record, right_record) in rejected_match_keys:
+                continue
+
+            score = score_record_similarity(left_record, right_record)
+            if score > best_score:
+                best_score = score
+                best_match = right_record
+                best_right_index = right_index
+
+        if best_score >= threshold and best_match is not None:
+            matches.append({"left": left_record, "right": best_match, "score": best_score})
+            matched_right_indices.add(best_right_index)
+        else:
+            still_unmatched_left.append(left_record)
+
+    still_unmatched_right = [
+        right_record
+        for right_index, right_record in enumerate(unmatched_right)
+        if right_index not in matched_right_indices
+    ]
+    return matches, still_unmatched_left, still_unmatched_right
+
+
+def _record_identity(record: MergeRecord) -> str:
+    """Identify records well enough to avoid same-session rejected rematches."""
+    title = getattr(record, "title", "") or ""
+    return f"{type(record).__name__}:{record.id}:{title.strip().casefold()}"
 
 def normalise_merge_pair(finding_pair: Dict[str, MergeRecord | float | Dict[str, ResolvedWinner]]) -> Dict[str, MergeRecord | float | Dict[str, ResolvedWinner]]:
     """Normalise both sides of a matched pair in-place before merge comparison or display."""

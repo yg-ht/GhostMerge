@@ -18,6 +18,7 @@ from merge import (
     get_single_sided_content_choice,
     normalise_merge_pair,
     reject_matched_record,
+    reprocess_orphan_matches,
     renumber_records,
 )
 from model import Finding, Observation, get_type_as_str, is_optional_field
@@ -105,6 +106,9 @@ class MergeJob:
     input_sources: dict[str, str] = field(default_factory=lambda: {"left": "file", "right": "file"})
     sync_results: dict[str, Any] = field(default_factory=dict)
     includes_observations: bool = False
+    rejected_match_keys: list[str] = field(default_factory=list)
+    finding_orphan_reprocessing_stopped: bool = False
+    observation_orphan_reprocessing_stopped: bool = False
 
 
 @dataclass
@@ -261,9 +265,13 @@ def get_next_conflict(job: MergeJob) -> Optional[ConflictReviewItem]:
     item = _get_next_conflict_for_kind(job, "finding")
     if item is not None:
         return item
+    if _should_offer_orphan_reprocessing(job, "finding"):
+        return None
     item = _get_next_conflict_for_kind(job, "observation")
     if item is not None:
         return item
+    if _should_offer_orphan_reprocessing(job, "observation"):
+        return None
 
     job.conflict_phase_complete = True
     return None
@@ -316,6 +324,66 @@ def get_active_conflict_position(job: MergeJob) -> tuple[Optional[str], int]:
     if kind is None:
         return None, -1
     return kind, _match_index_for_kind(job, kind)
+
+
+def reset_match_to_preview(job: MergeJob, kind: str, match_index: int) -> None:
+    """Rewind a newly reached match so the whole-record preview can be shown."""
+    if kind not in TEMPLATE_KINDS:
+        raise WebMergeError("Unknown match type.")
+    _set_match_index_for_kind(job, kind, match_index)
+    _set_field_index_for_kind(job, kind, 0)
+    job.preview_acknowledged = False
+
+
+def get_orphan_reprocessing_prompt(job: MergeJob) -> Optional[dict[str, Any]]:
+    """Return prompt data when the user can choose another orphan matching pass."""
+    kind = _pending_orphan_reprocessing_kind(job)
+    if kind is None:
+        return None
+    return {
+        "template_type": kind,
+        "left_count": len(_unmatched_for_kind(job, kind, "left")),
+        "right_count": len(_unmatched_for_kind(job, kind, "right")),
+    }
+
+
+def reprocess_orphans_for_current_kind(job: MergeJob) -> bool:
+    """Run the user-requested orphan pass for the current template type."""
+    kind = _pending_orphan_reprocessing_kind(job)
+    if kind is None:
+        raise WebMergeError("There are no orphan records available for reprocessing.")
+
+    new_matches, unmatched_left, unmatched_right = reprocess_orphan_matches(
+        list(_unmatched_for_kind(job, kind, "left")),
+        list(_unmatched_for_kind(job, kind, "right")),
+        list(CONFIG.get("fuzzy_match_threshold", [])),
+        set(job.rejected_match_keys),
+    )
+    if not new_matches:
+        _finish_orphan_reprocessing_for_kind(job, kind)
+        return False
+
+    for match in new_matches:
+        normalise_merge_pair(match)
+        auto_value, auto_side = get_auto_suggest_values(match["left"], match["right"])
+        match["auto_value"] = auto_value
+        match["auto_side"] = auto_side
+        normalise_merge_pair(match)
+
+    _replace_unmatched_for_kind(job, kind, "left", unmatched_left)
+    _replace_unmatched_for_kind(job, kind, "right", unmatched_right)
+    _matches_for_kind(job, kind).extend(new_matches)
+    job.preview_acknowledged = False
+    return True
+
+
+def stop_orphan_reprocessing_for_current_kind(job: MergeJob) -> None:
+    """Finish the current template type without another orphan matching pass."""
+    kind = _pending_orphan_reprocessing_kind(job)
+    if kind is None:
+        raise WebMergeError("There are no orphan records waiting for reprocessing.")
+    _set_orphan_reprocessing_stopped_for_kind(job, kind, True)
+    _finish_orphan_reprocessing_for_kind(job, kind)
 
 
 def acknowledge_current_preview(job: MergeJob) -> None:
@@ -379,7 +447,7 @@ def reject_current_match(job: MergeJob) -> None:
 
     match = _matches_for_kind(job, kind)[_match_index_for_kind(job, kind)]
     try:
-        reject_matched_record(
+        rejected_key = reject_matched_record(
             match,
             _unmatched_for_kind(job, kind, "left"),
             _unmatched_for_kind(job, kind, "right"),
@@ -387,6 +455,7 @@ def reject_current_match(job: MergeJob) -> None:
     except ValueError as exc:
         raise WebMergeError(str(exc)) from exc
 
+    job.rejected_match_keys.append(rejected_key)
     _set_match_index_for_kind(job, kind, _match_index_for_kind(job, kind) + 1)
     _set_field_index_for_kind(job, kind, 0)
     job.preview_acknowledged = False
@@ -814,6 +883,15 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         input_sources=data.get("input_sources", {"left": "file", "right": "file"}),
         sync_results=data.get("sync_results", {}),
         includes_observations=data.get("includes_observations", _state_includes_observations(data)),
+        rejected_match_keys=list(data.get("rejected_match_keys", [])),
+        finding_orphan_reprocessing_stopped=data.get(
+            "finding_orphan_reprocessing_stopped",
+            data.get("finding_orphan_reprocess_complete", False),
+        ),
+        observation_orphan_reprocessing_stopped=data.get(
+            "observation_orphan_reprocessing_stopped",
+            data.get("observation_orphan_reprocess_complete", False),
+        ),
     )
 
 
@@ -844,6 +922,9 @@ def _get_next_conflict_for_kind(job: MergeJob, kind: str) -> Optional[ConflictRe
         _set_match_index_for_kind(job, kind, _match_index_for_kind(job, kind) + 1)
         _set_field_index_for_kind(job, kind, 0)
         job.preview_acknowledged = False
+
+    if _should_offer_orphan_reprocessing(job, kind):
+        return None
 
     _append_unmatched_records(job, kind)
     _set_conflict_complete_for_kind(job, kind, True)
@@ -915,6 +996,31 @@ def _append_unmatched_records(job: MergeJob, kind: str) -> None:
         merged_right.append(record)
 
 
+def _pending_orphan_reprocessing_kind(job: MergeJob) -> Optional[str]:
+    for kind in TEMPLATE_KINDS:
+        if _should_offer_orphan_reprocessing(job, kind):
+            return kind
+    return None
+
+
+def _should_offer_orphan_reprocessing(job: MergeJob, kind: str) -> bool:
+    if not CONFIG.get("orphan_reprocessing_enabled", True):
+        return False
+    if _conflict_complete_for_kind(job, kind):
+        return False
+    if _orphan_reprocessing_stopped_for_kind(job, kind):
+        return False
+    if _match_index_for_kind(job, kind) < len(_matches_for_kind(job, kind)):
+        return False
+    return bool(_unmatched_for_kind(job, kind, "left") and _unmatched_for_kind(job, kind, "right"))
+
+
+def _finish_orphan_reprocessing_for_kind(job: MergeJob, kind: str) -> None:
+    _append_unmatched_records(job, kind)
+    _set_conflict_complete_for_kind(job, kind, True)
+    job.preview_acknowledged = False
+
+
 def _active_conflict_kind(job: MergeJob) -> Optional[str]:
     if not job.finding_conflict_phase_complete and job.match_index < len(job.matches):
         return "finding"
@@ -931,6 +1037,17 @@ def _unmatched_for_kind(job: MergeJob, kind: str, side: str) -> list[Finding] | 
     if kind == "finding":
         return job.unmatched_left if side == "left" else job.unmatched_right
     return job.unmatched_observations_left if side == "left" else job.unmatched_observations_right
+
+
+def _replace_unmatched_for_kind(job: MergeJob, kind: str, side: str, records: list[Finding] | list[Observation]) -> None:
+    if kind == "finding" and side == "left":
+        job.unmatched_left = records
+    elif kind == "finding":
+        job.unmatched_right = records
+    elif side == "left":
+        job.unmatched_observations_left = records
+    else:
+        job.unmatched_observations_right = records
 
 
 def _merged_for_kind(job: MergeJob, kind: str, side: str) -> list[Finding] | list[Observation]:
@@ -970,6 +1087,17 @@ def _set_conflict_complete_for_kind(job: MergeJob, kind: str, value: bool) -> No
         job.finding_conflict_phase_complete = value
     else:
         job.observation_conflict_phase_complete = value
+
+
+def _orphan_reprocessing_stopped_for_kind(job: MergeJob, kind: str) -> bool:
+    return job.finding_orphan_reprocessing_stopped if kind == "finding" else job.observation_orphan_reprocessing_stopped
+
+
+def _set_orphan_reprocessing_stopped_for_kind(job: MergeJob, kind: str, value: bool) -> None:
+    if kind == "finding":
+        job.finding_orphan_reprocessing_stopped = value
+    else:
+        job.observation_orphan_reprocessing_stopped = value
 
 
 def _reviewable_field_defs(kind: str) -> list[Any]:

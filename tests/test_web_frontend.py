@@ -27,6 +27,7 @@ from web_service import (
     reject_current_match,
     save_job,
     save_outputs,
+    stop_orphan_reprocessing_for_current_kind,
 )
 
 
@@ -194,6 +195,8 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(len(job.unmatched_left), 1)
         self.assertEqual(len(job.unmatched_right), 1)
         self.assertIsNone(get_next_conflict(job))
+        stop_orphan_reprocessing_for_current_kind(job)
+        self.assertIsNone(get_next_conflict(job))
 
         result = finalise_job(job)
 
@@ -221,6 +224,8 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(job.observation_match_index, 1)
         self.assertEqual(len(job.unmatched_observations_left), 1)
         self.assertEqual(len(job.unmatched_observations_right), 1)
+        self.assertIsNone(get_next_conflict(job))
+        stop_orphan_reprocessing_for_current_kind(job)
         self.assertIsNone(get_next_conflict(job))
 
         result = finalise_job(job)
@@ -766,9 +771,17 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(preview.status_code, 200)
         self.assertIn(b"Reject match", preview.data)
 
-        completed = self.client.post(
+        prompt = self.client.post(
             f"/jobs/{job_id}/conflicts",
             data=self.with_csrf({"preview_action": "reject_match"}),
+            follow_redirects=True,
+        )
+        self.assertEqual(prompt.status_code, 200)
+        self.assertIn(b"Reprocess orphan finding records", prompt.data)
+
+        completed = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data=self.with_csrf({"preview_action": "stop_orphan_reprocessing"}),
             follow_redirects=True,
         )
         self.assertEqual(completed.status_code, 200)
@@ -779,6 +792,45 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual([item["description"] for item in left_records], ["Left detail", "Right detail"])
         self.assertEqual([item["description"] for item in right_records], ["Left detail", "Right detail"])
+
+    def test_rejected_match_can_reprocess_with_other_orphans_when_enabled(self):
+        get_config()["orphan_reprocessing_enabled"] = True
+        left = json.dumps([record(title="SQL injection", description="Left detail")]).encode("utf-8")
+        right = json.dumps(
+            [
+                record(id="2", title="SQL injection", description="Rejected right detail"),
+                record(id="3", title="SQL injection in login", description="Alternative right detail"),
+            ]
+        ).encode("utf-8")
+
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+
+        prompt = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data=self.with_csrf({"preview_action": "reject_match"}),
+            follow_redirects=True,
+        )
+        self.assertEqual(prompt.status_code, 200)
+        self.assertIn(b"Reprocess orphan finding records", prompt.data)
+
+        response = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data=self.with_csrf({"preview_action": "reprocess_orphans"}),
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Record preview - Finding", response.data)
+        self.assertIn(b"Alternative right detail", response.data)
+        self.assertNotIn(b"Rejected right detail", response.data)
 
     def test_observation_preview_is_preserved_after_id_only_finding_match(self):
         job = create_merge_job(

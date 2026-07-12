@@ -21,6 +21,7 @@ from merge import (
     get_single_sided_content_choice,
     reject_matched_record,
     renumber_findings,
+    reprocess_orphan_matches,
     resolve_conflict,
 )
 from model import Finding, Observation
@@ -627,6 +628,65 @@ class CliRegressionTests(unittest.TestCase):
 
         self.assertEqual(unmatched_left, [left_record])
         self.assertEqual(unmatched_right, [right_record])
+
+    def test_orphan_reprocessing_creates_new_matches(self):
+        left_record = finding(title="SQL injection")
+        right_record = finding(id=2, title="SQL injection in login")
+
+        matches, unmatched_left, unmatched_right = reprocess_orphan_matches(
+            [left_record],
+            [right_record],
+            [70],
+            set(),
+        )
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["left"], left_record)
+        self.assertEqual(matches[0]["right"], right_record)
+        self.assertEqual(unmatched_left, [])
+        self.assertEqual(unmatched_right, [])
+
+    def test_orphan_reprocessing_does_not_recreate_rejected_pairs(self):
+        left_record = finding(title="SQL injection")
+        right_record = finding(id=2, title="SQL injection")
+        rejected_key = reject_matched_record(
+            {"left": left_record, "right": right_record, "score": 100.0},
+            [],
+            [],
+        )
+
+        matches, unmatched_left, unmatched_right = reprocess_orphan_matches(
+            [left_record],
+            [right_record],
+            [70],
+            {rejected_key},
+        )
+
+        self.assertEqual(matches, [])
+        self.assertEqual(unmatched_left, [left_record])
+        self.assertEqual(unmatched_right, [right_record])
+
+    def test_orphan_reprocessing_tries_alternatives_when_best_pair_was_rejected(self):
+        left_record = finding(title="SQL injection", description="Login form issue")
+        rejected_right = finding(id=2, title="SQL injection", description="Different issue")
+        alternative_right = finding(id=3, title="SQL injection in login", description="Login form issue")
+        rejected_key = reject_matched_record(
+            {"left": left_record, "right": rejected_right, "score": 100.0},
+            [],
+            [],
+        )
+
+        matches, unmatched_left, unmatched_right = reprocess_orphan_matches(
+            [left_record],
+            [rejected_right, alternative_right],
+            [70],
+            {rejected_key},
+        )
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["right"], alternative_right)
+        self.assertEqual(unmatched_left, [])
+        self.assertEqual(unmatched_right, [rejected_right])
 
     def test_cli_can_merge_sample_files_with_config_path(self):
         python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"

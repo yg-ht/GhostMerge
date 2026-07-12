@@ -39,6 +39,7 @@ from web_service import (
     get_active_conflict_position,
     get_current_match_preview,
     get_next_conflict,
+    get_orphan_reprocessing_prompt,
     get_next_sensitivity_item,
     get_review_progress,
     job_summary,
@@ -46,8 +47,11 @@ from web_service import (
     load_job,
     load_records_from_json_text,
     reject_current_match,
+    reprocess_orphans_for_current_kind,
+    reset_match_to_preview,
     save_job,
     save_outputs,
+    stop_orphan_reprocessing_for_current_kind,
 )
 
 CONFIG = get_config()
@@ -220,10 +224,29 @@ def create_app(test_config: dict | None = None) -> Flask:
             item = get_next_conflict(job)
             save_job(job, jobs_dir)
             if item is None:
+                orphan_prompt = get_orphan_reprocessing_prompt(job)
+                if orphan_prompt is not None:
+                    return render_template(
+                        "orphan_reprocessing.html",
+                        job=job,
+                        orphan_prompt=orphan_prompt,
+                        progress=get_review_progress(job),
+                    )
                 return redirect(url_for("sensitivity", job_id=job.job_id))
             if not job.preview_acknowledged and (
                 item.template_type != initial_conflict_kind or item.match_index != initial_match_index
             ):
+                reset_match_to_preview(job, item.template_type, item.match_index)
+                preview = get_current_match_preview(job)
+                save_job(job, jobs_dir)
+                if preview is not None:
+                    return render_template(
+                        "match_preview.html",
+                        job=job,
+                        preview=preview,
+                        preview_source_labels=_preview_source_labels(job),
+                        progress=get_review_progress(job),
+                    )
                 return redirect(url_for("conflicts", job_id=job.job_id))
             return render_template(
                 "conflict.html",
@@ -248,6 +271,10 @@ def create_app(test_config: dict | None = None) -> Flask:
                 apply_preview_field_choices(job, _preview_field_choices_from_form(request.form))
             elif request.form.get("preview_action") == "reject_match":
                 reject_current_match(job)
+            elif request.form.get("preview_action") == "reprocess_orphans":
+                reprocess_orphans_for_current_kind(job)
+            elif request.form.get("preview_action") == "stop_orphan_reprocessing":
+                stop_orphan_reprocessing_for_current_kind(job)
             else:
                 apply_conflict_decision(job, request.form.to_dict())
             save_job(job, jobs_dir)

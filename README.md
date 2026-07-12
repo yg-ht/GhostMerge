@@ -445,7 +445,7 @@ Useful configuration areas include:
 | Setting area | Purpose |
 | --- | --- |
 | Logging | Control console and file verbosity per module. |
-| Matching | Tune fuzzy match thresholds and field weights. |
+| Matching | Tune fuzzy match thresholds, field weights, and optional orphan reprocessing. |
 | Output | Control default output filename suffixes. |
 | Interaction | Enable or disable interactive handling. |
 | Normalisation | Strip whitespace, remove empty HTML tags, normalise line endings, deduplicate references, canonicalise CVSS vectors, and reduce matching-only text noise. |
@@ -454,6 +454,10 @@ Useful configuration areas include:
 | Web access | Restrict browser access by source IP, API key, frame policy, and proxy prefix. |
 | Ghostwriter API | Configure API-backed merge sources, live sync targets, tokens, rate limits, TLS, and backups. |
 | TUI layout | Tune render width, refresh rate, and display limits. |
+
+`orphan_reprocessing_enabled` defaults to `true`. When enabled, GhostMerge offers
+another orphan matching pass after each reviewed match cycle while both sides
+still have unmatched records; the user can stop at the prompt.
 
 ## Input and output formats
 
