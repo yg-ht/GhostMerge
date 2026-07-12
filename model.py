@@ -8,7 +8,7 @@ from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
 from utils import (log, is_blank, is_optional_field, blank_for_type, get_type_as_str, Aborting,
-                   apply_configured_string_normalisation, apply_extra_fields_key_migrations)
+                   apply_configured_field_normalisation, apply_extra_fields_key_migrations)
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -57,8 +57,7 @@ class Finding:
                 expected_type_str = get_type_as_str(field_type)
                 raw_value = data.get(field_name, None)
 
-                if isinstance(raw_value, str):
-                    raw_value = apply_configured_string_normalisation(raw_value)
+                raw_value = apply_configured_field_normalisation(field_name, raw_value)
 
                 log('DEBUG', f'Checking "{field_name}" if data type is as expected. '
                              f'Currently {type(raw_value)}', prefix='MODEL')
@@ -278,8 +277,7 @@ class Observation:
                 expected_type_str = get_type_as_str(field_type)
                 raw_value = data.get(field_name, None)
 
-                if isinstance(raw_value, str):
-                    raw_value = apply_configured_string_normalisation(raw_value)
+                raw_value = apply_configured_field_normalisation(field_name, raw_value)
 
                 origin = get_origin(field_type)
                 args = get_args(field_type)

@@ -32,7 +32,9 @@ from utils import (
     apply_formatting_cleanup,
     apply_configured_normalisation,
     load_config,
+    normalise_cvss_vector,
     normalise_line_endings,
+    normalise_references,
     remove_double_spaces_from_string,
     remove_pointless_html_tags,
 )
@@ -282,12 +284,39 @@ class NormalisationRegressionTests(unittest.TestCase):
         self.assertEqual(normalise_line_endings("<p>a</p>\r\n<p>b</p>"), "<p>a</p><p>b</p>")
         self.assertEqual(remove_pointless_html_tags("<p></p><span>  </span><p>kept</p>"), "<p>kept</p>")
 
+    def test_references_are_trimmed_and_deduplicated(self):
+        value = " https://example.test/a \n\nhttps://example.test/a\nNote\n Note "
+
+        self.assertEqual(normalise_references(value), "https://example.test/a\nNote")
+
+    def test_cvss_vectors_are_case_and_whitespace_normalised(self):
+        self.assertEqual(
+            normalise_cvss_vector(" cvss:3.1 / av:n / ac:l / pr:n "),
+            "CVSS:3.1/AV:N/AC:L/PR:N",
+        )
+
     def test_configured_normalisation_is_recursive(self):
         value = {"a": " one  two ", "b": ["<p></p>kept\r\ntext"]}
 
         normalised = apply_configured_normalisation(value)
 
         self.assertEqual(normalised, {"a": "one two", "b": ["kept\ntext"]})
+
+    def test_field_specific_normalisation_runs_on_finding_import(self):
+        parsed = Finding.from_dict(
+            finding(
+                cvss_vector=" cvss:3.1 / av:n / ac:l / pr:n ",
+                references=" https://example.test/a \nhttps://example.test/a\n Note ",
+            ).to_dict()
+        )
+
+        self.assertEqual(parsed.cvss_vector, "CVSS:3.1/AV:N/AC:L/PR:N")
+        self.assertEqual(parsed.references, "https://example.test/a\nNote")
+
+    def test_unicode_whitespace_normalisation_handles_nbsp_and_tabs(self):
+        parsed = Finding.from_dict(finding(title="Login\xa0\t bypass").to_dict())
+
+        self.assertEqual(parsed.title, "Login bypass")
 
     def test_formatting_cleanup_replaces_legacy_highlight_span(self):
         value = '<span class="highlight" style="background-color: yellow">secret</span>'
@@ -350,6 +379,13 @@ class NormalisationRegressionTests(unittest.TestCase):
             '<code class="language-python" spellcheck="false">payload</code>',
         )
 
+    def test_formatting_cleanup_outputs_stable_attributes_and_inline_tags(self):
+        self.assertEqual(
+            apply_formatting_cleanup('<code start="0" data-end="1" class="zulu alpha">payload</code>'),
+            '<code class="alpha zulu" spellcheck="false">payload</code>',
+        )
+        self.assertEqual(apply_formatting_cleanup("<b>bold</b> and <i>italic</i>"), "<strong>bold</strong> and <em>italic</em>")
+
     def test_list_item_normalisation_unwraps_single_inner_paragraphs(self):
         self.assertEqual(
             remove_pointless_html_tags("<ul><li><p>First</p></li><li>Second</li></ul>"),
@@ -358,6 +394,10 @@ class NormalisationRegressionTests(unittest.TestCase):
         self.assertEqual(
             remove_pointless_html_tags("<ul><li><p>First</p><p>Second</p></li></ul>"),
             "<ul><li><p>First</p><p>Second</p></li></ul>",
+        )
+        self.assertEqual(
+            remove_pointless_html_tags("<div><p>Only child</p></div>"),
+            "<div>Only child</div>",
         )
 
     def test_formatting_cleanup_preserves_unconfigured_spans(self):
@@ -427,6 +467,16 @@ class MatchingRegressionTests(unittest.TestCase):
         self.assertEqual([item.id for item in unmatched_left], [2])
         self.assertEqual([item.id for item in unmatched_right], [11])
 
+    def test_matching_text_normalisation_does_not_change_stored_titles(self):
+        left = finding(id=1, title="Cross-site scripting (login)")
+        right = finding(id=2, title="cross site scripting  ( login )")
+
+        score = score_finding_similarity(left, right)
+
+        self.assertGreaterEqual(score, 60)
+        self.assertEqual(left.title, "Cross-site scripting (login)")
+        self.assertEqual(right.title, "cross site scripting  ( login )")
+
 
 class MergeRegressionTests(unittest.TestCase):
     def setUp(self):
@@ -453,6 +503,7 @@ class MergeRegressionTests(unittest.TestCase):
 
         suggested, winners = get_auto_suggest_values(left, right)
 
+        self.assertEqual(suggested.tags, ["auth", "web", "xss"])
         self.assertEqual(set(suggested.tags), {"web", "auth", "xss"})
         self.assertEqual(suggested.extra_fields["owner"], "right team")
         self.assertEqual(winners["extra_fields"]["owner"], ResolvedWinner.RIGHT)

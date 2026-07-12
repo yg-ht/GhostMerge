@@ -448,7 +448,7 @@ Useful configuration areas include:
 | Matching | Tune fuzzy match thresholds and field weights. |
 | Output | Control default output filename suffixes. |
 | Interaction | Enable or disable interactive handling. |
-| Normalisation | Strip whitespace, remove empty HTML tags, and normalise line endings. |
+| Normalisation | Strip whitespace, remove empty HTML tags, normalise line endings, deduplicate references, canonicalise CVSS vectors, and reduce matching-only text noise. |
 | Sensitivity checks | Enable term scanning and configure the terms file. |
 | Web UI | Limit how many API source checks and previous merge jobs are shown on the home page. |
 | Web access | Restrict browser access by source IP, API key, frame policy, and proxy prefix. |

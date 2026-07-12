@@ -312,6 +312,81 @@ def apply_configured_normalisation(value: Any) -> Any:
         }
     return value
 
+def normalise_unicode_whitespace(input_string: str) -> str:
+    """Normalise common invisible whitespace that creates cosmetic diffs."""
+    normalised = input_string.replace("\xa0", " ").replace("\t", " ")
+    if normalised != input_string:
+        log("DEBUG", "Unicode whitespace normalised", prefix="UTILS")
+    return normalised
+
+def normalise_references(input_string: str) -> str:
+    """Deduplicate and trim reference lines while preserving first-seen order.
+
+    Ghostwriter reference fields are free text, so this deliberately avoids URL
+    parsing or validation. Exact line duplicates are removed after trimming so
+    analyst notes and non-URL references remain intact.
+    """
+    lines = [line.strip() for line in input_string.splitlines()]
+    normalised_lines: list[str] = []
+    seen_lines: set[str] = set()
+
+    for line in lines:
+        if not line:
+            continue
+        if line in seen_lines:
+            continue
+        seen_lines.add(line)
+        normalised_lines.append(line)
+
+    normalised = "\n".join(normalised_lines)
+    if normalised != input_string:
+        log("DEBUG", "References normalised", prefix="UTILS")
+    return normalised
+
+def normalise_cvss_vector(input_string: str) -> str:
+    """Normalise harmless CVSS vector spacing and casing.
+
+    The parser still accepts or rejects records exactly as before. This helper
+    only canonicalises obvious CVSS vector formatting noise.
+    """
+    compact = re.sub(r"\s+", "", input_string.strip())
+    if "/" not in compact and not compact.lower().startswith("cvss:"):
+        return input_string.strip()
+
+    parts = compact.split("/")
+    normalised_parts: list[str] = []
+    for index, part in enumerate(parts):
+        if index == 0 and part.lower().startswith("cvss:"):
+            prefix, _, version = part.partition(":")
+            normalised_parts.append(f"{prefix.upper()}:{version}")
+            continue
+
+        metric, separator, value = part.partition(":")
+        if separator:
+            normalised_parts.append(f"{metric.upper()}:{value.upper()}")
+        else:
+            normalised_parts.append(part)
+
+    normalised = "/".join(normalised_parts)
+    if normalised != input_string:
+        log("DEBUG", "CVSS vector normalised", prefix="UTILS")
+    return normalised
+
+def apply_configured_field_normalisation(field_name: str, value: Any) -> Any:
+    """Apply generic and field-specific normalisation for import/merge records."""
+    normalised = apply_configured_normalisation(value)
+
+    if not isinstance(normalised, str):
+        return normalised
+
+    if field_name == "references" and CONFIG.get("normalise_references", True):
+        normalised = normalise_references(normalised)
+
+    if field_name == "cvss_vector" and CONFIG.get("normalise_cvss_vectors", True):
+        normalised = normalise_cvss_vector(normalised)
+
+    return normalised
+
 def apply_extra_fields_key_migrations(extra_fields: Any, template_type: str) -> Any:
     """Apply configured key migrations to a template's extra_fields dictionary.
 
@@ -562,9 +637,14 @@ def _format_html_opening_tag(tag_name: str, attrs: dict[str, Any]) -> str:
         return f"<{tag_name}>"
 
     attr_parts = []
-    for attr_name, attr_value in attrs.items():
+    for attr_name in sorted(attrs):
+        attr_value = attrs[attr_name]
         if isinstance(attr_value, (list, tuple)):
-            attr_value = " ".join(str(item) for item in attr_value)
+            attr_value = " ".join(sorted(str(item) for item in attr_value))
+        elif str(attr_name).strip().lower() == "class":
+            attr_value = " ".join(sorted(str(attr_value).split()))
+        elif str(attr_name).strip().lower() == "style":
+            attr_value = "; ".join(sorted(_normalise_style_declarations(attr_value)))
         attr_parts.append(f'{attr_name}="{attr_value}"')
 
     return f"<{tag_name} {' '.join(attr_parts)}>"
@@ -753,6 +833,29 @@ def _normalise_list_item_paragraph_wrappers(soup: BeautifulSoup) -> None:
 
         paragraph.unwrap()
 
+def _normalise_single_child_paragraph_wrappers(soup: BeautifulSoup) -> None:
+    """Unwrap a redundant paragraph when it is the only content in a wrapper."""
+    wrapper_tags = {"div", "section", "article"}
+
+    for wrapper in soup.find_all(wrapper_tags):
+        direct_child_tags = [
+            child
+            for child in wrapper.children
+            if not isinstance(child, NavigableString)
+        ]
+        meaningful_text_siblings = [
+            child
+            for child in wrapper.children
+            if isinstance(child, NavigableString) and str(child).replace("\xa0", " ").strip()
+        ]
+
+        if len(direct_child_tags) != 1 or meaningful_text_siblings:
+            continue
+
+        paragraph = direct_child_tags[0]
+        if getattr(paragraph, "name", None) == "p" and not paragraph.attrs:
+            paragraph.unwrap()
+
 def remove_pointless_html_tags(input_string: str) -> str:
     """
        Remove pointless empty HTML wrappers such as:
@@ -807,6 +910,7 @@ def remove_pointless_html_tags(input_string: str) -> str:
             tag.decompose()
 
     _normalise_list_item_paragraph_wrappers(soup)
+    _normalise_single_child_paragraph_wrappers(soup)
 
     # Normalise leading/trailing whitespace and harmless tag formatting differences.
     return normalise_html_tag_spacing(str(soup).strip())
@@ -847,6 +951,9 @@ def apply_configured_string_normalisation(input_string: str) -> str:
     so comparisons are always made against these configured normalised values.
     """
     normalised = input_string
+
+    if CONFIG.get('normalise_unicode_whitespace', True):
+        normalised = normalise_unicode_whitespace(normalised)
 
     if CONFIG.get('normalise_line_endings', False):
         normalised = normalise_line_endings(normalised)
@@ -905,7 +1012,7 @@ def normalise_finding_record(record: Any) -> Any:
     for field_def in record_fields:
         field_name = field_def.name
         value = getattr(record, field_name, None)
-        normalised_value = apply_configured_normalisation(value)
+        normalised_value = apply_configured_field_normalisation(field_name, value)
         if normalised_value != value:
             log("DEBUG", f'Normalised field "{field_name}" on Finding ID {record_id}', prefix="UTILS")
             setattr(record, field_name, normalised_value)
@@ -913,9 +1020,29 @@ def normalise_finding_record(record: Any) -> Any:
     return record
 
 def normalise_tags(tag_str: str) -> list[str]:
-    tags = list({tag.strip().lower() for tag in tag_str.replace(',', ' ').split() if tag.strip()})
+    tags = sorted({tag.strip().lower() for tag in tag_str.replace(',', ' ').split() if tag.strip()})
     log("DEBUG", f"Normalised tags: {tags}", prefix="UTILS")
     return tags
+
+def normalise_text_for_matching(value: Any) -> str:
+    """Return a comparison-only text form for fuzzy matching.
+
+    Stored values are not changed. This reduces false differences from case,
+    punctuation spacing, and common Unicode punctuation variants.
+    """
+    if value is None:
+        return ""
+
+    normalised = str(value)
+    if CONFIG.get("matching_text_normalisation_enabled", True):
+        normalised = normalised.replace("\u2018", "'").replace("\u2019", "'")
+        normalised = normalised.replace("\u201c", '"').replace("\u201d", '"')
+        normalised = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2212]", "-", normalised)
+        normalised = re.sub(r"\s*([/,:;()\\[\\]{}])\s*", r" \1 ", normalised)
+        normalised = re.sub(r"\s+", " ", normalised)
+        normalised = normalised.strip().casefold()
+
+    return normalised
 
 def is_blank(v):
     return (

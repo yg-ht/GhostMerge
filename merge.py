@@ -98,7 +98,7 @@ def get_auto_suggest_values(finding_from_left: MergeRecord, finding_from_right: 
         if field_name == "tags":
             normalised_tags_left = normalise_tags(" ".join(value_from_left or []))
             normalised_tags_right = normalise_tags(" ".join(value_from_right or []))
-            auto_fields_values["tags"] = list(set(normalised_tags_left + normalised_tags_right))
+            auto_fields_values["tags"] = sorted(set(normalised_tags_left + normalised_tags_right))
             log("DEBUG", f"Tags normalised and combined for auto-value", prefix="MERGE")
 
         elif field_name == "extra_fields":

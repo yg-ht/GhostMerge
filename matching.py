@@ -4,7 +4,7 @@ from imports import (fields, fuzz, Dict, List, Tuple)
 from globals import get_config
 CONFIG = get_config()
 # local module imports
-from utils import log, normalise_tags
+from utils import log, normalise_text_for_matching
 from model import Finding, Observation
 
 MergeRecord = Finding | Observation
@@ -31,7 +31,7 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
 
     # balances the weights, if they add up to more than 1
     total_weights = sum(raw_weights.values())
-    weights = total_weights
+    weights = raw_weights.copy()
     if total_weights > 1:
         normalised_weights = {k: v/total_weights for k, v in raw_weights.items()}
         weights = normalised_weights
@@ -39,7 +39,9 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
     log("DEBUG", f"Normalised weights: title={weights['title']:.2f}, type={weights['type']:.2f}, desc={weights['desc']:.2f}, impact={weights['impact']:.2f}, mitigation={weights['mitigation']:.2f}",prefix="MATCHING")
 
     # Title similarity using token sort ratio (handles reordering well)
-    title_score_no_weight = fuzz.token_set_ratio(finding_left.title, finding_right.title)
+    title_left = normalise_text_for_matching(finding_left.title)
+    title_right = normalise_text_for_matching(finding_right.title)
+    title_score_no_weight = fuzz.token_set_ratio(title_left, title_right)
     title_score = title_score_no_weight * weights['title']
     log("DEBUG", f"Title scores between '{finding_left.title}' and '{finding_right.title}': raw {title_score_no_weight:.2f}, weighted {title_score:.2f}", prefix="MATCHING")
     if title_score_no_weight < CONFIG.get("match_min_threshold_title"):
@@ -58,7 +60,10 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
     # Description similarity scoring
     desc_score = 0
     if finding_left.description and finding_right.description:
-        desc_score_no_weight = fuzz.token_set_ratio(finding_left.description, finding_right.description)
+        desc_score_no_weight = fuzz.token_set_ratio(
+            normalise_text_for_matching(finding_left.description),
+            normalise_text_for_matching(finding_right.description),
+        )
         desc_score = desc_score_no_weight * weights['desc']
         log("DEBUG", f"Description weighted score between Finding Left and Right: {desc_score:.2f}", prefix="MATCHING")
     else:
@@ -67,7 +72,10 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
     # Impact similarity scoring
     impact_score = 0
     if finding_left.impact and finding_right.impact:
-        impact_score_no_weight = fuzz.token_set_ratio(finding_left.impact, finding_right.impact)
+        impact_score_no_weight = fuzz.token_set_ratio(
+            normalise_text_for_matching(finding_left.impact),
+            normalise_text_for_matching(finding_right.impact),
+        )
         impact_score = impact_score_no_weight * weights['impact']
         log("DEBUG", f"Impact weighted score between Finding Left and Right: {impact_score:.2f}", prefix="MATCHING")
     else:
@@ -76,7 +84,10 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
     # Mitigation similarity scoring
     mitigation_score = 0
     if finding_left.mitigation and finding_right.mitigation:
-        mitigation_score_no_weight = fuzz.token_set_ratio(finding_left.mitigation, finding_right.mitigation)
+        mitigation_score_no_weight = fuzz.token_set_ratio(
+            normalise_text_for_matching(finding_left.mitigation),
+            normalise_text_for_matching(finding_right.mitigation),
+        )
         mitigation_score = mitigation_score_no_weight * weights['mitigation']
         log("DEBUG", f"Mitigation weighted score between Finding Left and Right: {mitigation_score:.2f}", prefix="MATCHING")
     else:
@@ -106,31 +117,38 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
     common_score_final_total = 0
     common_score_running_total = 0
     common_score_count = 0
+    explicitly_weighted_fields = {"title", "finding_type", "description", "impact", "mitigation"}
     for field in fields(Finding):
         common_score = 0
-        if field.name == "id":
-            # ID numbers don't represent a difference that we care about for matching purposes
+        if field.name == "id" or field.name in explicitly_weighted_fields:
+            # IDs are not semantic matches, and primary fields are already
+            # scored above with their own configured weights.
             continue
 
-        if not hasattr(raw_weights, field.name):
-            if field.type == 'str':
-                # if field is a string, do a string based fuzzy match score
-                common_score_no_weight = fuzz.token_set_ratio(getattr(finding_left, field.name), getattr(finding_right, field.name))
-            elif getattr(finding_left, field.name) == getattr(finding_right, field.name):
-                # otherwise, if the values match completely, it gets an unweighted 100% match
-                common_score_no_weight = 100.0
-            else:
-                # finally, if they don't match complete, it gets an unweighted 0% match
-                common_score_no_weight = 0.0
+        left_value = getattr(finding_left, field.name)
+        right_value = getattr(finding_right, field.name)
+        if isinstance(left_value, str) or isinstance(right_value, str):
+            # Free-text common fields should benefit from the same comparison-only
+            # punctuation and whitespace cleanup as the primary weighted fields.
+            common_score_no_weight = fuzz.token_set_ratio(
+                normalise_text_for_matching(left_value),
+                normalise_text_for_matching(right_value),
+            )
+        elif left_value == right_value:
+            # Otherwise, exact equality is the only safe comparison.
+            common_score_no_weight = 100.0
+        else:
+            common_score_no_weight = 0.0
 
-            common_score = common_score_no_weight * weights['common']
-            common_score_count += 1
-            log("DEBUG", f"Common field ({field.name}) weighted score between Finding Left and Right: {common_score:.2f}",
-                prefix="MATCHING")
+        common_score = common_score_no_weight * weights['common']
+        common_score_count += 1
+        log("DEBUG", f"Common field ({field.name}) weighted score between Finding Left and Right: {common_score:.2f}",
+            prefix="MATCHING")
 
         common_score_running_total = common_score_running_total + common_score
 
-    common_score_final_total = common_score_running_total / common_score_count
+    if common_score_count > 0:
+        common_score_final_total = common_score_running_total / common_score_count
 
 
     # Calculate the weighted average of all component scores based on their configured importance
@@ -161,13 +179,19 @@ def score_observation_similarity(observation_left: Observation, observation_righ
         description_weight = 0.4
         total_weight = 1.0
 
-    title_score_raw = fuzz.token_set_ratio(observation_left.title, observation_right.title)
+    title_score_raw = fuzz.token_set_ratio(
+        normalise_text_for_matching(observation_left.title),
+        normalise_text_for_matching(observation_right.title),
+    )
     if title_score_raw < CONFIG.get("match_min_threshold_title"):
         return title_score_raw * (title_weight / total_weight)
 
     description_score_raw = 0
     if observation_left.description and observation_right.description:
-        description_score_raw = fuzz.token_set_ratio(observation_left.description, observation_right.description)
+        description_score_raw = fuzz.token_set_ratio(
+            normalise_text_for_matching(observation_left.description),
+            normalise_text_for_matching(observation_right.description),
+        )
 
     return (
         title_score_raw * (title_weight / total_weight)
