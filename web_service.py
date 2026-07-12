@@ -17,6 +17,7 @@ from merge import (
     get_auto_suggest_values,
     get_single_sided_content_choice,
     normalise_merge_pair,
+    reject_matched_record,
     renumber_records,
 )
 from model import Finding, Observation, get_type_as_str, is_optional_field
@@ -358,6 +359,29 @@ def accept_offered_fields_for_current_match(job: MergeJob, field_names: list[str
 
     job.preview_acknowledged = True
     return applied
+
+
+def reject_current_match(job: MergeJob) -> None:
+    """Reject the current previewed match and return both records to unmatched pools."""
+    kind = _active_conflict_kind(job)
+    if kind is None:
+        raise WebMergeError("There is no active match to reject.")
+    if job.preview_acknowledged or _field_index_for_kind(job, kind) != 0:
+        raise WebMergeError("Matches can only be rejected before field-level review starts.")
+
+    match = _matches_for_kind(job, kind)[_match_index_for_kind(job, kind)]
+    try:
+        reject_matched_record(
+            match,
+            _unmatched_for_kind(job, kind, "left"),
+            _unmatched_for_kind(job, kind, "right"),
+        )
+    except ValueError as exc:
+        raise WebMergeError(str(exc)) from exc
+
+    _set_match_index_for_kind(job, kind, _match_index_for_kind(job, kind) + 1)
+    _set_field_index_for_kind(job, kind, 0)
+    job.preview_acknowledged = False
 
 
 def apply_preview_field_choices(job: MergeJob, choices: dict[str, str]) -> int:
@@ -886,7 +910,7 @@ def _append_unmatched_records(job: MergeJob, kind: str) -> None:
 def _active_conflict_kind(job: MergeJob) -> Optional[str]:
     if not job.finding_conflict_phase_complete and job.match_index < len(job.matches):
         return "finding"
-    if job.finding_conflict_phase_complete and not job.observation_conflict_phase_complete and job.observation_match_index < len(job.observation_matches):
+    if not job.observation_conflict_phase_complete and job.observation_match_index < len(job.observation_matches):
         return "observation"
     return None
 

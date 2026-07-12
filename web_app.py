@@ -44,6 +44,7 @@ from web_service import (
     list_previous_jobs,
     load_job,
     load_records_from_json_text,
+    reject_current_match,
     save_job,
     save_outputs,
 )
@@ -242,6 +243,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                 accept_offered_fields_for_current_match(job, request.form.getlist("selected_fields"))
             elif request.form.get("preview_action") == "apply_field_choices":
                 apply_preview_field_choices(job, _preview_field_choices_from_form(request.form))
+            elif request.form.get("preview_action") == "reject_match":
+                reject_current_match(job)
             else:
                 apply_conflict_decision(job, request.form.to_dict())
             save_job(job, jobs_dir)

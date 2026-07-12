@@ -19,6 +19,7 @@ from merge import (
     get_compliance_reference_placeholder_choice,
     get_auto_suggest_values,
     get_single_sided_content_choice,
+    reject_matched_record,
     renumber_findings,
     resolve_conflict,
 )
@@ -611,6 +612,21 @@ class CliRegressionTests(unittest.TestCase):
         self.assertIsNot(merged_left[1], merged_right[1])
         self.assertNotEqual(merged_right[0].description, "left output edited")
         self.assertNotEqual(merged_left[1].description, "right output edited")
+
+    def test_rejected_match_returns_records_to_unmatched_pools(self):
+        left_record = finding(title="Left candidate")
+        right_record = finding(id=2, title="Right candidate")
+        unmatched_left = []
+        unmatched_right = []
+
+        reject_matched_record(
+            {"left": left_record, "right": right_record, "score": 92.5},
+            unmatched_left,
+            unmatched_right,
+        )
+
+        self.assertEqual(unmatched_left, [left_record])
+        self.assertEqual(unmatched_right, [right_record])
 
     def test_cli_can_merge_sample_files_with_config_path(self):
         python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"

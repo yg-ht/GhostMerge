@@ -55,8 +55,8 @@
 - [x] Skip whole record
 - [x] Manual field-level edit
 - [x] Expose `match_score` to user where it is useful information
-- [ ] Allow user to reject a match entirely, not just resolve fields
-- [ ] When a match is rejected, return both findings to unmatched pool
+- [x] Allow user to reject a match entirely, not just resolve fields
+- [x] When a match is rejected, return both findings to unmatched pool
 - [ ] Add logic to optionally re-process orphans after all initial matches are reviewed
 - [x] Process unmatched findings after main merge effort completed
 - [ ] Allow manual matching of unmatched findings

@@ -214,6 +214,24 @@ def append_unmatched_records(
     )
     return unmatched_records_appended
 
+
+def reject_matched_record(
+    match: dict[str, MergeRecord | float | dict[str, ResolvedWinner]],
+    unmatched_left: list[MergeRecord],
+    unmatched_right: list[MergeRecord],
+) -> None:
+    """Return both sides of a bad match to the unmatched pools."""
+    left_record = match.get("left")
+    right_record = match.get("right")
+    if not isinstance(left_record, (Finding, Observation)) or not isinstance(right_record, (Finding, Observation)):
+        raise ValueError("Cannot reject a match without left and right records.")
+
+    # Rejection means the pair is not trusted as a pair, but each source record
+    # remains valid data.  Preserve side ownership so the normal unmatched
+    # handling can later copy each orphan into both outputs.
+    unmatched_left.append(left_record)
+    unmatched_right.append(right_record)
+
 def normalise_merge_pair(finding_pair: Dict[str, MergeRecord | float | Dict[str, ResolvedWinner]]) -> Dict[str, MergeRecord | float | Dict[str, ResolvedWinner]]:
     """Normalise both sides of a matched pair in-place before merge comparison or display."""
     for side in ("left", "right"):

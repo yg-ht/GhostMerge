@@ -10,6 +10,7 @@ from globals import get_config
 from web_app import create_app, _check_api_source, _import_job_sources, _sync_job_side
 from web_service import (
     WebMergeError,
+    acknowledge_current_preview,
     accept_offered_fields_for_current_match,
     apply_conflict_decision,
     apply_preview_field_choices,
@@ -23,6 +24,7 @@ from web_service import (
     load_job,
     load_records_from_json_text,
     list_previous_jobs,
+    reject_current_match,
     save_job,
     save_outputs,
 )
@@ -179,6 +181,67 @@ class WebServiceTests(unittest.TestCase):
         self.assertFalse(job.conflict_phase_complete)
         apply_conflict_decision(job, {"field_name": "description", "action": "right"})
         self.assertIsNone(get_next_conflict(job))
+
+    def test_reject_current_finding_match_returns_records_to_unmatched_outputs(self):
+        job = create_merge_job(
+            [record(title="Shared title", description="Left detail")],
+            [record(id="2", title="Shared title", description="Right detail")],
+            job_id="rejectfinding123",
+        )
+
+        reject_current_match(job)
+        self.assertEqual(job.match_index, 1)
+        self.assertEqual(len(job.unmatched_left), 1)
+        self.assertEqual(len(job.unmatched_right), 1)
+        self.assertIsNone(get_next_conflict(job))
+
+        result = finalise_job(job)
+
+        self.assertEqual(len(result.left_records), 2)
+        self.assertEqual(len(result.right_records), 2)
+        self.assertEqual(result.left_records[0]["description"], "Left detail")
+        self.assertEqual(result.right_records[0]["description"], "Left detail")
+        self.assertEqual(result.left_records[1]["description"], "Right detail")
+        self.assertEqual(result.right_records[1]["description"], "Right detail")
+
+    def test_reject_current_observation_match_returns_records_to_unmatched_outputs(self):
+        job = create_merge_job(
+            {
+                "findings": [],
+                "observations": [observation(title="Shared observation", description="Left observation")],
+            },
+            {
+                "findings": [],
+                "observations": [observation(id="2", title="Shared observation", description="Right observation")],
+            },
+            job_id="rejectobservation123",
+        )
+
+        reject_current_match(job)
+        self.assertEqual(job.observation_match_index, 1)
+        self.assertEqual(len(job.unmatched_observations_left), 1)
+        self.assertEqual(len(job.unmatched_observations_right), 1)
+        self.assertIsNone(get_next_conflict(job))
+
+        result = finalise_job(job)
+
+        self.assertEqual(len(result.left_observations), 2)
+        self.assertEqual(len(result.right_observations), 2)
+        self.assertEqual(result.left_observations[0]["description"], "Left observation")
+        self.assertEqual(result.right_observations[0]["description"], "Left observation")
+        self.assertEqual(result.left_observations[1]["description"], "Right observation")
+        self.assertEqual(result.right_observations[1]["description"], "Right observation")
+
+    def test_reject_current_match_is_only_allowed_before_field_review(self):
+        job = create_merge_job(
+            [record(description="Left detail")],
+            [record(id="2", description="Right detail")],
+            job_id="rejectstarted123",
+        )
+        acknowledge_current_preview(job)
+
+        with self.assertRaisesRegex(WebMergeError, "before field-level review starts"):
+            reject_current_match(job)
 
     def test_observations_are_reviewed_and_finalised_with_findings(self):
         job = create_merge_job(
@@ -656,6 +719,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"<th class=\"value-cell\">Left</th>", conflict.data)
         self.assertIn(b"<th class=\"value-cell\">Right</th>", conflict.data)
         self.assertIn(b"Apply selected field choices", conflict.data)
+        self.assertIn(b"Reject match", conflict.data)
 
         conflict = self.client.post(
             f"/jobs/{job_id}/conflicts",
@@ -682,6 +746,39 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(right_download.status_code, 200)
         self.assertEqual(left_download.get_json()[0]["description"], "Right detail")
         self.assertEqual(right_download.get_json()[0]["description"], "Right detail")
+
+    def test_preview_reject_match_preserves_both_records_as_unmatched_outputs(self):
+        left = json.dumps([record(title="Shared title", description="Left detail")]).encode("utf-8")
+        right = json.dumps([record(id="2", title="Shared title", description="Right detail")]).encode("utf-8")
+
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+
+        preview = self.client.get(f"/jobs/{job_id}/conflicts")
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn(b"Reject match", preview.data)
+
+        completed = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data=self.with_csrf({"preview_action": "reject_match"}),
+            follow_redirects=True,
+        )
+        self.assertEqual(completed.status_code, 200)
+        self.assertIn(b"Merge complete", completed.data)
+
+        left_records = self.client.get(f"/jobs/{job_id}/download/left").get_json()
+        right_records = self.client.get(f"/jobs/{job_id}/download/right").get_json()
+
+        self.assertEqual([item["description"] for item in left_records], ["Left detail", "Right detail"])
+        self.assertEqual([item["description"] for item in right_records], ["Left detail", "Right detail"])
 
     def test_record_preview_uses_api_server_names_for_api_backed_columns(self):
         config = get_config()

@@ -11,7 +11,7 @@ tui = TUI()
 from utils import load_config, log, load_json, write_json, return_ASCII_art, Aborting
 from model import Finding
 from matching import fuzzy_match_findings
-from merge import append_unmatched_records, merge_main, renumber_findings
+from merge import append_unmatched_records, merge_main, reject_matched_record, renumber_findings
 from sensitivity import sensitivities_checker_single_record, load_sensitive_terms, sensitivities_checker_records
 
 # run the app
@@ -148,6 +148,19 @@ def ghostmerge(
     merged_left, merged_right = [], []
     for match in matches:
         log("INFO", f"Processing matched pair: ID Left={match['left'].id} ↔ ID Right={match['right'].id} (score: {match['score']:.2f})", prefix="CLI")
+
+        if CONFIG['interactive_mode']:
+            tui.render_left_and_right_whole_finding_record(match, "all fields")
+            match_choice = tui.render_user_choice(
+                "Review this matched pair?",
+                ["Keep match and review fields", "Reject match"],
+                "k",
+                "Matched pair review",
+            )
+            if match_choice == "r":
+                reject_matched_record(match, unmatched_left, unmatched_right)
+                log("INFO", "Rejected matched pair and returned both findings to unmatched pools", prefix="CLI")
+                continue
 
         # Separate merge decisions for each side
         result_left, result_right = merge_main(match)
