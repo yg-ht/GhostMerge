@@ -26,12 +26,17 @@
 - [ ] Title case normalising
 - [ ] Control or advise on use of parenthesis
 - [ ] Enforce the presence of reference URLs (configurable)
+- [x] Normalise reference field whitespace and duplicate lines
 - [ ] Enforce the presence of compliance references (configurable)
 - [ ] Integration with LLM for grammar etc support (configurable)
 - [ ] Identify regional use of spellings ("s" vs "z" for example)
 - [ ] Alert on long sentences
 - [x] Normalise line endings
 - [x] Remove pointless HTML tags
+- [x] Normalise CVSS vector whitespace and metric casing
+- [x] Apply matching-only text normalisation for punctuation, case, whitespace, dashes, and quotes
+- [x] Sort normalised tags deterministically
+- [x] Canonicalise configured HTML cleanup output for stable attributes, classes, and styles
 
 ## Automatic Merge Engine and supporting functions
 - [x] Refactor such that we use "left" and "right" instead of A and B (in progress)
@@ -56,11 +61,14 @@
 - [x] Process unmatched findings after main merge effort completed
 - [ ] Allow manual matching of unmatched findings
 - [x] Implement config file `threshold` override to adjust sensitivity of fuzzy matching
-- [ ] Preview merged record before final write and prompt for acceptance 
-- [ ] Improve UX for interactive handling of extra_fields
-- [ ] Improve UX for interactive handling of tags
-- [ ] Pause / Resume functionality for large merges
+- [x] Preview matched records before field-level web review
+- [ ] Preview final merged output before final write and prompt for acceptance
+- [x] Improve UX for interactive handling of extra_fields with auto-suggestion and placeholder handling
+- [x] Improve UX for interactive handling of tags with deterministic combined suggestions
+- [x] Pause / resume web merge jobs by persisting and reopening previous jobs
+- [ ] Pause / resume CLI merge sessions for large merges
 - [ ] Integrate a CVSS checker to check the severity levels match the score / vector
+- [x] Normalise CVSS vector formatting before review and sync
 
 ## Web Frontend
 - [x] Fix web sensitivity review so multiple sensitive terms in the same field are all reviewed.
