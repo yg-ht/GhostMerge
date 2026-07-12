@@ -164,6 +164,22 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(result.left_records[0]["description"], "Right detail")
         self.assertEqual(result.right_records[0]["description"], "Right detail")
 
+    def test_get_next_conflict_is_idempotent_until_decision_is_applied(self):
+        job = create_merge_job(
+            [record(description="Left detail")],
+            [record(id="2", description="Right detail")],
+            job_id="idempotent123",
+        )
+
+        first = get_next_conflict(job)
+        second = get_next_conflict(job)
+
+        self.assertEqual(first.field_name, "description")
+        self.assertEqual(second.field_name, "description")
+        self.assertFalse(job.conflict_phase_complete)
+        apply_conflict_decision(job, {"field_name": "description", "action": "right"})
+        self.assertIsNone(get_next_conflict(job))
+
     def test_observations_are_reviewed_and_finalised_with_findings(self):
         job = create_merge_job(
             {

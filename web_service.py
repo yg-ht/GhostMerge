@@ -427,6 +427,7 @@ def apply_conflict_decision(job: MergeJob, decision: dict[str, Any]) -> None:
 
     match["left"].set(field_name, new_left)
     match["right"].set(field_name, new_right)
+    _advance_field_after_decision(job, kind, field_name)
 
 
 def get_next_sensitivity_item(
@@ -795,14 +796,16 @@ def _get_next_conflict_for_kind(job: MergeJob, kind: str) -> Optional[ConflictRe
         field_defs = list(fields(TEMPLATE_MODELS[kind]))
 
         while _field_index_for_kind(job, kind) < len(field_defs):
-            field_def = field_defs[_field_index_for_kind(job, kind)]
-            _set_field_index_for_kind(job, kind, _field_index_for_kind(job, kind) + 1)
+            current_field_index = _field_index_for_kind(job, kind)
+            field_def = field_defs[current_field_index]
             if field_def.name in NON_REVIEWABLE_FIELDS:
+                _set_field_index_for_kind(job, kind, current_field_index + 1)
                 continue
 
             item = _prepare_conflict_for_field(kind, _match_index_for_kind(job, kind), match, field_def)
             if item is not None:
                 return item
+            _set_field_index_for_kind(job, kind, current_field_index + 1)
 
         _merged_for_kind(job, kind, "left").append(match["left"])
         _merged_for_kind(job, kind, "right").append(match["right"])
@@ -813,6 +816,14 @@ def _get_next_conflict_for_kind(job: MergeJob, kind: str) -> Optional[ConflictRe
     _append_unmatched_records(job, kind)
     _set_conflict_complete_for_kind(job, kind, True)
     return None
+
+
+def _advance_field_after_decision(job: MergeJob, kind: str, field_name: str) -> None:
+    """Advance past the conflict field only after a submitted decision is applied."""
+    field_defs = list(fields(TEMPLATE_MODELS[kind]))
+    current_index = _field_index_for_kind(job, kind)
+    if current_index < len(field_defs) and field_defs[current_index].name == field_name:
+        _set_field_index_for_kind(job, kind, current_index + 1)
 
 
 def _prepare_conflict_for_field(kind: str, match_index: int, match: dict[str, Any], field_def: Any) -> Optional[ConflictReviewItem]:

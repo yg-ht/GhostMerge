@@ -65,7 +65,7 @@ def observation_record(**overrides):
 
 
 class FakeGraphQLClient:
-    def __init__(self, missing_query_fields=None, missing_mutation_fields=None):
+    def __init__(self, missing_query_fields=None, missing_mutation_fields=None, fail_on_tag_call=None):
         self.calls = []
         self.deleted_ids = []
         self.deleted_observation_ids = []
@@ -74,6 +74,8 @@ class FakeGraphQLClient:
         self.tag_sets = []
         self.missing_query_fields = set(missing_query_fields or [])
         self.missing_mutation_fields = set(missing_mutation_fields or [])
+        self.fail_on_tag_call = fail_on_tag_call
+        self.tag_call_count = 0
 
     def execute(self, query, variables=None):
         variables = variables or {}
@@ -189,6 +191,9 @@ class FakeGraphQLClient:
             self.created_observations.append(variables["object"])
             return {"insert_observation_one": {"id": 202}}
         if "SetFindingTags" in query:
+            self.tag_call_count += 1
+            if self.fail_on_tag_call == self.tag_call_count:
+                raise GhostwriterApiError("tag validation failed")
             self.tag_sets.append((variables["id"], variables["tags"]))
             return {"setTags": {"tags": variables["tags"]}}
         if "Tags(" in query:
@@ -344,13 +349,13 @@ class GhostwriterApiTests(unittest.TestCase):
 
             backup = verify_backup(backup_path)
             self.assertEqual(backup["record_count"], 1)
-            self.assertEqual(fake_client.deleted_ids, [99])
-            self.assertEqual(len(fake_client.created_objects), 1)
-            extra_fields = fake_client.created_objects[0]["extraFields"]
+            self.assertEqual(fake_client.deleted_ids, [101, 99])
+            self.assertEqual(len(fake_client.created_objects), 2)
+            extra_fields = fake_client.created_objects[-1]["extraFields"]
             self.assertIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, extra_fields)
             self.assertTrue(extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD].endswith("Z"))
             self.assertIn("T", extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD])
-            self.assertEqual(fake_client.tag_sets, [(101, ["web", "xss"])])
+            self.assertEqual(fake_client.tag_sets, [(101, ["web", "xss"]), (101, ["web", "xss"])])
             self.assertEqual(list_backups(Path(tmp_dir))[0]["record_count"], 1)
 
     def test_replace_all_preserves_extra_fields_when_adding_sync_timestamp(self):
@@ -360,9 +365,21 @@ class GhostwriterApiTests(unittest.TestCase):
 
             api.replace_all_findings([finding_record(extra_fields={"owner": "red-team"})], Path(tmp_dir))
 
-            extra_fields = fake_client.created_objects[0]["extraFields"]
+            extra_fields = fake_client.created_objects[-1]["extraFields"]
             self.assertEqual(extra_fields["owner"], "red-team")
             self.assertIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, extra_fields)
+
+    def test_replace_all_validates_create_and_cleans_up_before_deleting_real_records(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_client = FakeGraphQLClient(fail_on_tag_call=1)
+            api = GhostwriterApi(server_config(), client=fake_client)
+
+            with self.assertRaisesRegex(GhostwriterApiError, "tag validation failed"):
+                api.replace_all_findings([finding_record()], Path(tmp_dir))
+
+            self.assertEqual(len(fake_client.created_objects), 1)
+            self.assertEqual(fake_client.deleted_ids, [101])
+            self.assertNotIn(99, fake_client.deleted_ids)
 
     def test_preflight_rejects_missing_sync_capabilities_before_writes(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -509,10 +526,10 @@ class GhostwriterApiTests(unittest.TestCase):
 
             api.replace_all_findings([finding_record()], Path(tmp_dir), observations=[observation_record()])
 
-            self.assertEqual(fake_client.deleted_ids, [99])
-            self.assertEqual(fake_client.deleted_observation_ids, [77])
-            self.assertEqual(fake_client.created_observations[0]["title"], "Suspicious process execution")
-            self.assertIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, fake_client.created_observations[0]["extraFields"])
+            self.assertEqual(fake_client.deleted_ids, [101, 99])
+            self.assertEqual(fake_client.deleted_observation_ids, [202, 77])
+            self.assertEqual(fake_client.created_observations[-1]["title"], "Suspicious process execution")
+            self.assertIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, fake_client.created_observations[-1]["extraFields"])
             self.assertIn((202, ["edr", "process"]), fake_client.tag_sets)
 
     def test_replace_all_finding_only_sync_preserves_existing_observations(self):
@@ -522,7 +539,7 @@ class GhostwriterApiTests(unittest.TestCase):
 
             api.replace_all_findings([finding_record()], Path(tmp_dir))
 
-            self.assertEqual(fake_client.deleted_ids, [99])
+            self.assertEqual(fake_client.deleted_ids, [101, 99])
             self.assertEqual(fake_client.deleted_observation_ids, [])
             self.assertEqual(fake_client.created_observations, [])
             self.assertFalse(any("ObservationIds" in query for query, _ in fake_client.calls))

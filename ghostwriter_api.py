@@ -433,6 +433,7 @@ class GhostwriterApi:
             else []
         )
         backup_path = self.create_backup(backup_root)
+        self.validate_prepared_records_can_be_created(prepared_records, prepared_observations)
         existing_ids = self.fetch_finding_ids()
         existing_observation_ids = self.fetch_observation_ids() if replace_observations else []
         for index, finding_id in enumerate(existing_ids, start=1):
@@ -454,6 +455,70 @@ class GhostwriterApi:
         total_records = len(records) + len(prepared_observations)
         self.progress(SyncEvent("complete", f"Sync complete for {self.server.name}", total_records, total_records, "done"))
         return backup_path
+
+    def validate_prepared_records_can_be_created(
+        self,
+        prepared_records: list[dict[str, Any]],
+        prepared_observations: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
+        """Create and remove temporary records before deleting the real library.
+
+        Preflight schema checks prove that required mutations exist, but they do
+        not prove that every prepared payload is acceptable to Ghostwriter. This
+        validation catches create/tag failures while the existing library is
+        still intact, then removes the temporary records before replacement.
+        """
+        created_findings: list[int] = []
+        created_observations: list[int] = []
+        prepared_observations = prepared_observations or []
+
+        try:
+            total = len(prepared_records) + len(prepared_observations)
+            complete = 0
+            for prepared in prepared_records:
+                complete += 1
+                self.progress(
+                    SyncEvent(
+                        "validate_create",
+                        f"Validating reviewed findings on {self.server.name}",
+                        complete,
+                        total,
+                    )
+                )
+                created_id = self.create_prepared_finding(prepared["api_record"])
+                created_findings.append(created_id)
+                self.set_tags(created_id, prepared["tags"], model="finding")
+
+            for prepared in prepared_observations:
+                complete += 1
+                self.progress(
+                    SyncEvent(
+                        "validate_create",
+                        f"Validating reviewed observations on {self.server.name}",
+                        complete,
+                        total,
+                    )
+                )
+                created_id = self.create_prepared_observation(prepared["api_record"])
+                created_observations.append(created_id)
+                self.set_tags(created_id, prepared["tags"], model="observation")
+        finally:
+            cleanup_errors = []
+            for finding_id in reversed(created_findings):
+                try:
+                    self.delete_finding(finding_id)
+                except Exception as exc:
+                    cleanup_errors.append(f"finding {finding_id}: {exc}")
+            for observation_id in reversed(created_observations):
+                try:
+                    self.delete_observation(observation_id)
+                except Exception as exc:
+                    cleanup_errors.append(f"observation {observation_id}: {exc}")
+            if cleanup_errors:
+                raise GhostwriterApiError(
+                    "Creation validation cleanup failed; existing library was not replaced. "
+                    + "; ".join(cleanup_errors)
+                )
 
     def prepare_records_for_reload(
         self,

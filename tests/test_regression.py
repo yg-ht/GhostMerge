@@ -15,6 +15,7 @@ from globals import get_config
 from matching import fuzzy_match_findings, score_finding_similarity
 from merge import (
     ResolvedWinner,
+    append_unmatched_records,
     get_compliance_reference_placeholder_choice,
     get_auto_suggest_values,
     get_single_sided_content_choice,
@@ -594,6 +595,22 @@ class CliRegressionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--file-left", result.stdout)
         self.assertIn("--file-right", result.stdout)
+
+    def test_unmatched_records_are_copied_between_outputs(self):
+        left_only = finding(title="Left only")
+        right_only = finding(title="Right only")
+        merged_left = []
+        merged_right = []
+
+        appended = append_unmatched_records(merged_left, merged_right, [left_only], [right_only])
+        merged_left[0].description = "left output edited"
+        merged_right[1].description = "right output edited"
+
+        self.assertEqual(appended, 2)
+        self.assertIsNot(merged_left[0], merged_right[0])
+        self.assertIsNot(merged_left[1], merged_right[1])
+        self.assertNotEqual(merged_right[0].description, "left output edited")
+        self.assertNotEqual(merged_left[1].description, "right output edited")
 
     def test_cli_can_merge_sample_files_with_config_path(self):
         python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"

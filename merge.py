@@ -1,4 +1,6 @@
 # external module imports
+from copy import deepcopy
+
 from imports import (Any, auto, Dict, Enum, fields, key, List, md5, Tuple)
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
@@ -177,6 +179,40 @@ def renumber_records(
 ) -> tuple[List[MergeRecord], List[MergeRecord]]:
     """Reassign aligned record IDs regardless of reviewed template type."""
     return renumber_findings(left_records, right_records, start_id=start_id)
+
+
+def append_unmatched_records(
+    merged_left: list[MergeRecord],
+    merged_right: list[MergeRecord],
+    unmatched_left: list[MergeRecord],
+    unmatched_right: list[MergeRecord],
+) -> int:
+    """Append orphaned records to both outputs without sharing mutable objects."""
+    unmatched_records_appended = 0
+
+    log("DEBUG", f"Appending {len(unmatched_left)} unmatched records from Left", prefix="MERGE")
+    for unmatched_left_record in unmatched_left:
+        # The source-side output can keep the original object because later edits
+        # are intentionally scoped to that side.  The opposite output gets a
+        # deep copy so field-level sensitivity edits cannot bleed between files.
+        merged_left.append(unmatched_left_record)
+        merged_right.append(deepcopy(unmatched_left_record))
+        unmatched_records_appended += 1
+
+    log("DEBUG", f"Appending {len(unmatched_right)} unmatched records from Right", prefix="MERGE")
+    for unmatched_right_record in unmatched_right:
+        # Mirror the same ownership rule for right-only records: keep the
+        # original on the right and copy it into the left output.
+        merged_left.append(deepcopy(unmatched_right_record))
+        merged_right.append(unmatched_right_record)
+        unmatched_records_appended += 1
+
+    log(
+        "INFO",
+        f"Successfully appended {unmatched_records_appended} unmatched records to both Left and Right",
+        prefix="MERGE",
+    )
+    return unmatched_records_appended
 
 def normalise_merge_pair(finding_pair: Dict[str, MergeRecord | float | Dict[str, ResolvedWinner]]) -> Dict[str, MergeRecord | float | Dict[str, ResolvedWinner]]:
     """Normalise both sides of a matched pair in-place before merge comparison or display."""

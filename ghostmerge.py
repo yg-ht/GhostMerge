@@ -11,7 +11,7 @@ tui = TUI()
 from utils import load_config, log, load_json, write_json, return_ASCII_art, Aborting
 from model import Finding
 from matching import fuzzy_match_findings
-from merge import merge_main, renumber_findings
+from merge import append_unmatched_records, merge_main, renumber_findings
 from sensitivity import sensitivities_checker_single_record, load_sensitive_terms, sensitivities_checker_records
 
 # run the app
@@ -42,8 +42,8 @@ def ghostmerge(
 
     tui.update_data(return_ASCII_art(), 'white', 'Welcome to GhostMerge')
     log("INFO", "\n"
-                          "[bold] ____  _               _   __  __                      [/bold]\n"                     
-                          "[bold]/ ___|| |__   ___  ___| |_|  \\/  | ___ _ __ __ _  ___  [/bold]\n" 
+                          "[bold] ____  _               _   __  __                      [/bold]\n"
+                          "[bold]/ ___|| |__   ___  ___| |_|  \\/  | ___ _ __ __ _  ___  [/bold]\n"
                           "[bold]| | __| '_ \\ / _ \\/ __| __| |\\/| |/ _ \\ '__/ _` |/ _ \\ [/bold]\n"
                           "[bold]| |_| | | | | (_) \\__ \\ |_| |  | |  __/ | | (_| |  __/ [/bold]\n"
                           "[bold]\\_____|_| |_|\\___/|___/\\__|_|  |_|\\___|_|  \\__, |\\___| [/bold]\n"
@@ -155,18 +155,7 @@ def ghostmerge(
         merged_left.append(result_left)
         merged_right.append(result_right)
 
-    unmatched_records_appended = 0
-    log("DEBUG", f"Appending {len(unmatched_left)} unmatched records from Left", prefix="CLI")
-    for unmatched_left_record in unmatched_left:
-        merged_left.append(unmatched_left_record)
-        merged_right.append(unmatched_left_record)
-        unmatched_records_appended += 1
-    log("DEBUG", f"Appending {len(unmatched_right)} unmatched records from Right", prefix="CLI")
-    for unmatched_right_record in unmatched_right:
-        merged_left.append(unmatched_right_record)
-        merged_right.append(unmatched_right_record)
-        unmatched_records_appended += 1
-    log("INFO", f"Successfully appended {unmatched_records_appended} unmatched records to both Left and Right", prefix="CLI")
+    append_unmatched_records(merged_left, merged_right, unmatched_left, unmatched_right)
 
     log ("INFO", "Re-sequencing all Finding IDs", prefix="CLI")
     merged_left, merged_right = renumber_findings(merged_left, merged_right, start_id=1)
