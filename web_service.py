@@ -310,6 +310,14 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
     )
 
 
+def get_active_conflict_position(job: MergeJob) -> tuple[Optional[str], int]:
+    """Return the active template type and match index for preview transition checks."""
+    kind = _active_conflict_kind(job)
+    if kind is None:
+        return None, -1
+    return kind, _match_index_for_kind(job, kind)
+
+
 def acknowledge_current_preview(job: MergeJob) -> None:
     if _active_conflict_kind(job) is None:
         raise WebMergeError("There is no active match preview.")

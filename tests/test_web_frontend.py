@@ -780,6 +780,27 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual([item["description"] for item in left_records], ["Left detail", "Right detail"])
         self.assertEqual([item["description"] for item in right_records], ["Left detail", "Right detail"])
 
+    def test_observation_preview_is_preserved_after_id_only_finding_match(self):
+        job = create_merge_job(
+            {
+                "findings": [record(id="1", title="Same finding", description="Same detail")],
+                "observations": [observation(title="Shared observation", description="Left observation")],
+            },
+            {
+                "findings": [record(id="99", title="Same finding", description="Same detail")],
+                "observations": [observation(id="2", title="Shared observation", description="Right observation")],
+            },
+            job_id="observationpreview123",
+        )
+        save_job(job, Path(self.tmp_dir.name))
+
+        response = self.client.get("/jobs/observationpreview123/conflicts", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Record preview - Observation", response.data)
+        self.assertIn(b"Reject match", response.data)
+        self.assertNotIn(b"Conflict review - Observation", response.data)
+
     def test_record_preview_uses_api_server_names_for_api_backed_columns(self):
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(

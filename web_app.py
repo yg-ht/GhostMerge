@@ -36,6 +36,7 @@ from web_service import (
     apply_sensitivity_decision,
     create_merge_job,
     finalise_job,
+    get_active_conflict_position,
     get_current_match_preview,
     get_next_conflict,
     get_next_sensitivity_item,
@@ -204,7 +205,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     def conflicts(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
-            initial_match_index = job.match_index
+            initial_conflict_kind, initial_match_index = get_active_conflict_position(job)
             if not job.preview_acknowledged:
                 preview = get_current_match_preview(job)
                 save_job(job, jobs_dir)
@@ -220,7 +221,9 @@ def create_app(test_config: dict | None = None) -> Flask:
             save_job(job, jobs_dir)
             if item is None:
                 return redirect(url_for("sensitivity", job_id=job.job_id))
-            if not job.preview_acknowledged and item.match_index != initial_match_index:
+            if not job.preview_acknowledged and (
+                item.template_type != initial_conflict_kind or item.match_index != initial_match_index
+            ):
                 return redirect(url_for("conflicts", job_id=job.job_id))
             return render_template(
                 "conflict.html",
