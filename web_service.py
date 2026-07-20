@@ -37,6 +37,18 @@ TEMPLATE_MODELS = {"finding": Finding, "observation": Observation}
 TEMPLATE_PLURALS = {"finding": "findings", "observation": "observations"}
 
 
+def empty_sensitivity_review_stats() -> dict[str, int]:
+    """Return fresh audit counters for the post-merge sensitivity stage."""
+    return {
+        "records_scanned": 0,
+        "fields_scanned": 0,
+        "hits_found": 0,
+        "offered_replacements": 0,
+        "custom_replacements": 0,
+        "values_retained": 0,
+    }
+
+
 class WebMergeError(ValueError):
     """Raised when uploaded data or review decisions cannot be processed."""
 
@@ -123,6 +135,12 @@ class MergeJob:
     sensitivity_terms_source: Optional[str] = None
     sensitivity_configuration_error: Optional[str] = None
     pre_match_sensitivity_stats: dict[str, dict[str, int]] = field(default_factory=dict)
+    sensitivity_review_initialised: bool = False
+    sensitivity_review_status: str = "pending"
+    sensitivity_review_outcome: str = "pending"
+    sensitivity_review_started_at: Optional[str] = None
+    sensitivity_review_completed_at: Optional[str] = None
+    sensitivity_review_stats: dict[str, int] = field(default_factory=empty_sensitivity_review_stats)
 
 
 @dataclass
@@ -595,15 +613,80 @@ def apply_conflict_decision(job: MergeJob, decision: dict[str, Any]) -> None:
     _advance_field_after_decision(job, kind, field_name)
 
 
+def initialise_sensitivity_review(
+    job: MergeJob,
+    terms: Optional[dict[str, Optional[str]]],
+) -> None:
+    """Initialise one auditable sensitivity pass without advancing its cursor."""
+    if not job.conflict_phase_complete:
+        raise WebMergeError("Conflict review must be complete before sensitivity review.")
+    if job.sensitivity_phase_complete:
+        job.sensitivity_review_initialised = True
+        job.sensitivity_review_status = "complete"
+        if job.sensitivity_review_outcome == "pending":
+            job.sensitivity_review_outcome = "legacy_complete"
+        return
+    if job.sensitivity_review_initialised:
+        return
+
+    job.sensitivity_review_initialised = True
+    job.sensitivity_review_started_at = _utc_state_timestamp()
+    job.sensitivity_review_stats = empty_sensitivity_review_stats()
+
+    sensitivity_enabled = (
+        job.sensitivity_enabled
+        if job.sensitivity_snapshot_version >= 1
+        else terms is not None or bool(job.sensitivity_configuration_error)
+    )
+    if job.sensitivity_configuration_error:
+        job.sensitivity_review_status = "configuration_error"
+        job.sensitivity_review_outcome = "configuration_error"
+        return
+    if not sensitivity_enabled:
+        job.sensitivity_review_status = "awaiting_acknowledgement"
+        job.sensitivity_review_outcome = "disabled"
+        return
+
+    if terms is None:
+        job.sensitivity_review_status = "configuration_error"
+        job.sensitivity_review_outcome = "configuration_error"
+        if not job.sensitivity_configuration_error:
+            job.sensitivity_configuration_error = "Configured sensitive-term rules could not be loaded."
+        return
+
+    # Count the immutable starting workload once. Repeated GET requests can then
+    # redisplay the same pending decision without inflating audit statistics.
+    for template_type in TEMPLATE_KINDS:
+        for side in ("left", "right"):
+            for record in _merged_for_kind(job, template_type, side):
+                job.sensitivity_review_stats["records_scanned"] += 1
+                for field_def in fields(TEMPLATE_MODELS[template_type]):
+                    if field_def.name == "id" or not record.get(field_def.name):
+                        continue
+                    job.sensitivity_review_stats["fields_scanned"] += 1
+                    job.sensitivity_review_stats["hits_found"] += len(
+                        check_for_sensitivities(record.get(field_def.name), terms)
+                    )
+
+    if job.sensitivity_review_stats["hits_found"]:
+        job.sensitivity_review_status = "reviewing"
+        job.sensitivity_review_outcome = "hits_found"
+    else:
+        job.sensitivity_review_status = "awaiting_acknowledgement"
+        job.sensitivity_review_outcome = "no_hits"
+
+
 def get_next_sensitivity_item(
     job: MergeJob,
     terms: Optional[dict[str, Optional[str]]],
 ) -> Optional[SensitivityReviewItem]:
     """Return the next post-merge sensitivity item that requires human review."""
-    if not job.conflict_phase_complete:
-        raise WebMergeError("Conflict review must be complete before sensitivity review.")
-    if not terms:
-        job.sensitivity_phase_complete = True
+    initialise_sensitivity_review(job, terms)
+    if job.sensitivity_phase_complete:
+        return None
+    if job.sensitivity_review_status == "configuration_error":
+        raise WebMergeError(job.sensitivity_configuration_error or "Sensitivity configuration is unavailable.")
+    if job.sensitivity_review_outcome == "disabled" or not terms:
         return None
 
     while job.sensitivity_template_type in TEMPLATE_KINDS:
@@ -660,7 +743,7 @@ def get_next_sensitivity_item(
             continue
         break
 
-    job.sensitivity_phase_complete = True
+    job.sensitivity_review_status = "awaiting_acknowledgement"
     return None
 
 
@@ -686,17 +769,34 @@ def apply_sensitivity_decision(job: MergeJob, decision: dict[str, Any]) -> None:
 
     record = records[record_index]
     if action == "keep":
+        job.sensitivity_review_stats["values_retained"] += 1
         job.sensitivity_hit_index += 1
         return
     if action == "offered":
         replacement = decision.get("offered")
+        job.sensitivity_review_stats["offered_replacements"] += 1
     elif action == "custom":
         replacement = decision.get("custom_value", "")
+        job.sensitivity_review_stats["custom_replacements"] += 1
     else:
         raise WebMergeError("Unsupported sensitivity decision.")
 
     record.set(field_name, apply_sensitive_replacement(record.get(field_name), sensitive_term, replacement))
     job.sensitivity_hit_index = 0
+
+
+def acknowledge_sensitivity_review(job: MergeJob) -> None:
+    """Complete sensitivity review only after its visible result is acknowledged."""
+    if not job.conflict_phase_complete:
+        raise WebMergeError("Conflict review must be complete before sensitivity review.")
+    if job.sensitivity_review_status == "configuration_error" or job.sensitivity_configuration_error:
+        raise WebMergeError("Sensitivity review cannot complete while its configuration is unavailable.")
+    if job.sensitivity_review_status != "awaiting_acknowledgement":
+        raise WebMergeError("Sensitivity review is not ready for acknowledgement.")
+
+    job.sensitivity_phase_complete = True
+    job.sensitivity_review_status = "complete"
+    job.sensitivity_review_completed_at = _utc_state_timestamp()
 
 
 def finalise_job(job: MergeJob) -> MergeResult:
@@ -830,7 +930,7 @@ def finalised_job_result(job: MergeJob) -> MergeResult:
     )
 
 
-def job_summary(job: MergeJob) -> dict[str, int | bool | str]:
+def job_summary(job: MergeJob) -> dict[str, Any]:
     summary = get_review_progress(job)
     summary.update({
         "job_id": job.job_id,
@@ -844,10 +944,36 @@ def job_summary(job: MergeJob) -> dict[str, int | bool | str]:
         "merged_observations": len(job.merged_observations_left),
         "conflict_phase_complete": job.conflict_phase_complete,
         "sensitivity_phase_complete": job.sensitivity_phase_complete,
+        "sensitivity_review_status": job.sensitivity_review_status,
+        "sensitivity_review_outcome": job.sensitivity_review_outcome,
+        "sensitivity_review_started_at": job.sensitivity_review_started_at,
+        "sensitivity_review_completed_at": job.sensitivity_review_completed_at,
+        "sensitivity_review_stats": dict(job.sensitivity_review_stats),
         "output_phase_complete": job.output_phase_complete,
         "sync_results": job.sync_results,
     })
     return summary
+
+
+def sensitivity_audit_summary(job: MergeJob) -> dict[str, Any]:
+    """Return template-safe sensitivity state without exposing snapshotted terms."""
+    pre_match_totals = empty_pre_match_sensitivity_stats()
+    for collection_stats in job.pre_match_sensitivity_stats.values():
+        for key in pre_match_totals:
+            pre_match_totals[key] += int(collection_stats.get(key, 0))
+
+    return {
+        "enabled": job.sensitivity_enabled if job.sensitivity_snapshot_version >= 1 else None,
+        "status": job.sensitivity_review_status,
+        "outcome": job.sensitivity_review_outcome,
+        "terms_source": job.sensitivity_terms_source,
+        "terms_digest": job.sensitivity_terms_digest,
+        "configuration_error": job.sensitivity_configuration_error,
+        "pre_match": pre_match_totals,
+        "post_merge": dict(job.sensitivity_review_stats),
+        "started_at": job.sensitivity_review_started_at,
+        "completed_at": job.sensitivity_review_completed_at,
+    }
 
 
 def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
@@ -1011,6 +1137,23 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         sensitivity_terms_source=data.get("sensitivity_terms_source"),
         sensitivity_configuration_error=data.get("sensitivity_configuration_error"),
         pre_match_sensitivity_stats=dict(data.get("pre_match_sensitivity_stats") or {}),
+        sensitivity_review_initialised=bool(
+            data.get("sensitivity_review_initialised", data.get("sensitivity_phase_complete", False))
+        ),
+        sensitivity_review_status=data.get(
+            "sensitivity_review_status",
+            "complete" if data.get("sensitivity_phase_complete", False) else "pending",
+        ),
+        sensitivity_review_outcome=data.get(
+            "sensitivity_review_outcome",
+            "legacy_complete" if data.get("sensitivity_phase_complete", False) else "pending",
+        ),
+        sensitivity_review_started_at=data.get("sensitivity_review_started_at"),
+        sensitivity_review_completed_at=data.get("sensitivity_review_completed_at"),
+        sensitivity_review_stats={
+            **empty_sensitivity_review_stats(),
+            **dict(data.get("sensitivity_review_stats") or {}),
+        },
     )
 
 
@@ -1304,6 +1447,11 @@ def _winners_from_state(winners: dict[str, Any]) -> dict[str, Any]:
 
 def _human_file_mtime(path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _utc_state_timestamp() -> str:
+    """Return a stable UTC timestamp for persisted workflow audit state."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _job_dir(jobs_dir: Path, job_id: str) -> Path:

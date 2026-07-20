@@ -9,9 +9,15 @@
     <dt>Unmatched right</dt><dd>{{ summary.unmatched_right }}</dd>
     <dt>Merge/output phase</dt><dd>{{ summary.phase_label }}</dd>
     <dt>Completed matches</dt><dd>{{ summary.completed_matches }}</dd>
+    <dt>Sensitivity status</dt><dd>{{ summary.sensitivity_review_status|replace("_", " ")|title }}</dd>
+    <dt>Sensitivity outcome</dt><dd>{{ summary.sensitivity_review_outcome|replace("_", " ")|title }}</dd>
   </dl>
   <div class="actions">
+    {% if summary.conflict_phase_complete and not summary.sensitivity_phase_complete %}
+    <a class="button" href="{{ url_for('sensitivity', job_id=summary.job_id) }}">Continue sensitivity review</a>
+    {% else %}
     <a class="button" href="{{ url_for('conflicts', job_id=summary.job_id) }}">Resume review</a>
+    {% endif %}
     {% with job_id=summary.job_id %}
     {% include "_abandon_merge_form.html" %}
     {% endwith %}

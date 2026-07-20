@@ -28,6 +28,7 @@ from sensitivity import load_sensitive_terms, sensitive_terms_digest
 from utils import load_config
 from web_service import (
     WebMergeError,
+    acknowledge_sensitivity_review,
     accept_offered_fields_for_current_match,
     accept_offered_for_current_match,
     acknowledge_current_preview,
@@ -43,6 +44,7 @@ from web_service import (
     get_orphan_reprocessing_prompt,
     get_next_sensitivity_item,
     get_review_progress,
+    initialise_sensitivity_review,
     job_summary,
     list_previous_jobs,
     load_job,
@@ -52,6 +54,7 @@ from web_service import (
     reset_match_to_preview,
     save_job,
     save_outputs,
+    sensitivity_audit_summary,
     stop_orphan_reprocessing_for_current_kind,
 )
 
@@ -302,16 +305,50 @@ def create_app(test_config: dict | None = None) -> Flask:
     def sensitivity(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
-            item = get_next_sensitivity_item(job, _sensitivity_terms_for_job(job))
+            terms = _sensitivity_terms_for_job(job)
+            if (
+                job.sensitivity_snapshot_version == 0
+                and CONFIG.get("sensitivity_check_enabled")
+                and terms is None
+            ):
+                # Legacy jobs did not persist a load error. Preserve their live
+                # configuration lookup but fail closed when it is unavailable.
+                job.sensitivity_configuration_error = "Configured sensitive-term rules could not be loaded."
+            initialise_sensitivity_review(job, terms)
+            if job.sensitivity_review_status == "configuration_error":
+                save_job(job, jobs_dir)
+                return render_template(
+                    "sensitivity_summary.html",
+                    job=job,
+                    audit=sensitivity_audit_summary(job),
+                    progress=get_review_progress(job),
+                )
+
+            item = get_next_sensitivity_item(job, terms)
             save_job(job, jobs_dir)
             if item is None:
-                return redirect(url_for("complete", job_id=job.job_id))
+                return render_template(
+                    "sensitivity_summary.html",
+                    job=job,
+                    audit=sensitivity_audit_summary(job),
+                    progress=get_review_progress(job),
+                )
             return render_template(
                 "sensitivity.html",
                 job=job,
                 item=item,
                 progress=get_review_progress(job),
             )
+        except WebMergeError as exc:
+            return render_template("error.html", error=str(exc)), 400
+
+    @app.post("/jobs/<job_id>/sensitivity/acknowledge")
+    def acknowledge_sensitivity(job_id: str):
+        try:
+            job = load_job(jobs_dir, job_id)
+            acknowledge_sensitivity_review(job)
+            save_job(job, jobs_dir)
+            return redirect(url_for("complete", job_id=job.job_id))
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 

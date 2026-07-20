@@ -647,6 +647,19 @@ the deployment configuration changes while review is in progress. The raw rule
 snapshot and merged record content are not rendered in job summaries or logged;
 treat the Web job directory as sensitive working data.
 
+After conflict review, the Web UI always displays the post-merge sensitivity
+stage. It reports whether checking was disabled, no configured terms were found,
+or every detected term received an analyst decision. The audit summary records
+start and completion times, the snapshotted rules source and digest, scan totals,
+and decision totals without displaying the rule contents. Refreshing or resuming
+the page does not repeat the initial scan or inflate those totals.
+
+Merged output remains unavailable until the analyst acknowledges this summary.
+If checking is enabled but the configured rules could not be loaded, the stage
+fails closed: acknowledgement and output creation remain blocked, and the Web UI
+shows a configuration diagnostic. Correct the configuration and start a new job
+so it receives a valid immutable rules snapshot.
+
 ## Formatting cleanup
 
 Formatting cleanup is configured in `ghostmerge_config.example.json` and local

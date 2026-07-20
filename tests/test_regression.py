@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -675,6 +676,27 @@ class SensitivityRegressionTests(unittest.TestCase):
         hits = check_for_sensitivities("The ACME platform is secret.", {"acme": "[CLIENT]", "secret": None})
 
         self.assertEqual(hits, [("acme", "[CLIENT]"), ("secret", None)])
+
+    def test_sensitive_rules_and_scanned_content_are_not_written_to_logs(self):
+        sensitive_term = "customer-private-codename"
+        sensitive_replacement = "internal-replacement-value"
+        sensitive_content = f"Finding contains {sensitive_term} and confidential context"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            terms_path = Path(tmp_dir) / "terms.txt"
+            terms_path.write_text(
+                f"{sensitive_term} => {sensitive_replacement}\n",
+                encoding="utf-8",
+            )
+            with patch("sensitivity.log") as mocked_log:
+                terms = load_sensitive_terms("terms.txt", tmp_dir)
+                hits = check_for_sensitivities(sensitive_content, terms)
+
+        logged_text = " ".join(str(call) for call in mocked_log.call_args_list)
+        self.assertEqual(hits, [(sensitive_term, sensitive_replacement)])
+        self.assertNotIn(sensitive_term, logged_text)
+        self.assertNotIn(sensitive_replacement, logged_text)
+        self.assertNotIn("confidential context", logged_text)
 
     def test_replacement_handles_literals_and_legacy_opening_tag_pairs(self):
         configure_for_tests(

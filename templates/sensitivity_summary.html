@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+{% if audit.status == "configuration_error" %}
+<h1>Sensitivity review blocked</h1>
+<section class="panel">
+  <p class="error">{{ audit.configuration_error }}</p>
+  <p>Sensitivity checking is enabled, so merged output cannot be created until the configured rules can be loaded.</p>
+  <p>Correct the deployment configuration, then create a new merge job so its rules can be snapshotted before matching.</p>
+</section>
+{% elif audit.status == "complete" %}
+<h1>Sensitivity review complete</h1>
+<section class="panel">
+  <p>The recorded sensitivity result has been acknowledged and output may be created.</p>
+</section>
+{% else %}
+<h1>Sensitivity review ready to complete</h1>
+<section class="panel">
+  {% if audit.outcome == "disabled" %}
+  <p><strong>Sensitivity checking was disabled for this merge job.</strong></p>
+  <p>No post-merge sensitive-term scan was performed. Acknowledge this state explicitly before output is created.</p>
+  {% elif audit.outcome == "no_hits" %}
+  <p>The post-merge sensitivity scan completed and found no configured sensitive terms.</p>
+  {% else %}
+  <p>Every sensitive-term hit found by the post-merge scan has received an analyst decision.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>Sensitivity audit</h2>
+  <dl>
+    <dt>Status</dt><dd>{{ audit.status|replace("_", " ")|title }}</dd>
+    <dt>Outcome</dt><dd>{{ audit.outcome|replace("_", " ")|title }}</dd>
+    {% if audit.terms_source %}<dt>Configured rules</dt><dd>{{ audit.terms_source }}</dd>{% endif %}
+    {% if audit.terms_digest %}<dt>Rules digest</dt><dd><code>{{ audit.terms_digest }}</code></dd>{% endif %}
+    {% if audit.started_at %}<dt>Started</dt><dd>{{ audit.started_at }}</dd>{% endif %}
+    {% if audit.completed_at %}<dt>Completed</dt><dd>{{ audit.completed_at }}</dd>{% endif %}
+  </dl>
+
+  <h3>Pre-match processing</h3>
+  <dl>
+    <dt>Records scanned</dt><dd>{{ audit.pre_match.records_scanned }}</dd>
+    <dt>Fields scanned</dt><dd>{{ audit.pre_match.fields_scanned }}</dd>
+    <dt>Hits found</dt><dd>{{ audit.pre_match.hits_found }}</dd>
+    <dt>Automatic replacements</dt><dd>{{ audit.pre_match.replacements_applied }}</dd>
+    <dt>Flag-only hits deferred</dt><dd>{{ audit.pre_match.flag_only_hits_deferred }}</dd>
+  </dl>
+
+  <h3>Post-merge review</h3>
+  <dl>
+    <dt>Records scanned</dt><dd>{{ audit.post_merge.records_scanned }}</dd>
+    <dt>Fields scanned</dt><dd>{{ audit.post_merge.fields_scanned }}</dd>
+    <dt>Initial hits found</dt><dd>{{ audit.post_merge.hits_found }}</dd>
+    <dt>Offered replacements</dt><dd>{{ audit.post_merge.offered_replacements }}</dd>
+    <dt>Custom replacements</dt><dd>{{ audit.post_merge.custom_replacements }}</dd>
+    <dt>Values retained</dt><dd>{{ audit.post_merge.values_retained }}</dd>
+  </dl>
+</section>
+
+{% if audit.status == "awaiting_acknowledgement" %}
+<form class="panel" action="{{ url_for('acknowledge_sensitivity', job_id=job.job_id) }}" method="post">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <p>Output remains locked until this sensitivity result is acknowledged.</p>
+  <button type="submit">Acknowledge sensitivity result and continue</button>
+</form>
+{% endif %}
+
+{% with job_id=job.job_id %}
+{% include "_abandon_merge_form.html" %}
+{% endwith %}
+{% endblock %}
