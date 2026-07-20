@@ -372,6 +372,58 @@ class NormalisationRegressionTests(unittest.TestCase):
             '<code spellcheck="false">payload</code>',
         )
 
+    def test_formatting_cleanup_collapses_redundant_nested_code_tags(self):
+        nested = '<pre><code><mark>&lt;EVIDENCE&gt;</mark></code></pre>'
+        expected = '<code spellcheck="false"><mark>&lt;EVIDENCE&gt;</mark></code>'
+
+        self.assertEqual(apply_formatting_cleanup(nested), expected)
+        self.assertEqual(apply_formatting_cleanup(expected), expected)
+        self.assertEqual(
+            apply_formatting_cleanup("<code><code><code>payload</code></code></code>"),
+            '<code spellcheck="false">payload</code>',
+        )
+
+    def test_formatting_cleanup_repairs_existing_nested_code_and_preserves_attributes(self):
+        nested = (
+            '<code spellcheck="false">\n'
+            '<code class="language-python" data-end="653" start="645">payload</code>\n'
+            '</code>'
+        )
+
+        self.assertEqual(
+            apply_formatting_cleanup(nested),
+            '<code class="language-python" spellcheck="false">\npayload\n</code>',
+        )
+
+    def test_formatting_cleanup_keeps_nested_code_with_meaningful_sibling_content(self):
+        nested = '<code>prefix <code>payload</code> suffix</code>'
+
+        self.assertEqual(
+            apply_formatting_cleanup(nested),
+            '<code spellcheck="false">prefix <code spellcheck="false">payload</code> suffix</code>',
+        )
+
+    def test_formatting_cleanup_preserves_nested_code_classes(self):
+        nested = '<code class="OuterClass"><code class="inner-class">payload</code></code>'
+
+        self.assertEqual(
+            apply_formatting_cleanup(nested),
+            '<code class="OuterClass inner-class" spellcheck="false">payload</code>',
+        )
+
+    def test_formatting_cleanup_does_not_collapse_malformed_or_multi_child_code(self):
+        malformed = '<code><code>payload</code>'
+        multiple_children = '<code><code>payload</code><span>note</span></code>'
+
+        self.assertEqual(
+            apply_formatting_cleanup(malformed),
+            '<code spellcheck="false"><code spellcheck="false">payload</code>',
+        )
+        self.assertEqual(
+            apply_formatting_cleanup(multiple_children),
+            '<code spellcheck="false"><code spellcheck="false">payload</code><span>note</span></code>',
+        )
+
     def test_formatting_cleanup_removes_editor_offsets_from_code_tags(self):
         self.assertEqual(
             apply_formatting_cleanup('<code data-end="653" start="645" spellcheck="false">payload</code>'),
@@ -424,6 +476,24 @@ class NormalisationRegressionTests(unittest.TestCase):
 
         self.assertEqual(parsed_finding.description, "<mark>secret</mark>")
         self.assertEqual(parsed_observation.description, "<mark>secret</mark>")
+
+    def test_nested_code_cleanup_runs_for_finding_and_observation_imports(self):
+        value = '<pre><code><mark>&lt;EVIDENCE&gt;</mark></code></pre>'
+        expected = '<code spellcheck="false"><mark>&lt;EVIDENCE&gt;</mark></code>'
+
+        parsed_finding = Finding.from_dict(finding(description=value).to_dict())
+        parsed_observation = Observation.from_dict(
+            {
+                "id": 1,
+                "title": "Observation",
+                "description": value,
+                "tags": [],
+                "extra_fields": {},
+            }
+        )
+
+        self.assertEqual(parsed_finding.description, expected)
+        self.assertEqual(parsed_observation.description, expected)
 
     def test_formatting_cleanup_removes_deprecated_markup_review_noise(self):
         legacy = '<span class="highlight" style="background-color: yellow">secret</span>'
