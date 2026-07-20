@@ -1,5 +1,20 @@
 # GhostMerge TODO
 
+## Current priorities (ranked)
+
+1. **Protect completed merge output from abandonment.** Remove or disable the destructive
+   “Abandon merge” action once output is ready, and reject direct abandonment requests for
+   completed jobs. This closes the clearest remaining local data-loss path.
+2. **Preview and approve final merged output before writing or outbound sync.** Give operators a
+   last verification point after all review and sensitivity decisions, before durable output can
+   become the source of a destructive API replacement.
+3. **Show unambiguous source identity throughout left/right review.** Use configured API names and
+   uploaded filenames consistently so an operator cannot mistake which source or destination a
+   decision affects.
+
+These are the next selected implementation items. The first is a contained safety fix; the second
+and third reduce the risk of approving or synchronising the wrong reviewed content.
+
 ## Project Setup & Infrastructure
 - [x] Created CLI entry point using Typer
 - [x] Set up centralised config file (`ghostmerge_config.json`)
@@ -25,7 +40,7 @@
 
 ## Style normalisation
 - [ ] Depluralisation
-- [X] Removal of double spaces
+- [x] Removal of double spaces
 - [ ] Title case normalising
 - [ ] Control or advise on use of parenthesis
 - [ ] Enforce the presence of reference URLs (configurable)
@@ -62,7 +77,7 @@
       dictionaries without overwriting a populated compliance reference.
 
 ## Automatic Merge Engine and supporting functions
-- [x] Refactor such that we use "left" and "right" instead of A and B (in progress)
+- [x] Refactor such that we use "left" and "right" instead of A and B
 - [x] Handle unique-to-left/right detection
 - [x] Detect and route conflicting records
 - [x] Maintain original IDs in output
@@ -108,28 +123,26 @@
 - [ ] Remove or disable the “Abandon merge” button when a merge job is complete.
       Define the terminal job states consistently and ensure completed output cannot be deleted or
       invalidated through an abandonment action that is no longer applicable.
-- [ ] Remove user-facing references to “AzSure”.
-      Audit page copy, templates, help text, configuration descriptions, and error messages; replace
-      each reference with the intended product or source name without changing compatibility-facing
-      identifiers unless separately approved.
+- [x] Remove user-facing references to “AzSure”.
+      A repository-wide audit found no remaining references outside this historical TODO entry.
 - [ ] Review and rename page and section titles so they describe the current workflow consistently.
       Identify every affected title before changing shared terminology, and retain stable routes,
       API fields, and other compatibility-facing identifiers.
 - [ ] Rename “Previous merge jobs” to “Merge jobs”.
       Apply the wording consistently to the relevant heading, navigation, and accessible labels
       without changing job filtering or historical-job behaviour.
-- [ ] Limit the number of rows shown in home-page tables and add pagination.
-      Define a sensible default page size, stable ordering, empty and out-of-range behaviour, and
-      accessible previous/next controls while preserving filters and other table state.
+- [x] Limit the number of rows shown in home-page history tables.
+      Configurable recent-row limits and links to dedicated full-history pages are implemented for
+      API source checks and merge jobs.
+- [ ] Add pagination to the dedicated history pages.
+      Define a sensible page size, stable ordering, empty and out-of-range behaviour, and accessible
+      previous/next controls while preserving filters and other table state.
 - [x] Fix web sensitivity review so multiple sensitive terms in the same field are all reviewed.
-      `get_next_sensitivity_item()` currently returns only the first hit in a field after advancing
-      `sensitivity_field_index`; after the user handles that hit, review resumes at the next field,
-      so remaining hits in the same value can be skipped and left in downloaded output.
+      Review now remains on the current field until every sensitive hit has been handled, preventing
+      later terms in the same value from reaching downloaded output without a decision.
 - [x] Block web finalisation until conflict review is fully complete.
-      Direct access to `/jobs/<id>/complete`, or download redirects to completion, can call
-      `finalise_job()` before all conflicts are resolved. `finalise_job()` should not serialise
-      partial `merged_left`/`merged_right`; it should reject incomplete jobs or drive completion only
-      when there are no unresolved conflict review items.
+      Completion routes and output persistence now reject incomplete conflict or sensitivity review,
+      and durable output readiness additionally requires both output files.
 - [ ] Correct the left/right column titles when API sources are used.
       Display the configured source names and source types consistently so users can tell which API
       or uploaded file each value came from throughout preview, conflict review, and completion.
@@ -166,9 +179,8 @@
       preserved extra fields, and `ghostmerge_last_synced_at`; legacy finding-only jobs retain
       destination observations for backwards compatibility.
 - [x] Define a standard `extra_fields` timestamp for the last update to each Finding Template.
-      Decide the exact key name, timestamp format, and whether GhostMerge or Ghostwriter should be
-      authoritative. Once agreed, populate that field during API sync and preserve it through file
-      import/export workflows.
+      GhostMerge writes the authoritative UTC `ghostmerge_last_synced_at` value during outbound sync
+      and preserves it through file import/export workflows.
 - [ ] Confirm whether findings and observations expose a reliable created/updated timestamp in the
       Ghostwriter API and internal data structures. Document its source, timezone, precision, and
       suitability for conflict detection before using it in matching or sync decisions.
@@ -176,13 +188,16 @@
       Define which fetch, merge, backup, or sync action should run; the scheduling mechanism;
       locking and duplicate-run behaviour; credentials handling; retries; logging; and failure alerts
       before implementation.
-- [ ] Apply the same configured rate limiting to sync-back requests as the main API fetch/sync path.
-      Verify all request routes share throttling, retry, and backoff behaviour without reducing
-      protection against duplicate or concurrent sync operations.
+- [x] Apply configured rate limiting to all Ghostwriter GraphQL requests, including outbound sync.
+      Fetch, backup, validation, deletion, creation, tagging, and restore use the same rate-limited
+      GraphQL client transport.
+- [ ] Add bounded retry and backoff behaviour for retryable Ghostwriter API failures.
+      Define retryable errors, attempt limits, backoff and jitter, progress reporting, and safe
+      behaviour around destructive operations without weakening duplicate-operation locks.
 
 ##  Sensitive Content Checker
 - [x] Load sensitivity list from file
 - [x] Scan selected fields (e.g. impact, description)
 - [x] Suggest redaction or replacement
 - [x] Allow override per field/output file
-- [X] Redact from left, but retain in right (or vice versa)
+- [x] Redact from left, but retain in right (or vice versa)
