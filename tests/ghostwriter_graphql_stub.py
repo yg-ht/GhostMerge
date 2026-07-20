@@ -37,6 +37,21 @@ def ghostwriter_finding_record(record_id: int, title: str, *, extra_fields: dict
     }
 
 
+def ghostwriter_observation_record(
+    record_id: int,
+    title: str,
+    *,
+    extra_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the stored GraphQL shape for an Observation Template."""
+    return {
+        "id": record_id,
+        "title": title,
+        "description": f"Existing content for {title}",
+        "extraFields": copy.deepcopy(extra_fields or {}),
+    }
+
+
 class GhostwriterGraphQLStub:
     """Maintain a small Ghostwriter-like template library behind HTTP GraphQL."""
 
