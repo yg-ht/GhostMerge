@@ -101,10 +101,10 @@
       with safe defaults for short strings, structured fields, and HTML.
 
 ## Web Frontend
-- [ ] Verify that every required merge stage is complete before presenting a job as completed.
-      Define the required stages and ensure the status shown on the home page, job pages, and final
-      output cannot report completion while review, sensitivity checks, sync, or another required
-      stage remains unfinished.
+- [x] Verify that every required merge stage is complete before presenting a job as completed.
+      Inbound API import, merge/output, and outbound API sync now have distinct persisted state.
+      Output is ready only after conflict and sensitivity review and durable creation of both JSON
+      files. Optional left and right outbound sync states do not block local output completion.
 - [ ] Remove or disable the “Abandon merge” button when a merge job is complete.
       Define the terminal job states consistently and ensure completed output cannot be deleted or
       invalidated through an abandonment action that is no longer applicable.

@@ -477,7 +477,7 @@
     <main class="{% block main_class %}{% endblock %}">
       {% if progress %}
       <section class="progress" aria-label="Review progress">
-        <div class="metric"><span>Phase</span><strong>{{ progress.phase }}</strong></div>
+        <div class="metric"><span>Merge/output phase</span><strong>{{ progress.phase_label }}</strong></div>
         <div class="metric"><span>Match</span><strong>{{ progress.current_match }} / {{ progress.total_matches }}</strong></div>
         <div class="metric"><span>Completed</span><strong>{{ progress.completed_matches }}</strong></div>
         <div class="metric"><span>Unmatched</span><strong>{{ progress.unmatched_left }} L / {{ progress.unmatched_right }} R</strong></div>

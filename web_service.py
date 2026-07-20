@@ -93,6 +93,7 @@ class MergeJob:
     observation_conflict_phase_complete: bool = False
     conflict_phase_complete: bool = False
     sensitivity_phase_complete: bool = False
+    output_phase_complete: bool = False
     sensitivity_template_type: str = "finding"
     sensitivity_side: str = "left"
     sensitivity_record_index: int = 0
@@ -678,7 +679,9 @@ def load_job(jobs_dir: Path, job_id: str) -> MergeJob:
         data = json.loads(job_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise WebMergeError("Job state could not be read. Please refresh and try again.") from exc
-    return job_from_dict(data)
+    job = job_from_dict(data)
+    _reconcile_output_state(job, data, job_path.parent)
+    return job
 
 
 def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
@@ -691,7 +694,9 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
         job_dir = job_path.parent
         updated_at = _human_file_mtime(job_path)
         try:
-            job = job_from_dict(json.loads(job_path.read_text(encoding="utf-8")))
+            data = json.loads(job_path.read_text(encoding="utf-8"))
+            job = job_from_dict(data)
+            _reconcile_output_state(job, data, job_dir)
         except Exception as exc:
             jobs.append(
                 PreviousJobItem(
@@ -710,7 +715,7 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
         jobs.append(
             PreviousJobItem(
                 job_id=job.job_id,
-                phase=str(progress["phase"]),
+                phase=str(progress["phase_label"]),
                 matches=int(progress["total_matches"]),
                 completed_matches=min(int(progress["completed_matches"]), int(progress["total_matches"])),
                 updated_at=updated_at,
@@ -723,12 +728,43 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
 
 
 def save_outputs(job: MergeJob, jobs_dir: Path, result: MergeResult) -> None:
+    """Persist both outputs before marking the merge output as ready."""
+    if not job.conflict_phase_complete or not job.sensitivity_phase_complete:
+        raise WebMergeError("All review stages must be complete before saving merged output.")
+    if job.final_left is None or job.final_right is None:
+        raise WebMergeError("Merge output must be finalised before it can be saved.")
     job_dir = _job_dir(jobs_dir, job.job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     left_output = _output_payload(result.left_records, result.left_observations)
     right_output = _output_payload(result.right_records, result.right_observations)
-    (job_dir / "left.json").write_text(json.dumps(left_output, indent=2), encoding="utf-8")
-    (job_dir / "right.json").write_text(json.dumps(right_output, indent=2), encoding="utf-8")
+
+    # Persist the incomplete marker first so a process interruption cannot leave a
+    # stale completed state pointing at one old and one newly written output.
+    job.output_phase_complete = False
+    save_job(job, jobs_dir)
+    try:
+        _write_json_atomic(job_dir / "left.json", left_output)
+        _write_json_atomic(job_dir / "right.json", right_output)
+    except (OSError, TypeError, ValueError) as exc:
+        raise WebMergeError(f"Merged output could not be written: {exc}") from exc
+    job.output_phase_complete = True
+    save_job(job, jobs_dir)
+
+
+def finalised_job_result(job: MergeJob) -> MergeResult:
+    """Return already-finalised output for download or outbound synchronisation."""
+    if not job.output_phase_complete:
+        raise WebMergeError("Merged output must be ready before outbound API synchronisation.")
+    if job.final_left is None or job.final_right is None:
+        raise WebMergeError("Finalised merge output is incomplete.")
+    observations_left = job.final_observations_left or []
+    observations_right = job.final_observations_right or []
+    return MergeResult(
+        left_records=[item.to_dict() for item in job.final_left],
+        right_records=[item.to_dict() for item in job.final_right],
+        left_observations=[item.to_dict() for item in observations_left],
+        right_observations=[item.to_dict() for item in observations_right],
+    )
 
 
 def job_summary(job: MergeJob) -> dict[str, int | bool | str]:
@@ -745,20 +781,31 @@ def job_summary(job: MergeJob) -> dict[str, int | bool | str]:
         "merged_observations": len(job.merged_observations_left),
         "conflict_phase_complete": job.conflict_phase_complete,
         "sensitivity_phase_complete": job.sensitivity_phase_complete,
+        "output_phase_complete": job.output_phase_complete,
         "sync_results": job.sync_results,
     })
     return summary
 
 
 def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
-    phase = "conflicts"
+    phase = "conflict_review"
     if job.conflict_phase_complete and not job.sensitivity_phase_complete:
-        phase = "sensitivity"
-    elif job.conflict_phase_complete and job.sensitivity_phase_complete:
-        phase = "complete"
+        phase = "sensitivity_review"
+    elif job.conflict_phase_complete and job.sensitivity_phase_complete and not job.output_phase_complete:
+        phase = "ready_to_finalise"
+    elif job.conflict_phase_complete and job.sensitivity_phase_complete and job.output_phase_complete:
+        phase = "output_ready"
+
+    phase_labels = {
+        "conflict_review": "Conflict review",
+        "sensitivity_review": "Sensitivity review",
+        "ready_to_finalise": "Ready to finalise",
+        "output_ready": "Merged output ready",
+    }
 
     return {
         "phase": phase,
+        "phase_label": phase_labels[phase],
         "current_match": min(job.match_index + 1, len(job.matches)) if job.matches else 0,
         "total_matches": len(job.matches),
         "total_observation_matches": len(job.observation_matches),
@@ -870,6 +917,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         observation_conflict_phase_complete=data.get("observation_conflict_phase_complete", data.get("conflict_phase_complete", False)),
         conflict_phase_complete=data["conflict_phase_complete"],
         sensitivity_phase_complete=data["sensitivity_phase_complete"],
+        output_phase_complete=bool(data.get("output_phase_complete", False)),
         sensitivity_template_type=data.get("sensitivity_template_type", "finding"),
         sensitivity_side=data["sensitivity_side"],
         sensitivity_record_index=data["sensitivity_record_index"],
@@ -893,6 +941,18 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
             data.get("observation_orphan_reprocess_complete", False),
         ),
     )
+
+
+def _reconcile_output_state(job: MergeJob, data: dict[str, Any], job_dir: Path) -> None:
+    """Validate persisted completion against final data and both durable output files."""
+    has_final_records = job.final_left is not None and job.final_right is not None
+    has_output_files = (job_dir / "left.json").is_file() and (job_dir / "right.json").is_file()
+    if "output_phase_complete" in data:
+        job.output_phase_complete = bool(data.get("output_phase_complete")) and has_final_records and has_output_files
+    else:
+        # Jobs written before the explicit marker are complete only when their old
+        # final arrays and both files provide equivalent durable evidence.
+        job.output_phase_complete = has_final_records and has_output_files
 
 
 def _get_next_conflict_for_kind(job: MergeJob, kind: str) -> Optional[ConflictReviewItem]:

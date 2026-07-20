@@ -36,6 +36,7 @@ from web_service import (
     apply_sensitivity_decision,
     create_merge_job,
     finalise_job,
+    finalised_job_result,
     get_active_conflict_position,
     get_current_match_preview,
     get_next_conflict,
@@ -324,9 +325,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             job = load_job(jobs_dir, job_id)
             _require_completed_review(job, action="Completion")
-            result = finalise_job(job)
-            save_outputs(job, jobs_dir, result)
-            save_job(job, jobs_dir)
+            if not job.output_phase_complete:
+                result = finalise_job(job)
+                save_outputs(job, jobs_dir, result)
             return render_template(
                 "complete.html",
                 job=job,
@@ -342,7 +343,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             return render_template("error.html", error="Unknown sync side."), 404
         try:
             job = load_job(jobs_dir, job_id)
-            _require_completed_review(job)
+            _require_output_ready(job)
             _require_api_backed_side(job, side)
             if request.method == "GET":
                 return render_template(
@@ -469,11 +470,11 @@ def create_app(test_config: dict | None = None) -> Flask:
         if side not in {"left", "right"}:
             return render_template("error.html", error="Unknown output side."), 404
         try:
-            load_job(jobs_dir, job_id)
+            job = load_job(jobs_dir, job_id)
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 404
         path = jobs_dir / job_id / f"{side}.json"
-        if not path.exists():
+        if not job.output_phase_complete or not path.exists():
             return redirect(url_for("complete", job_id=job_id))
         return send_file(path, as_attachment=True, download_name=f"ghostmerge-{side}.json")
 
@@ -860,9 +861,11 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
         import_id,
         {
             "import_id": import_id,
+            "operation": "inbound_api_import",
+            "direction": "inbound",
             "status": "running",
             "stage": "queued",
-            "message": "Queued API import.",
+            "message": "Queued inbound API import.",
             "complete": 0,
             "total": len(api_sides),
             "api_estimated_totals": api_estimated_totals,
@@ -885,9 +888,11 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
     with app.app_context():
         state = {
             "import_id": import_id,
+            "operation": "inbound_api_import",
+            "direction": "inbound",
             "status": "error",
             "stage": "error",
-            "message": "API import failed before state could be loaded.",
+            "message": "Inbound API import failed before state could be loaded.",
             "complete": 0,
             "total": 0,
             "job_id": None,
@@ -953,7 +958,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                 {
                     "status": "done",
                     "stage": "complete",
-                    "message": "API import complete.",
+                    "message": "Inbound API import complete.",
                     "complete": len(api_sides),
                     "total": len(api_sides),
                     "api_status": "done",
@@ -1105,8 +1110,11 @@ def _load_import_state(jobs_dir: Path, import_id: str) -> dict:
     if not path.exists():
         raise WebMergeError("API import not found.")
     try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state.setdefault("operation", "inbound_api_import")
+        state.setdefault("direction", "inbound")
         return _operation_state_with_liveness(
-            json.loads(path.read_text(encoding="utf-8")),
+            state,
             "API import",
             _ACTIVE_API_IMPORTS,
         )
@@ -1131,6 +1139,8 @@ def _list_api_imports(jobs_dir: Path) -> list[dict[str, Any]]:
                 "message": f"API import state could not be read: {exc}",
             }
         state.setdefault("import_id", import_id)
+        state.setdefault("operation", "inbound_api_import")
+        state.setdefault("direction", "inbound")
         state["updated_at"] = _human_file_mtime(path)
         imports.append(_operation_state_with_liveness(state, "API import", _ACTIVE_API_IMPORTS))
     return imports
@@ -1187,10 +1197,19 @@ def _start_sync_thread(app: Flask, jobs_dir: Path, job_id: str, side: str) -> No
     _acquire_sync_lock(lock_path, side)
     job = load_job(jobs_dir, job_id)
     try:
-        _require_completed_review(job)
+        _require_output_ready(job)
         _require_api_backed_side(job, side)
         _require_sync_not_active(job, side)
-        job.sync_results[side] = {"status": "running", "stage": "queued", "message": "Queued", "complete": 0, "total": 0}
+        job.sync_results[side] = {
+            "operation": "outbound_api_sync",
+            "direction": "outbound",
+            "side": side,
+            "status": "running",
+            "stage": "queued",
+            "message": "Queued outbound API sync.",
+            "complete": 0,
+            "total": 0,
+        }
         save_job(job, jobs_dir)
         thread = threading.Thread(target=_sync_job_side, args=(app, jobs_dir, job_id, side), daemon=True)
         thread.start()
@@ -1205,6 +1224,9 @@ def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
             current = load_job(jobs_dir, job_id)
             previous_state = dict(current.sync_results.get(side) or {})
             next_state = {
+                "operation": "outbound_api_sync",
+                "direction": "outbound",
+                "side": side,
                 # Fetch and backup helpers report their own local completion.  The outbound
                 # operation is complete only after the final replacement event succeeds.
                 "status": "done" if event.stage == "complete" and event.status == "done" else "running",
@@ -1221,9 +1243,9 @@ def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
 
         try:
             job = load_job(jobs_dir, job_id)
-            _require_completed_review(job)
+            _require_output_ready(job)
             _require_api_backed_side(job, side)
-            result = finalise_job(job)
+            result = finalised_job_result(job)
             records = result.left_records if side == "left" else result.right_records
             observations = (
                 result.left_observations if side == "left" else result.right_observations
@@ -1233,9 +1255,12 @@ def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
             job = load_job(jobs_dir, job_id)
             observation_count = 0 if observations is None else len(observations)
             job.sync_results[side] = {
+                "operation": "outbound_api_sync",
+                "direction": "outbound",
+                "side": side,
                 "status": "done",
                 "stage": "complete",
-                "message": "Sync complete.",
+                "message": "Outbound API sync complete.",
                 "complete": len(records) + observation_count,
                 "total": len(records) + observation_count,
                 "backup_path": str(backup_path),
@@ -1246,6 +1271,9 @@ def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
             failed_state = dict(job.sync_results.get(side) or {})
             failed_state.update(
                 {
+                    "operation": "outbound_api_sync",
+                    "direction": "outbound",
+                    "side": side,
                     "status": "error",
                     "stage": "error",
                     "message": str(exc),
@@ -1268,31 +1296,37 @@ def _safe_backup_path(side: str, filename: str) -> Path:
     return path
 
 
-def _require_completed_review(job, action: str = "Live API sync") -> None:
+def _require_completed_review(job, action: str = "Outbound API sync") -> None:
     if not job.conflict_phase_complete:
         raise WebMergeError(f"{action} is only available after conflict review is complete.")
     if not job.sensitivity_phase_complete:
         raise WebMergeError(f"{action} is only available after sensitivity review is complete.")
 
 
+def _require_output_ready(job) -> None:
+    _require_completed_review(job, action="Outbound API sync")
+    if not job.output_phase_complete:
+        raise WebMergeError("Outbound API sync is only available after merged output is ready.")
+
+
 def _require_api_backed_side(job, side: str) -> None:
     if job.input_sources.get(side) != "api":
-        raise WebMergeError(f"{side.title()} live API sync is only available for API-backed merge jobs.")
+        raise WebMergeError(f"{side.title()} outbound API sync is only available for API-backed merge jobs.")
 
 
 def _require_sync_not_active(job, side: str) -> None:
     status = (job.sync_results.get(side) or {}).get("status")
     if status == "running":
-        raise WebMergeError(f"{side.title()} live API sync is already running.")
+        raise WebMergeError(f"{side.title()} outbound API sync is already running.")
     if status == "done":
-        raise WebMergeError(f"{side.title()} live API sync has already completed.")
+        raise WebMergeError(f"{side.title()} outbound API sync has already completed.")
 
 
 def _require_no_running_live_sync(jobs_dir: Path, job) -> None:
     for side in ("left", "right"):
         status = (job.sync_results.get(side) or {}).get("status")
         if status in RUNNING_OPERATION_STATUSES or _sync_lock_path(jobs_dir, job.job_id, side).exists():
-            raise WebMergeError("This merge job cannot be abandoned while live API sync is running.")
+            raise WebMergeError("This merge job cannot be abandoned while outbound API sync is running.")
 
 
 def _delete_job_directory(jobs_dir: Path, job_id: str) -> None:
@@ -1314,7 +1348,7 @@ def _acquire_sync_lock(lock_path: Path, side: str) -> None:
         with lock_path.open("x", encoding="utf-8") as handle:
             handle.write("running\n")
     except FileExistsError as exc:
-        raise WebMergeError(f"{side.title()} live API sync is already running.") from exc
+        raise WebMergeError(f"{side.title()} outbound API sync is already running.") from exc
 
 
 def _release_sync_lock(lock_path: Path) -> None:

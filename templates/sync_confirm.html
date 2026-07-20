@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Confirm live sync</h1>
+<h1>Confirm outbound API sync</h1>
 <section class="panel">
   <h2>{{ server.name }}</h2>
   <p>This will permanently back up the current server Finding and Observation Templates, delete the current server libraries, and recreate them from the reviewed {{ side }} output.</p>
   <dl>
-    <dt>Target</dt><dd>{{ server.graphql_url }}</dd>
+    <dt>Destination</dt><dd>{{ server.graphql_url }}</dd>
     <dt>Rate limit</dt><dd>{{ server.rate_limit_per_second }} request(s) per second</dd>
-    <dt>Source findings</dt><dd>{% if side == "left" %}{{ job.final_left|length if job.final_left else job.merged_left|length }}{% else %}{{ job.final_right|length if job.final_right else job.merged_right|length }}{% endif %}</dd>
-    <dt>Source observations</dt><dd>{% if side == "left" %}{{ job.final_observations_left|length if job.final_observations_left else job.merged_observations_left|length }}{% else %}{{ job.final_observations_right|length if job.final_observations_right else job.merged_observations_right|length }}{% endif %}</dd>
+    <dt>Source findings</dt><dd>{% if side == "left" %}{{ job.final_left|length }}{% else %}{{ job.final_right|length }}{% endif %}</dd>
+    <dt>Source observations</dt><dd>{% if side == "left" %}{{ (job.final_observations_left or [])|length }}{% else %}{{ (job.final_observations_right or [])|length }}{% endif %}</dd>
   </dl>
   <form method="post" class="actions">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">

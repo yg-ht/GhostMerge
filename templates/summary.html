@@ -7,7 +7,7 @@
     <dt>Matched pairs</dt><dd>{{ summary.matches }}</dd>
     <dt>Unmatched left</dt><dd>{{ summary.unmatched_left }}</dd>
     <dt>Unmatched right</dt><dd>{{ summary.unmatched_right }}</dd>
-    <dt>Current phase</dt><dd>{{ summary.phase }}</dd>
+    <dt>Merge/output phase</dt><dd>{{ summary.phase_label }}</dd>
     <dt>Completed matches</dt><dd>{{ summary.completed_matches }}</dd>
   </dl>
   <div class="actions">
@@ -19,7 +19,7 @@
   {% if summary.sync_results %}
   <div class="actions">
     {% for sync_side, sync_state in summary.sync_results.items() %}
-    <a class="button secondary" href="{{ url_for('sync_status', job_id=summary.job_id, side=sync_side) }}">{{ sync_side|title }} sync status</a>
+    <a class="button secondary" href="{{ url_for('sync_status', job_id=summary.job_id, side=sync_side) }}">{{ sync_side|title }} outbound sync status</a>
     {% endfor %}
   </div>
   {% endif %}
