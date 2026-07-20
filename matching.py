@@ -4,10 +4,23 @@ from imports import (fields, fuzz, Dict, List, Tuple)
 from globals import get_config
 CONFIG = get_config()
 # local module imports
-from utils import log, normalise_text_for_matching
+from utils import log, normalise_finding_record, normalise_text_for_matching
 from model import Finding, Observation
 
 MergeRecord = Finding | Observation
+
+
+def _normalise_records_before_matching(*record_lists: List[MergeRecord]) -> None:
+    """Normalise complete records in-place before any matching comparison.
+
+    Matching can receive records that were constructed outside the JSON import
+    path, and nested values are not covered by top-level import normalisation.
+    Applying the existing recursive routine at this boundary guarantees that
+    every candidate is scored using the same canonical representation.
+    """
+    for record_list in record_lists:
+        for record in record_list:
+            normalise_finding_record(record)
 
 def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> float:
     """
@@ -218,6 +231,9 @@ def fuzzy_match_findings(
     - unmatched_left: findings in Left that were not matched by Right
     - unmatched_right: findings in Right that were not matched by Left
     """
+    # Canonicalise both candidate sets before selecting or scoring any pair.
+    _normalise_records_before_matching(list_Left, list_Right)
+
     log("INFO", f"Beginning fuzzy match on {len(list_Left)} findings from Left and {len(list_Right)} from Right", prefix="MATCHING")
 
     matches: List[Dict[str,Finding|float]] = []
@@ -273,6 +289,9 @@ def fuzzy_match_records(
     """
     Matches records from two lists using the scoring routine for their type.
     """
+    # Findings and observations share the same recursive normalisation boundary.
+    _normalise_records_before_matching(list_left, list_right)
+
     matches: List[Dict[str, MergeRecord | float]] = []
     unmatched_left: List[MergeRecord] = []
     matched_indices_right = set()
