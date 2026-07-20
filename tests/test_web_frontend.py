@@ -223,6 +223,24 @@ class WebServiceTests(unittest.TestCase):
         self.assertIsNone(item)
         self.assertTrue(job.conflict_phase_complete)
 
+    def test_formatting_only_differences_do_not_require_review(self):
+        legacy_markup = '<span class="highlight" style="background-color: yellow">secret</span>'
+        normalised_markup = "<mark>secret</mark>"
+        job = create_merge_job(
+            [record(description=legacy_markup)],
+            [record(id="2", description=normalised_markup)],
+            job_id="normalised123",
+        )
+
+        preview = get_current_match_preview(job)
+        item = get_next_conflict(job)
+
+        self.assertIsNone(preview)
+        self.assertIsNone(item)
+        self.assertTrue(job.conflict_phase_complete)
+        self.assertEqual(job.matches[0]["left"].description, normalised_markup)
+        self.assertEqual(job.matches[0]["right"].description, normalised_markup)
+
     def test_preview_selected_offered_values_leave_remaining_fields_for_review(self):
         job = create_merge_job(
             [record(description="Left detail", impact="Left impact")],

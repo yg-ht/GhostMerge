@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from globals import get_config
-from matching import fuzzy_match_findings, score_finding_similarity
+from matching import fuzzy_match_findings, fuzzy_match_records, score_finding_similarity
 from merge import (
     ResolvedWinner,
     get_compliance_reference_placeholder_choice,
@@ -496,6 +496,53 @@ class MatchingRegressionTests(unittest.TestCase):
         self.assertEqual(matches[0]["right"].id, 10)
         self.assertEqual([item.id for item in unmatched_left], [2])
         self.assertEqual([item.id for item in unmatched_right], [11])
+
+    def test_finding_records_are_normalised_before_matching(self):
+        legacy_markup = '<span class="highlight" style="background-color: yellow">secret</span>'
+        normalised_markup = "<mark>secret</mark>"
+        left = finding(
+            description=legacy_markup,
+            extra_fields={"nested": {"detail": "  repeated   text  "}},
+        )
+        right = finding(
+            id=2,
+            description=normalised_markup,
+            extra_fields={"nested": {"detail": "repeated text"}},
+        )
+
+        matches, unmatched_left, unmatched_right = fuzzy_match_findings([left], [right], threshold=70)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(unmatched_left, [])
+        self.assertEqual(unmatched_right, [])
+        self.assertEqual(matches[0]["left"].description, normalised_markup)
+        self.assertEqual(matches[0]["right"].description, normalised_markup)
+        self.assertEqual(matches[0]["left"].extra_fields, matches[0]["right"].extra_fields)
+
+    def test_observation_records_are_normalised_before_matching(self):
+        legacy_markup = '<span class="highlight" style="background-color: yellow">secret</span>'
+        normalised_markup = "<mark>secret</mark>"
+        left = Observation(
+            id=1,
+            title="Formatting observation",
+            description=legacy_markup,
+            extra_fields={"detail": "  repeated   text  "},
+        )
+        right = Observation(
+            id=2,
+            title="Formatting observation",
+            description=normalised_markup,
+            extra_fields={"detail": "repeated text"},
+        )
+
+        matches, unmatched_left, unmatched_right = fuzzy_match_records([left], [right], threshold=70)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(unmatched_left, [])
+        self.assertEqual(unmatched_right, [])
+        self.assertEqual(matches[0]["left"].description, normalised_markup)
+        self.assertEqual(matches[0]["right"].description, normalised_markup)
+        self.assertEqual(matches[0]["left"].extra_fields, matches[0]["right"].extra_fields)
 
 
 class MergeRegressionTests(unittest.TestCase):
