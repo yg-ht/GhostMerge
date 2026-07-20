@@ -37,6 +37,26 @@
 - [x] Apply matching-only text normalisation for punctuation, case, whitespace, dashes, and quotes
 - [x] Sort normalised tags deterministically
 - [x] Canonicalise configured HTML cleanup output for stable attributes, classes, and styles
+- [ ] Normalise evidence placeholders from curly-bracket syntax to the canonical angle-bracket syntax.
+      Define the accepted input forms, canonical output, escaping rules, and tests for placeholders
+      embedded in plain text and HTML before enabling the transformation.
+- [ ] Normalise spans that apply manual black text formatting.
+      Identify the editor-generated colour attributes and values, remove only redundant black-text
+      styling, and preserve spans whose styling or attributes carry other meaning.
+- [ ] Normalise `<span style="background-color: yellow">` markup to the canonical highlight markup,
+      including the variant without the currently recognised `highlight` class.
+- [ ] Normalise list items containing a single paragraph from `<li><p>…</p></li>` to `<li>…</li>`.
+      Preserve paragraph wrappers when a list item contains multiple paragraphs or other meaningful
+      sibling content.
+- [ ] Normalise line breaks at the ends of HTML tags as well as line breaks between tags.
+      Document which whitespace is structural or user-visible so normalisation does not join words
+      or alter preformatted/code content.
+- [ ] Canonicalise equivalent HTML tag ordering, including sequences such as
+      `&gt;<br/></mark></p>`. Define valid target nesting and malformed-input handling before applying
+      rewrites so the resulting markup remains semantically equivalent and well formed.
+- [ ] Canonicalise an absent or empty compliance reference in `extra_fields` as
+      `"compliance_reference": null`. Cover missing keys, empty strings, JSON strings, and nested
+      dictionaries without overwriting a populated compliance reference.
 
 ## Automatic Merge Engine and supporting functions
 - [x] Refactor such that we use "left" and "right" instead of A and B (in progress)
@@ -69,6 +89,13 @@
 - [ ] Pause / resume CLI merge sessions for large merges
 - [ ] Integrate a CVSS checker to check the severity levels match the score / vector
 - [x] Normalise CVSS vector formatting before review and sync
+- [ ] Allow configured fields to auto-accept a substantially longer populated value instead of
+      requiring manual review. Start with `extra_fields.ghostpiper_mapping`, make the field names
+      configurable, define a conservative length/difference threshold, and retain manual review for
+      ambiguous, blank, malformed, or similarly sized values.
+- [ ] Define per-field difference metrics using percentage difference and/or changed-character count.
+      Determine whether the metrics are display-only or may drive configurable auto-accept rules,
+      with safe defaults for short strings, structured fields, and HTML.
 
 ## Web Frontend
 - [x] Fix web sensitivity review so multiple sensitive terms in the same field are all reviewed.
@@ -80,12 +107,46 @@
       `finalise_job()` before all conflicts are resolved. `finalise_job()` should not serialise
       partial `merged_left`/`merged_right`; it should reject incomplete jobs or drive completion only
       when there are no unresolved conflict review items.
+- [ ] Correct the left/right column titles when API sources are used.
+      Display the configured source names and source types consistently so users can tell which API
+      or uploaded file each value came from throughout preview, conflict review, and completion.
+- [ ] Add an unselect-field control to the record preview so an accidental field choice can be
+      cleared before submitting the selected decisions.
+- [ ] In “Conflict review - Finding”, allow the user to click the chosen option itself.
+      Keep keyboard controls and accessible form semantics, visibly indicate the active choice, and
+      ensure clicking an already selected option has predictable behaviour.
+- [ ] Provide a safely sanitised rendered HTML view alongside the existing line-by-line diff.
+      Make the raw/source view readily available and prevent active content or unsafe links from
+      executing in the rendered preview.
+- [ ] Add intra-line character highlighting so individual character changes are visible rather than
+      marking only complete lines as changed.
+- [ ] Improve diff alignment when one side splits or joins lines.
+      Avoid treating every following line as changed by using content-aware line alignment before
+      applying intra-line character highlighting.
+- [ ] Review the left/right colour scheme because the current colours imply misleading semantics.
+      Define colours for source identity separately from added/removed/selected state and maintain
+      sufficient contrast in dark and light modes.
+- [ ] Audit table usage across the web interface and define a consistent approach.
+      Decide which data should use semantic tables versus cards or definition lists, then standardise
+      headings, responsive behaviour, accessibility, spacing, and actions without a broad rewrite.
+- [ ] Rename “Review remaining fields” to “Individual field review” or similarly clear wording that
+      accurately describes the next stage, and use the chosen term consistently in help text.
 
 ## Ghostwriter API Sync
 - [x] Define a standard `extra_fields` timestamp for the last update to each Finding Template.
       Decide the exact key name, timestamp format, and whether GhostMerge or Ghostwriter should be
       authoritative. Once agreed, populate that field during API sync and preserve it through file
       import/export workflows.
+- [ ] Confirm whether findings and observations expose a reliable created/updated timestamp in the
+      Ghostwriter API and internal data structures. Document its source, timezone, precision, and
+      suitability for conflict detection before using it in matching or sync decisions.
+- [ ] Design a scheduled job for unattended API operations.
+      Define which fetch, merge, backup, or sync action should run; the scheduling mechanism;
+      locking and duplicate-run behaviour; credentials handling; retries; logging; and failure alerts
+      before implementation.
+- [ ] Apply the same configured rate limiting to sync-back requests as the main API fetch/sync path.
+      Verify all request routes share throttling, retry, and backoff behaviour without reducing
+      protection against duplicate or concurrent sync operations.
 
 ##  Sensitive Content Checker
 - [x] Load sensitivity list from file
