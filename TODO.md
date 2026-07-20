@@ -1,6 +1,23 @@
 # GhostMerge TODO
 
-## Current priorities (ranked)
+## Active development: Web and CLI workflow parity
+
+The current development goal is to make every shared processing stage explicit, equivalent, and
+verifiable in the Web UI. Web-only API and Observation Template features remain supported extensions
+rather than being constrained to the CLI feature set.
+
+- [x] Define the shared workflow contract and add a baseline CLI/Web output-equivalence regression.
+- [ ] Snapshot sensitivity configuration per Web job and apply the CLI-equivalent pre-match pass.
+- [ ] Add a visible, resumable post-merge sensitivity stage with persisted audit statistics.
+- [ ] Validate sensitivity decisions against server-derived pending state rather than browser fields.
+- [ ] Resolve remaining shared-workflow differences in invalid-input handling and interactive mode.
+      Include canonical handling of equal blank optional fields: the CLI currently resolves empty
+      strings through its offered-value path while the Web service preserves them unchanged.
+- [ ] Add final output preview and explicit approval before durable output or outbound API sync.
+- [ ] Complete end-to-end parity, failure-mode, security, and backwards-compatibility regression tests.
+- [ ] Update operator documentation after the implemented workflow passes final review.
+
+## Other current priorities (ranked)
 
 1. **Protect completed merge output from abandonment.** Remove or disable the destructive
    “Abandon merge” action once output is ready, and reject direct abandonment requests for

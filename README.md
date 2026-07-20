@@ -41,6 +41,34 @@ GhostMerge currently supports this workflow:
 9. Write separate left and right output JSON files.
 10. Optionally live-sync reviewed output back to API-backed Ghostwriter sources.
 
+### Shared CLI and Web workflow contract
+
+The CLI and Web UI use different presentation and persistence mechanisms, but their common Finding
+workflow is expected to preserve the same processing order and produce equivalent JSON records for
+the same inputs, configuration, and analyst decisions:
+
+1. Load configuration and two input record sets.
+2. Validate and normalise every accepted record.
+3. Load the configured sensitive-term rules once for the operation.
+4. When enabled, apply explicit pre-match sensitive-term replacements while deferring flag-only
+   terms for analyst review.
+5. Run the configured fuzzy-match thresholds in order.
+6. Let the analyst accept or reject each proposed record match and resolve its differing fields.
+7. Optionally reprocess remaining unmatched records without recreating a rejected pair.
+8. Copy records still unmatched on either side into both output sets.
+9. Review configured sensitive terms across both merged output sets.
+10. Resequence aligned record IDs and serialise both outputs.
+
+A stage that has no findings is still a completed stage. In particular, the Web UI must eventually
+show whether sensitivity checking was disabled, failed, found no terms, or required decisions; it
+must not silently treat those states as equivalent. Web-only Observation Template processing, API
+imports, durable job persistence, output approval, backups, and outbound synchronisation extend this
+shared contract.
+
+The parity contract applies to valid Finding inputs and shared configuration. Browser-specific input
+correction and the meaning of non-interactive mode are tracked as explicit parity decisions rather
+than being left as accidental differences.
+
 ## Installation
 
 ### Requirements

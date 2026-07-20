@@ -805,12 +805,28 @@ class CliRegressionTests(unittest.TestCase):
         self.assertEqual(unmatched_left, [])
         self.assertEqual(unmatched_right, [rejected_right])
 
-    def test_cli_can_merge_sample_files_with_config_path(self):
+    def test_cli_and_web_service_produce_equivalent_shared_finding_outputs(self):
+        """Keep the common non-interactive Finding workflow equivalent across both interfaces."""
         python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
         self.skipTest("project virtualenv is not present") if not python_bin.exists() else None
 
-        left_record = finding(id=1, title="Cross-site scripting", description="Left detail").to_dict()
-        right_record = finding(id=2, title="Cross site scripting", description="Right detail").to_dict()
+        common_populated_fields = {
+            "host_detection_techniques": "Inspect browser process telemetry.",
+            "network_detection_techniques": "Inspect unexpected script responses.",
+            "finding_guidance": "Confirm output encoding at every trust boundary.",
+        }
+        left_record = finding(
+            id=1,
+            title="Cross-site scripting",
+            description="Left detail",
+            **common_populated_fields,
+        ).to_dict()
+        right_record = finding(
+            id=2,
+            title="Cross site scripting",
+            description="Right detail",
+            **common_populated_fields,
+        ).to_dict()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -865,11 +881,32 @@ class CliRegressionTests(unittest.TestCase):
             merged_left = json.loads(out_left.read_text(encoding="utf-8"))
             merged_right = json.loads(out_right.read_text(encoding="utf-8"))
 
+        # Import locally so the CLI-focused regression module does not make the
+        # Flask service a prerequisite for unrelated model and merge tests.
+        from web_service import (
+            apply_conflict_decision,
+            create_merge_job,
+            finalise_job,
+            get_next_conflict,
+        )
+
+        web_job = create_merge_job([left_record], [right_record], job_id="paritybaseline123")
+        while (conflict := get_next_conflict(web_job)) is not None:
+            # Non-interactive CLI mode accepts the offered value for this
+            # controlled fixture, so apply the same decision to the Web job.
+            apply_conflict_decision(
+                web_job,
+                {"field_name": conflict.field_name, "action": "offered"},
+            )
+        web_result = finalise_job(web_job)
+
         self.assertEqual(len(merged_left), 1)
         self.assertEqual(len(merged_right), 1)
         self.assertEqual(merged_left[0]["id"], "1")
         self.assertEqual(merged_right[0]["id"], "1")
         self.assertEqual(merged_left[0]["description"], merged_right[0]["description"])
+        self.assertEqual(web_result.left_records, merged_left)
+        self.assertEqual(web_result.right_records, merged_right)
 
 
 if __name__ == "__main__":
