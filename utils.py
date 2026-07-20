@@ -585,6 +585,113 @@ def _normalise_configured_attr_names(value: Any) -> list[str]:
 
     return attr_names
 
+def _html_tag_is_balanced(input_string: str, tag_name: str) -> bool:
+    """Return whether opening and closing tags are balanced in source order.
+
+    BeautifulSoup deliberately repairs malformed fragments. Formatting cleanup
+    must not use that recovery behaviour to remove wrappers when the source does
+    not contain a complete structure, because doing so could hide damaged input.
+    """
+    tag_pattern = re.compile(
+        rf"<\s*(/?)\s*{re.escape(tag_name)}\b[^<>]*?>",
+        flags=re.IGNORECASE,
+    )
+    depth = 0
+
+    for match in tag_pattern.finditer(input_string):
+        tag_text = match.group(0)
+        if re.search(r"/\s*>$", tag_text):
+            continue
+
+        if match.group(1):
+            depth -= 1
+            if depth < 0:
+                return False
+        else:
+            depth += 1
+
+    return depth == 0
+
+def _normalise_redundant_code_wrappers(input_string: str) -> str:
+    """Collapse a code wrapper whose only meaningful child is another code tag.
+
+    The default pre-to-code rule can encounter editor markup shaped as
+    ``<pre><code>...</code></pre>``. Once both configured rules have run, that
+    becomes invalid, redundant ``code > code`` markup. Only this narrow shape is
+    collapsed; sibling text and additional child elements retain their original
+    structure.
+    """
+    opening_tags = re.findall(r"<\s*code\b[^<>]*?>", input_string, flags=re.IGNORECASE)
+    if len(opening_tags) < 2 or not _html_tag_is_balanced(input_string, "code"):
+        return input_string
+
+    soup = BeautifulSoup(input_string, "html.parser")
+    changed = False
+
+    # Work from the innermost element outwards. This repairs repeated historical
+    # nesting in one pass without repeatedly rescanning potentially hostile HTML.
+    for outer_code in reversed(soup.find_all("code")):
+        direct_children = list(outer_code.children)
+        inner_code_tags = [
+            child
+            for child in direct_children
+            if not isinstance(child, NavigableString) and getattr(child, "name", None) == "code"
+        ]
+        if len(inner_code_tags) != 1:
+            continue
+
+        inner_code = inner_code_tags[0]
+        non_wrapper_content = [
+            child
+            for child in direct_children
+            if child is not inner_code
+            and (not isinstance(child, NavigableString) or str(child).strip())
+        ]
+        if non_wrapper_content:
+            continue
+
+        # Whitespace around the inner element is code content. Move it inside
+        # the retained element rather than silently discarding it.
+        inner_index = direct_children.index(inner_code)
+        leading_whitespace = "".join(str(child) for child in direct_children[:inner_index])
+        trailing_whitespace = "".join(str(child) for child in direct_children[inner_index + 1:])
+        if leading_whitespace:
+            inner_code.insert(0, NavigableString(leading_whitespace))
+        if trailing_whitespace:
+            inner_code.append(NavigableString(trailing_whitespace))
+
+        # Prefer the more specific inner attributes while retaining any
+        # non-conflicting attributes placed on the generated outer wrapper.
+        merged_attrs = dict(outer_code.attrs)
+        merged_attrs.update(inner_code.attrs)
+        if "class" in outer_code.attrs and "class" in inner_code.attrs:
+            outer_value = outer_code.attrs["class"]
+            inner_value = inner_code.attrs["class"]
+            outer_classes = (
+                list(outer_value)
+                if isinstance(outer_value, (list, tuple))
+                else str(outer_value).split()
+            )
+            inner_classes = (
+                list(inner_value)
+                if isinstance(inner_value, (list, tuple))
+                else str(inner_value).split()
+            )
+            merged_attrs["class"] = sorted(set(outer_classes + inner_classes))
+        inner_code.attrs = merged_attrs
+
+        # Extract before replacing the parent so BeautifulSoup does not retain
+        # the element in both locations during tree mutation.
+        inner_code.extract()
+        outer_code.replace_with(inner_code)
+        changed = True
+
+    if not changed:
+        return input_string
+
+    log("DEBUG", "Collapsed redundant nested code wrapper(s)", prefix="UTILS")
+    return str(soup)
+
 def _iter_formatting_cleanup_rules() -> list[dict[str, Any]]:
     """Return validated formatting cleanup rules from config."""
     rules = CONFIG.get("formatting_cleanup_rules", [])
@@ -719,8 +826,9 @@ def apply_formatting_cleanup(input_string: str) -> str:
             applied += 1
 
         result_parts.append(input_string[cursor:])
+        normalised_result = _normalise_redundant_code_wrappers("".join(result_parts).strip())
         log("DEBUG", f"Applied {applied} configured formatting cleanup replacement(s)", prefix="UTILS")
-        return normalise_html_tag_spacing("".join(result_parts).strip())
+        return normalise_html_tag_spacing(normalised_result)
 
     return input_string
 
