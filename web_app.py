@@ -24,7 +24,7 @@ from ghostwriter_api import (
     verify_backup,
 )
 from globals import get_config
-from sensitivity import load_sensitive_terms
+from sensitivity import load_sensitive_terms, sensitive_terms_digest
 from utils import load_config
 from web_service import (
     WebMergeError,
@@ -145,7 +145,12 @@ def create_app(test_config: dict | None = None) -> Flask:
                 return redirect(url_for("import_status", import_id=import_id))
             left_records = _load_records_for_side("left", request.files.get("left_file"), input_sources["left"])
             right_records = _load_records_for_side("right", request.files.get("right_file"), input_sources["right"])
-            job = create_merge_job(left_records, right_records, input_sources=input_sources)
+            job = create_merge_job(
+                left_records,
+                right_records,
+                input_sources=input_sources,
+                sensitivity_snapshot=_build_sensitivity_snapshot(),
+            )
             save_job(job, jobs_dir)
             return redirect(url_for("summary", job_id=job.job_id))
         except (UnicodeDecodeError, WebMergeError, GhostwriterApiError) as exc:
@@ -297,7 +302,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     def sensitivity(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
-            item = get_next_sensitivity_item(job, _load_terms())
+            item = get_next_sensitivity_item(job, _sensitivity_terms_for_job(job))
             save_job(job, jobs_dir)
             if item is None:
                 return redirect(url_for("complete", job_id=job.job_id))
@@ -855,6 +860,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
             _server_for_side(side)
     api_sides = [side for side in ("left", "right") if input_sources[side] == "api"]
     api_estimated_totals = {side: _last_known_api_record_count(jobs_dir, side) for side in api_sides}
+    sensitivity_snapshot = _build_sensitivity_snapshot()
     _ACTIVE_API_IMPORTS.add(import_id)
     _save_import_state(
         jobs_dir,
@@ -871,6 +877,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
             "api_estimated_totals": api_estimated_totals,
             "input_sources": input_sources,
             "file_records": file_records,
+            "sensitivity_snapshot": sensitivity_snapshot,
             "job_id": None,
             "worker_pid": os.getpid(),
         },
@@ -951,7 +958,12 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                     }
                 )
                 _save_import_state(jobs_dir, import_id, state)
-            job = create_merge_job(records["left"], records["right"], input_sources=input_sources)
+            job = create_merge_job(
+                records["left"],
+                records["right"],
+                input_sources=input_sources,
+                sensitivity_snapshot=state.get("sensitivity_snapshot"),
+            )
             save_job(job, jobs_dir)
             state = _load_import_state(jobs_dir, import_id)
             state.update(
@@ -967,6 +979,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
             )
             # Drop copied records once the durable merge job exists so the import file does not duplicate data.
             state.pop("file_records", None)
+            state.pop("sensitivity_snapshot", None)
             _save_import_state(jobs_dir, import_id, state)
         except Exception as exc:
             state.update({"status": "error", "stage": "error", "message": str(exc)})
@@ -1389,6 +1402,53 @@ def _load_terms():
         CONFIG["sensitivity_check_terms_file"],
         CONFIG.get("script_dir", Path(__file__).resolve().parent),
     )
+
+
+def _build_sensitivity_snapshot() -> dict[str, Any]:
+    """Freeze one Web job's protected sensitivity policy without logging it."""
+    enabled = bool(CONFIG.get("sensitivity_check_enabled"))
+    if not enabled:
+        return {
+            "version": 1,
+            "enabled": False,
+            "pre_match_enabled": bool(CONFIG.get("sensitivity_check_before_matching", False)),
+            "terms": {},
+            "terms_digest": None,
+            "terms_source": None,
+            "configuration_error": None,
+        }
+
+    terms = _load_terms()
+    configured_source = Path(str(CONFIG.get("sensitivity_check_terms_file", ""))).name or None
+    if terms is None:
+        return {
+            "version": 1,
+            "enabled": True,
+            "pre_match_enabled": bool(CONFIG.get("sensitivity_check_before_matching", False)),
+            "terms": {},
+            "terms_digest": None,
+            "terms_source": configured_source,
+            "configuration_error": "Configured sensitive-term rules could not be loaded.",
+        }
+
+    return {
+        "version": 1,
+        "enabled": True,
+        "pre_match_enabled": bool(CONFIG.get("sensitivity_check_before_matching", False)),
+        "terms": dict(terms),
+        "terms_digest": sensitive_terms_digest(terms),
+        "terms_source": configured_source,
+        "configuration_error": None,
+    }
+
+
+def _sensitivity_terms_for_job(job) -> Optional[dict[str, Optional[str]]]:
+    """Use a new job's immutable snapshot while preserving legacy job behaviour."""
+    if job.sensitivity_snapshot_version >= 1:
+        if not job.sensitivity_enabled or job.sensitivity_configuration_error:
+            return None
+        return dict(job.sensitivity_terms)
+    return _load_terms()
 
 
 if __name__ == "__main__":

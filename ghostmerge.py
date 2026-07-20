@@ -12,7 +12,11 @@ from utils import load_config, log, load_json, write_json, return_ASCII_art, Abo
 from model import Finding
 from matching import fuzzy_match_findings
 from merge import append_unmatched_records, merge_main, reject_matched_record, renumber_findings, reprocess_orphan_matches
-from sensitivity import sensitivities_checker_single_record, load_sensitive_terms, sensitivities_checker_records
+from sensitivity import (
+    apply_pre_match_sensitivity_replacements,
+    sensitivities_checker_single_record,
+    load_sensitive_terms,
+)
 
 # run the app
 app = typer.Typer()
@@ -115,19 +119,14 @@ def ghostmerge(
                 "Applying explicit sensitive-term replacements before fuzzy matching",
                 prefix="CLI",
             )
-            findings_left = sensitivities_checker_records(
-                findings_left,
-                'Left',
-                terms,
-                interactive_override=False,
-                prompt_for_flag_only=False,
-            )
-            findings_right = sensitivities_checker_records(
-                findings_right,
-                'Right',
-                terms,
-                interactive_override=False,
-                prompt_for_flag_only=False,
+            left_pre_match_stats = apply_pre_match_sensitivity_replacements(findings_left, terms)
+            right_pre_match_stats = apply_pre_match_sensitivity_replacements(findings_right, terms)
+            log(
+                "INFO",
+                "Pre-match sensitivity processing completed "
+                f"({left_pre_match_stats['replacements_applied']} left replacement(s), "
+                f"{right_pre_match_stats['replacements_applied']} right replacement(s))",
+                prefix="CLI",
             )
 
     matches: List[Dict[str,Finding|float]] = []

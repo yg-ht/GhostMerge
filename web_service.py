@@ -22,7 +22,12 @@ from merge import (
     renumber_records,
 )
 from model import Finding, Observation, get_type_as_str, is_optional_field
-from sensitivity import apply_sensitive_replacement, check_for_sensitivities
+from sensitivity import (
+    apply_pre_match_sensitivity_replacements,
+    apply_sensitive_replacement,
+    check_for_sensitivities,
+    empty_pre_match_sensitivity_stats,
+)
 from utils import blank_for_type, normalise_finding_record, stringify_field, wrap_string
 
 CONFIG = get_config()
@@ -110,6 +115,14 @@ class MergeJob:
     rejected_match_keys: list[str] = field(default_factory=list)
     finding_orphan_reprocessing_stopped: bool = False
     observation_orphan_reprocessing_stopped: bool = False
+    sensitivity_snapshot_version: int = 0
+    sensitivity_enabled: bool = False
+    sensitivity_pre_match_enabled: bool = False
+    sensitivity_terms: dict[str, Optional[str]] = field(default_factory=dict)
+    sensitivity_terms_digest: Optional[str] = None
+    sensitivity_terms_source: Optional[str] = None
+    sensitivity_configuration_error: Optional[str] = None
+    pre_match_sensitivity_stats: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 @dataclass
@@ -200,6 +213,7 @@ def create_merge_job(
     right_records: list[dict[str, Any]] | dict[str, list[dict[str, Any]]],
     job_id: Optional[str] = None,
     input_sources: Optional[dict[str, str]] = None,
+    sensitivity_snapshot: Optional[dict[str, Any]] = None,
 ) -> MergeJob:
     """Create a merge job and run the existing fuzzy matching rounds."""
     includes_observations = _input_includes_observations(left_records) or _input_includes_observations(right_records)
@@ -209,6 +223,47 @@ def create_merge_job(
     findings_right = parse_findings(right_templates["findings"])
     observations_left = parse_observations(left_templates["observations"])
     observations_right = parse_observations(right_templates["observations"])
+
+    # Only new Web entry points provide a versioned snapshot. Direct service
+    # callers and legacy persisted jobs retain version zero semantics until the
+    # visible sensitivity milestone supplies an explicit migration path.
+    snapshot = sensitivity_snapshot or {}
+    snapshot_version = int(snapshot.get("version", 0))
+    sensitivity_enabled = bool(snapshot.get("enabled", False))
+    sensitivity_pre_match_enabled = bool(snapshot.get("pre_match_enabled", False))
+    sensitivity_terms = dict(snapshot.get("terms") or {})
+    pre_match_stats = {
+        "finding_left": empty_pre_match_sensitivity_stats(),
+        "finding_right": empty_pre_match_sensitivity_stats(),
+        "observation_left": empty_pre_match_sensitivity_stats(),
+        "observation_right": empty_pre_match_sensitivity_stats(),
+    }
+
+    if (
+        snapshot_version >= 1
+        and sensitivity_enabled
+        and not snapshot.get("configuration_error")
+        and sensitivity_pre_match_enabled
+        and sensitivity_terms
+    ):
+        # Apply the same explicit-replacement policy used by the CLI before
+        # fuzzy matching. Flag-only hits remain untouched for analyst review.
+        pre_match_stats["finding_left"] = apply_pre_match_sensitivity_replacements(
+            findings_left,
+            sensitivity_terms,
+        )
+        pre_match_stats["finding_right"] = apply_pre_match_sensitivity_replacements(
+            findings_right,
+            sensitivity_terms,
+        )
+        pre_match_stats["observation_left"] = apply_pre_match_sensitivity_replacements(
+            observations_left,
+            sensitivity_terms,
+        )
+        pre_match_stats["observation_right"] = apply_pre_match_sensitivity_replacements(
+            observations_right,
+            sensitivity_terms,
+        )
 
     matches: list[dict[str, Any]] = []
     unmatched_left = findings_left
@@ -258,6 +313,14 @@ def create_merge_job(
         merged_observations_right=[],
         input_sources=input_sources or {"left": "file", "right": "file"},
         includes_observations=includes_observations,
+        sensitivity_snapshot_version=snapshot_version,
+        sensitivity_enabled=sensitivity_enabled,
+        sensitivity_pre_match_enabled=sensitivity_pre_match_enabled,
+        sensitivity_terms=sensitivity_terms,
+        sensitivity_terms_digest=snapshot.get("terms_digest"),
+        sensitivity_terms_source=snapshot.get("terms_source"),
+        sensitivity_configuration_error=snapshot.get("configuration_error"),
+        pre_match_sensitivity_stats=pre_match_stats,
     )
 
 
@@ -940,6 +1003,14 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
             "observation_orphan_reprocessing_stopped",
             data.get("observation_orphan_reprocess_complete", False),
         ),
+        sensitivity_snapshot_version=int(data.get("sensitivity_snapshot_version", 0)),
+        sensitivity_enabled=bool(data.get("sensitivity_enabled", False)),
+        sensitivity_pre_match_enabled=bool(data.get("sensitivity_pre_match_enabled", False)),
+        sensitivity_terms=dict(data.get("sensitivity_terms") or {}),
+        sensitivity_terms_digest=data.get("sensitivity_terms_digest"),
+        sensitivity_terms_source=data.get("sensitivity_terms_source"),
+        sensitivity_configuration_error=data.get("sensitivity_configuration_error"),
+        pre_match_sensitivity_stats=dict(data.get("pre_match_sensitivity_stats") or {}),
     )
 
 

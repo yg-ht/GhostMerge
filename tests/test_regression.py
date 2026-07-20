@@ -26,9 +26,11 @@ from merge import (
 )
 from model import Finding, Observation
 from sensitivity import (
+    apply_pre_match_sensitivity_replacements,
     apply_sensitive_replacement,
     check_for_sensitivities,
     load_sensitive_terms,
+    sensitive_terms_digest,
 )
 from utils import (
     Aborting,
@@ -694,6 +696,29 @@ class SensitivityRegressionTests(unittest.TestCase):
             "<strong>secret</strong>",
         )
 
+    def test_pre_match_processing_applies_replacements_and_defers_flag_only_hits(self):
+        record = finding(title="ACME portal", description="Contains a secret value")
+
+        stats = apply_pre_match_sensitivity_replacements(
+            [record],
+            {"acme": "[CLIENT]", "secret": None},
+        )
+
+        self.assertEqual(record.title, "[CLIENT] portal")
+        self.assertEqual(record.description, "Contains a secret value")
+        self.assertEqual(stats["records_scanned"], 1)
+        self.assertGreater(stats["fields_scanned"], 0)
+        self.assertEqual(stats["hits_found"], 2)
+        self.assertEqual(stats["replacements_applied"], 1)
+        self.assertEqual(stats["flag_only_hits_deferred"], 1)
+
+    def test_sensitive_terms_digest_is_stable_without_exposing_term_order(self):
+        first = sensitive_terms_digest({"secret": None, "acme": "[CLIENT]"})
+        second = sensitive_terms_digest({"acme": "[CLIENT]", "secret": None})
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 64)
+
 
 class CliRegressionTests(unittest.TestCase):
     def setUp(self):
@@ -714,6 +739,66 @@ class CliRegressionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--file-left", result.stdout)
         self.assertIn("--file-right", result.stdout)
+
+    def test_cli_entrypoint_applies_shared_pre_match_sensitivity_replacements(self):
+        python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
+        self.skipTest("project virtualenv is not present") if not python_bin.exists() else None
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            left_path = tmp_path / "left.json"
+            right_path = tmp_path / "right.json"
+            output_left = tmp_path / "left-output.json"
+            output_right = tmp_path / "right-output.json"
+            terms_path = tmp_path / "terms.txt"
+            config_path = tmp_path / "config.json"
+            input_record = finding(title="ACME portal").to_dict()
+
+            left_path.write_text(json.dumps([input_record]), encoding="utf-8")
+            right_path.write_text(json.dumps([input_record]), encoding="utf-8")
+            terms_path.write_text("acme => [CLIENT]\nsecret\n", encoding="utf-8")
+            with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
+                config = json.load(handle)
+            config.update(
+                {
+                    "interactive_mode": False,
+                    "sensitivity_check_enabled": True,
+                    "sensitivity_check_before_matching": True,
+                    "sensitivity_check_terms_file": str(terms_path),
+                    "log_file_enabled": False,
+                }
+            )
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    str(python_bin),
+                    "ghostmerge.py",
+                    "--file-left",
+                    str(left_path),
+                    "--file-right",
+                    str(right_path),
+                    "--out-left",
+                    str(output_left),
+                    "--out-right",
+                    str(output_right),
+                    "--config",
+                    str(config_path),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                input="\n",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            merged_left = json.loads(output_left.read_text(encoding="utf-8"))
+            merged_right = json.loads(output_right.read_text(encoding="utf-8"))
+
+        self.assertEqual(merged_left[0]["title"], "[CLIENT] portal")
+        self.assertEqual(merged_right[0]["title"], "[CLIENT] portal")
 
     def test_unmatched_records_are_copied_between_outputs(self):
         left_only = finding(title="Left only")

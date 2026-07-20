@@ -1,11 +1,30 @@
 # external module imports
 from imports import (Any, BeautifulSoup, Dict, fields, key, List, NavigableString, os, re, Tuple, Optional)
+from hashlib import sha256
+import json
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
 from utils import log, stringify_field, apply_configured_normalisation, _normalise_sensitive_term_for_matching
 from model import Finding
+
+
+def empty_pre_match_sensitivity_stats() -> Dict[str, int]:
+    """Return a fresh counter set for one pre-match record collection."""
+    return {
+        "records_scanned": 0,
+        "fields_scanned": 0,
+        "hits_found": 0,
+        "replacements_applied": 0,
+        "flag_only_hits_deferred": 0,
+    }
+
+
+def sensitive_terms_digest(terms: Dict[str, Optional[str]]) -> str:
+    """Return a stable digest without exposing configured terms in diagnostics."""
+    canonical_terms = json.dumps(terms, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return sha256(canonical_terms.encode("utf-8")).hexdigest()
 
 def _opening_tag_name(tag_text: str) -> Optional[str]:
     """Return the element name if tag_text is an opening HTML tag."""
@@ -181,6 +200,46 @@ def apply_sensitive_replacement(field_value: Any, sensitive_term: str, replaceme
 
     replaced = _replace_literal_or_opening_tag_pair(field_value, sensitive_term, replacement)
     return apply_configured_normalisation(replaced)
+
+
+def apply_pre_match_sensitivity_replacements(
+    records: List[Any],
+    terms: Dict[str, Optional[str]],
+) -> Dict[str, int]:
+    """Apply explicit replacements before matching and return non-sensitive counters.
+
+    Flag-only terms deliberately remain unchanged for the later analyst review.
+    Records are updated in place so callers can continue through their existing
+    matching pipeline without converting model objects a second time.
+    """
+    stats = empty_pre_match_sensitivity_stats()
+    if not terms:
+        return stats
+
+    for record in records:
+        stats["records_scanned"] += 1
+        for field_def in fields(record):
+            if field_def.name == "id":
+                continue
+
+            field_value = record.get(field_def.name)
+            if not field_value:
+                continue
+
+            stats["fields_scanned"] += 1
+            for sensitive_term, offered in check_for_sensitivities(field_value, terms):
+                stats["hits_found"] += 1
+                if offered is None:
+                    stats["flag_only_hits_deferred"] += 1
+                    continue
+
+                current_value = record.get(field_def.name)
+                replaced_value = apply_sensitive_replacement(current_value, sensitive_term, offered)
+                if replaced_value != current_value:
+                    record.set(field_def.name, replaced_value)
+                    stats["replacements_applied"] += 1
+
+    return stats
 
 def sensitivities_checker_records(
     records: List[Finding],

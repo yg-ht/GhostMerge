@@ -14,7 +14,13 @@ from ghostwriter_graphql_stub import (
     running_ghostwriter_stub,
 )
 from globals import get_config
-from web_app import create_app, _check_api_source, _import_job_sources, _sync_job_side
+from web_app import (
+    _build_sensitivity_snapshot,
+    _check_api_source,
+    _import_job_sources,
+    _sync_job_side,
+    create_app,
+)
 from web_service import (
     WebMergeError,
     acknowledge_current_preview,
@@ -143,6 +149,30 @@ class WebServiceTests(unittest.TestCase):
             load_records_from_json_text('{"id": 1}')
         with self.assertRaises(WebMergeError):
             load_records_from_json_text('["not a record"]')
+
+    def test_sensitivity_snapshot_records_loaded_and_failed_configuration(self):
+        configure_for_web_tests(sensitivity_check_enabled=True)
+
+        loaded_snapshot = _build_sensitivity_snapshot()
+
+        self.assertEqual(loaded_snapshot["version"], 1)
+        self.assertTrue(loaded_snapshot["enabled"])
+        self.assertIn("acme-corp", loaded_snapshot["terms"])
+        self.assertEqual(len(loaded_snapshot["terms_digest"]), 64)
+        self.assertIsNone(loaded_snapshot["configuration_error"])
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            configure_for_web_tests(
+                sensitivity_check_enabled=True,
+                sensitivity_check_terms_file="missing-terms.txt",
+                script_dir=Path(tmp_dir),
+            )
+            failed_snapshot = _build_sensitivity_snapshot()
+
+        self.assertTrue(failed_snapshot["enabled"])
+        self.assertEqual(failed_snapshot["terms"], {})
+        self.assertIsNone(failed_snapshot["terms_digest"])
+        self.assertIsNotNone(failed_snapshot["configuration_error"])
 
     def test_finalise_rejects_incomplete_conflict_review(self):
         job = create_merge_job(
@@ -379,6 +409,85 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(loaded.job_id, "persist123")
         self.assertEqual(loaded.match_index, job.match_index)
         self.assertEqual(loaded.field_index, job.field_index)
+
+    def test_pre_match_sensitivity_snapshot_applies_to_findings_and_observations(self):
+        configure_for_web_tests(
+            sensitivity_check_enabled=True,
+            sensitivity_check_before_matching=True,
+        )
+        snapshot = {
+            "version": 1,
+            "enabled": True,
+            "pre_match_enabled": True,
+            "terms": {"acme": "[CLIENT]", "secret": None},
+            "terms_digest": "snapshot-digest",
+            "terms_source": "terms.txt",
+            "configuration_error": None,
+        }
+        # The job snapshot, not mutable process configuration, controls the
+        # pre-match decision after an asynchronous import has started.
+        get_config()["sensitivity_check_before_matching"] = False
+
+        job = create_merge_job(
+            {
+                "findings": [record(title="ACME portal", description="Secret detail")],
+                "observations": [observation(title="ACME process", description="Secret observation")],
+            },
+            {"findings": [], "observations": []},
+            job_id="prematchsnapshot123",
+            sensitivity_snapshot=snapshot,
+        )
+
+        self.assertEqual(job.unmatched_left[0].title, "[CLIENT] portal")
+        self.assertEqual(job.unmatched_left[0].description, "Secret detail")
+        self.assertEqual(job.unmatched_observations_left[0].title, "[CLIENT] process")
+        self.assertEqual(job.unmatched_observations_left[0].description, "Secret observation")
+        self.assertEqual(job.pre_match_sensitivity_stats["finding_left"]["replacements_applied"], 1)
+        self.assertEqual(job.pre_match_sensitivity_stats["finding_left"]["flag_only_hits_deferred"], 1)
+        self.assertEqual(job.pre_match_sensitivity_stats["observation_left"]["replacements_applied"], 1)
+        self.assertEqual(job.pre_match_sensitivity_stats["observation_left"]["flag_only_hits_deferred"], 1)
+
+    def test_sensitivity_snapshot_round_trips_and_legacy_jobs_default_to_version_zero(self):
+        snapshot = {
+            "version": 1,
+            "enabled": True,
+            "pre_match_enabled": False,
+            "terms": {"acme": "[CLIENT]"},
+            "terms_digest": "snapshot-digest",
+            "terms_source": "terms.txt",
+            "configuration_error": None,
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            job = create_merge_job(
+                [record()],
+                [],
+                job_id="snapsh6001",
+                sensitivity_snapshot=snapshot,
+            )
+            save_job(job, jobs_dir)
+
+            loaded = load_job(jobs_dir, "snapsh6001")
+            job_path = jobs_dir / "snapsh6001" / "job.json"
+            legacy_data = json.loads(job_path.read_text(encoding="utf-8"))
+            for key in list(legacy_data):
+                if key.startswith("sensitivity_snapshot") or key in {
+                    "sensitivity_enabled",
+                    "sensitivity_pre_match_enabled",
+                    "sensitivity_terms",
+                    "sensitivity_terms_digest",
+                    "sensitivity_terms_source",
+                    "sensitivity_configuration_error",
+                    "pre_match_sensitivity_stats",
+                }:
+                    legacy_data.pop(key)
+            legacy_job = web_service.job_from_dict(legacy_data)
+
+        self.assertEqual(loaded.sensitivity_snapshot_version, 1)
+        self.assertEqual(loaded.sensitivity_terms, {"acme": "[CLIENT]"})
+        self.assertEqual(loaded.sensitivity_terms_digest, "snapshot-digest")
+        self.assertEqual(legacy_job.sensitivity_snapshot_version, 0)
+        self.assertEqual(legacy_job.sensitivity_terms, {})
 
     def test_previous_jobs_are_listed_from_job_store(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -842,6 +951,62 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(right_download.status_code, 200)
         self.assertEqual(left_download.get_json()[0]["description"], "Right detail")
         self.assertEqual(right_download.get_json()[0]["description"], "Right detail")
+
+    def test_file_upload_snapshots_terms_and_applies_pre_match_replacements(self):
+        config = get_config()
+        config["sensitivity_check_enabled"] = True
+        config["sensitivity_check_before_matching"] = True
+        left = json.dumps([record(title="ACME-CORP portal")]).encode("utf-8")
+        right = json.dumps([record(id="2", title="[REDACTED COMPANY] portal")]).encode("utf-8")
+
+        response = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = response.headers["Location"].rstrip("/").split("/")[-2]
+        job = load_job(Path(self.tmp_dir.name), job_id)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(job.sensitivity_snapshot_version, 1)
+        self.assertTrue(job.sensitivity_enabled)
+        self.assertEqual(len(job.sensitivity_terms_digest), 64)
+        self.assertEqual(job.matches[0]["left"].title, "[REDACTED COMPANY] portal")
+        self.assertEqual(job.pre_match_sensitivity_stats["finding_left"]["replacements_applied"], 1)
+
+    def test_sensitivity_review_uses_job_snapshot_after_runtime_config_changes(self):
+        config = get_config()
+        config["sensitivity_check_before_matching"] = False
+        snapshot = {
+            "version": 1,
+            "enabled": True,
+            "pre_match_enabled": False,
+            "terms": {"acme": None},
+            "terms_digest": "snapshot-digest",
+            "terms_source": "terms.txt",
+            "configuration_error": None,
+        }
+        job = create_merge_job(
+            [record(description="ACME detail")],
+            [],
+            job_id="snapreview123",
+            sensitivity_snapshot=snapshot,
+        )
+        self.assertIsNone(get_next_conflict(job))
+        save_job(job, Path(self.tmp_dir.name))
+
+        # A resumed job must keep the rules it started with rather than adopting
+        # a later deployment-wide configuration change.
+        config["sensitivity_check_enabled"] = False
+        response = self.client.get("/jobs/snapreview123/sensitivity")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Finding sensitivity review", response.data)
+        self.assertIn(b"ACME", response.data)
 
     def test_preview_reject_match_preserves_both_records_as_unmatched_outputs(self):
         left = json.dumps([record(title="Shared title", description="Left detail")]).encode("utf-8")
@@ -1648,6 +1813,8 @@ class FlaskRouteTests(unittest.TestCase):
         )
         self.assertEqual(state["operation"], "inbound_api_import")
         self.assertEqual(state["direction"], "inbound")
+        self.assertEqual(state["sensitivity_snapshot"]["version"], 1)
+        self.assertFalse(state["sensitivity_snapshot"]["enabled"])
         status = self.client.get(response.headers["Location"])
         self.assertEqual(status.status_code, 200)
         self.assertIn(b"Inbound API import status", status.data)
@@ -1808,6 +1975,10 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(state["api_total"], 1)
         self.assertEqual(state["api_estimated_total"], 12)
         self.assertEqual(state["side_name"], "Left Test Ghostwriter")
+        self.assertNotIn("sensitivity_snapshot", state)
+        imported_job = load_job(jobs_dir, state["job_id"])
+        self.assertEqual(imported_job.sensitivity_snapshot_version, 1)
+        self.assertFalse(imported_job.sensitivity_enabled)
 
     def test_home_shows_api_fetch_check_for_configured_sources(self):
         config = get_config()

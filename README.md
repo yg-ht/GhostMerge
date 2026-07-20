@@ -634,6 +634,19 @@ acme-corp => [REDACTED COMPANY]
 During processing, GhostMerge scans finding fields for these terms and offers
 the analyst a chance to edit, keep, or apply a replacement.
 
+When `sensitivity_check_before_matching` is enabled, both interfaces apply only
+rules with explicit replacements before fuzzy matching. Flag-only terms remain
+unchanged for the later analyst review. This keeps sensitive names from
+artificially reducing a match score while avoiding an automatic deletion where
+no replacement was configured.
+
+Each new Web merge job stores the enabled state, normalised rules, configured
+source name, and a SHA-256 rules digest with its protected local job data. File
+and API-backed jobs therefore continue with the rules they started with even if
+the deployment configuration changes while review is in progress. The raw rule
+snapshot and merged record content are not rendered in job summaries or logged;
+treat the Web job directory as sensitive working data.
+
 ## Formatting cleanup
 
 Formatting cleanup is configured in `ghostmerge_config.example.json` and local

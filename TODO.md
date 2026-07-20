@@ -7,7 +7,7 @@ verifiable in the Web UI. Web-only API and Observation Template features remain 
 rather than being constrained to the CLI feature set.
 
 - [x] Define the shared workflow contract and add a baseline CLI/Web output-equivalence regression.
-- [ ] Snapshot sensitivity configuration per Web job and apply the CLI-equivalent pre-match pass.
+- [x] Snapshot sensitivity configuration per Web job and apply the CLI-equivalent pre-match pass.
 - [ ] Add a visible, resumable post-merge sensitivity stage with persisted audit statistics.
 - [ ] Validate sensitivity decisions against server-derived pending state rather than browser fields.
 - [ ] Resolve remaining shared-workflow differences in invalid-input handling and interactive mode.
