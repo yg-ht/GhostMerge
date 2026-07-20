@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Merge complete</h1>
+<h1>Merged output ready</h1>
 <section class="panel">
   <p>The merged output files are ready.</p>
   <div class="actions">
@@ -9,18 +9,18 @@
   </div>
 </section>
 <section class="panel">
-  <h2>Live API synchronisation</h2>
-  <p>Live sync backs up the target server, removes its existing Finding and Observation Templates, then reloads this reviewed output.</p>
+  <h2>Outbound API synchronisation</h2>
+  <p>Outbound sync backs up the destination server, removes its existing Finding and Observation Templates, then reloads this reviewed output.</p>
   <div class="actions">
     {% if job.input_sources.left == "api" and api_servers.left.configured %}
     <a class="button" href="{{ url_for('sync_side', job_id=job.job_id, side='left') }}">Sync {{ api_servers.left.name }}</a>
     {% else %}
-    <button type="button" disabled>Left API sync unavailable</button>
+    <button type="button" disabled>Left outbound sync unavailable</button>
     {% endif %}
     {% if job.input_sources.right == "api" and api_servers.right.configured %}
     <a class="button" href="{{ url_for('sync_side', job_id=job.job_id, side='right') }}">Sync {{ api_servers.right.name }}</a>
     {% else %}
-    <button type="button" disabled>Right API sync unavailable</button>
+    <button type="button" disabled>Right outbound sync unavailable</button>
     {% endif %}
   </div>
   {% if job.sync_results %}
@@ -29,7 +29,7 @@
     <dt>{{ side|title }}</dt>
     <dd>
       {{ state.status }} - {{ state.message }}
-      <a href="{{ url_for('sync_status', job_id=job.job_id, side=side) }}">View sync status</a>
+      <a href="{{ url_for('sync_status', job_id=job.job_id, side=side) }}">View outbound sync status</a>
     </dd>
     {% endfor %}
   </dl>

@@ -32,7 +32,7 @@
         <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='right') }}">Right output</a>
         {% endif %}
         {% for sync_side, sync_state in previous.sync_results.items() %}
-        <a class="button secondary" href="{{ url_for('sync_status', job_id=previous.job_id, side=sync_side) }}">{{ sync_side|title }} sync status</a>
+        <a class="button secondary" href="{{ url_for('sync_status', job_id=previous.job_id, side=sync_side) }}">{{ sync_side|title }} outbound sync status</a>
         {% endfor %}
       </td>
     </tr>

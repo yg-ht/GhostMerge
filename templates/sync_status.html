@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>API sync status</h1>
+<h1>Outbound API sync status</h1>
 <section class="panel">
-  <h2>{{ side|title }} server</h2>
+  <h2>{{ side|title }} destination server</h2>
   <dl>
-    <dt>Status</dt><dd>{{ state.status|default("queued") }}</dd>
-    <dt>Stage</dt><dd>{{ state.stage|default("queued") }}</dd>
+    <dt>Direction</dt><dd>Outbound</dd>
+    <dt>Sync status</dt><dd>{{ state.status|default("queued") }}</dd>
+    <dt>Sync stage</dt><dd>{{ state.stage|default("queued") }}</dd>
     <dt>Progress</dt><dd>{{ state.complete|default(0) }} / {{ state.total|default(0) }}</dd>
     <dt>Message</dt><dd>{{ state.message|default("Queued") }}</dd>
     {% if state.backup_path %}

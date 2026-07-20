@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>API import status</h1>
+<h1>Inbound API import status</h1>
 <section class="panel">
   <dl>
-    <dt>Status</dt><dd>{{ state.status|default("queued") }}</dd>
-    <dt>Stage</dt><dd>{{ state.stage|default("queued") }}</dd>
+    <dt>Direction</dt><dd>Inbound</dd>
+    <dt>Import status</dt><dd>{{ state.status|default("queued") }}</dd>
+    <dt>Import stage</dt><dd>{{ state.stage|default("queued") }}</dd>
     <dt>Source progress</dt><dd>{{ state.complete|default(0) }} / {{ state.total|default(0) }}</dd>
     {% if state.side_name %}
     <dt>Current source</dt><dd>{{ state.side_name }} ({{ state.side|title }}, {{ state.side_index|default(0) }} / {{ state.side_total|default(state.total|default(0)) }})</dd>

@@ -250,16 +250,36 @@ current findings and observations, stores the full backup JSON in the backup bro
 progress on a status page without saving a job. The Create merge job button
 still performs the API retrieval automatically for any side set to API.
 
-When a merge job is API-backed, the completion page offers live synchronisation
-for that side after conflict review and sensitivity review are complete.
+When a merge job is API-backed, the completion page offers outbound API
+synchronisation for that side after conflict review and sensitivity review are
+complete and both merged output files have been written successfully.
 Left and right write-back use the same workflow but remain independent: each
 side uses its own configured endpoint, bearer token, reviewed output, backup
 directory, lock, and status. Synchronising one side does not contact or modify
 the other side.
 
-### Live sync behaviour
+### Merge and API operation states
 
-Live sync is destructive. For the selected API-backed side, GhostMerge:
+GhostMerge tracks three distinct parts of the workflow:
+
+1. **Inbound API import** retrieves source records used to create a merge job.
+2. **Merge/output** covers conflict review, sensitivity review, and durable
+   creation of both reviewed JSON outputs. A job is output-ready only when both
+   files exist; interrupted or failed writes do not present the job as complete.
+3. **Outbound API sync** optionally writes one reviewed output back to its
+   corresponding API-backed destination. Left and right outbound states are
+   tracked separately, and neither is required for local merged output to be
+   complete.
+
+Existing completed jobs created before the output-ready marker was introduced
+remain compatible when their saved final records and both output files are
+present. Persisted API operation status values are retained for compatibility;
+the operation and direction fields distinguish inbound import from outbound
+sync.
+
+### Outbound sync behaviour
+
+Outbound sync is destructive. For the selected API-backed side, GhostMerge:
 
 1. Runs a non-destructive GraphQL preflight.
 2. Validates the reviewed records can be converted to Ghostwriter API inputs.
@@ -276,7 +296,7 @@ restore individual records.
 
 ### Sync metadata
 
-When GhostMerge writes Finding or Observation Templates through live API sync, it records the
+When GhostMerge writes Finding or Observation Templates through outbound API sync, it records the
 write timestamp in `extra_fields.ghostmerge_last_synced_at`. GhostMerge is
 authoritative for this field. The value is a UTC ISO-8601 timestamp in
 `YYYY-MM-DDTHH:MM:SSZ` format. Existing `extra_fields` values are preserved, and
@@ -393,10 +413,10 @@ Ghostwriter authenticates GraphQL requests with `Authorization: Bearer TOKEN`.
 Current Ghostwriter releases support short-lived login JWTs, user API tokens with
 the `gwat_` prefix, and service tokens with the `gwst_` prefix.
 
-Do not use the GraphQL `login` action for GhostMerge live sync. That action
+Do not use the GraphQL `login` action for GhostMerge outbound API sync. That action
 returns a short-lived user JWT. It is also disabled for accounts that use MFA.
 
-For regular GhostMerge live sync, use a `gwat_` user API token created from the
+For regular GhostMerge outbound API sync, use a `gwat_` user API token created from the
 Ghostwriter profile page's API Tokens card. A user API token inherits the
 creating user's current permissions, can have an explicit expiry, can be
 revoked, and works for accounts that use MFA. Because GhostMerge can make
@@ -406,7 +426,7 @@ Finding and Observation Template operations GhostMerge genuinely needs.
 
 Ghostwriter also supports `gwst_` service tokens for non-human automation, but
 Ghostwriter cannot currently grant a service token all permissions required for
-GhostMerge live sync. Do not use a service token for this workflow unless that
+GhostMerge outbound API sync. Do not use a service token for this workflow unless that
 limitation changes and the token can be proven to read, delete, create, and tag
 Finding and Observation Templates.
 
@@ -459,7 +479,7 @@ Useful configuration areas include:
 | Sensitivity checks | Enable term scanning and configure the terms file. |
 | Web UI | Limit how many API source checks and previous merge jobs are shown on the home page. |
 | Web access | Restrict browser access by source IP, API key, frame policy, and proxy prefix. |
-| Ghostwriter API | Configure API-backed merge sources, live sync targets, tokens, rate limits, TLS, and backups. |
+| Ghostwriter API | Configure inbound API sources, outbound sync destinations, tokens, rate limits, TLS, and backups. |
 | TUI layout | Tune render width, refresh rate, and display limits. |
 
 `orphan_reprocessing_enabled` defaults to `true`. When enabled, GhostMerge offers
