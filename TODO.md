@@ -98,6 +98,26 @@
       with safe defaults for short strings, structured fields, and HTML.
 
 ## Web Frontend
+- [ ] Verify that every required merge stage is complete before presenting a job as completed.
+      Define the required stages and ensure the status shown on the home page, job pages, and final
+      output cannot report completion while review, sensitivity checks, sync, or another required
+      stage remains unfinished.
+- [ ] Remove or disable the “Abandon merge” button when a merge job is complete.
+      Define the terminal job states consistently and ensure completed output cannot be deleted or
+      invalidated through an abandonment action that is no longer applicable.
+- [ ] Remove user-facing references to “AzSure”.
+      Audit page copy, templates, help text, configuration descriptions, and error messages; replace
+      each reference with the intended product or source name without changing compatibility-facing
+      identifiers unless separately approved.
+- [ ] Review and rename page and section titles so they describe the current workflow consistently.
+      Identify every affected title before changing shared terminology, and retain stable routes,
+      API fields, and other compatibility-facing identifiers.
+- [ ] Rename “Previous merge jobs” to “Merge jobs”.
+      Apply the wording consistently to the relevant heading, navigation, and accessible labels
+      without changing job filtering or historical-job behaviour.
+- [ ] Limit the number of rows shown in home-page tables and add pagination.
+      Define a sensible default page size, stable ordering, empty and out-of-range behaviour, and
+      accessible previous/next controls while preserving filters and other table state.
 - [x] Fix web sensitivity review so multiple sensitive terms in the same field are all reviewed.
       `get_next_sensitivity_item()` currently returns only the first hit in a field after advancing
       `sensitivity_field_index`; after the user handles that hit, review resumes at the next field,
@@ -133,6 +153,14 @@
       accurately describes the next stage, and use the chosen term consistently in help text.
 
 ## Ghostwriter API Sync
+- [ ] Verify that synchronisation to the right-hand source works end to end.
+      Cover eligible and ineligible records, create and update operations, partial API failures,
+      retry behaviour, duplicate prevention, status reporting, and regression tests that prove the
+      configured right-hand destination receives the intended data only.
+- [ ] Add observation synchronisation support.
+      Define observation matching, field mapping, direction, conflict handling, create/update rules,
+      permissions, validation, rate limiting, failure recovery, and backwards compatibility before
+      implementing API requests or changing persisted job data.
 - [x] Define a standard `extra_fields` timestamp for the last update to each Finding Template.
       Decide the exact key name, timestamp format, and whether GhostMerge or Ghostwriter should be
       authoritative. Once agreed, populate that field during API sync and preserve it through file
