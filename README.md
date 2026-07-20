@@ -288,6 +288,13 @@ Outbound sync is destructive. For the selected API-backed side, GhostMerge:
 5. Recreates the reviewed output for both template types.
 6. Reapplies tags.
 
+Observation replacement is enabled for observation-aware jobs created from an
+API import or the combined `{ "findings": [...], "observations": [...] }` file
+format. An explicit empty observation list clears observations at the selected
+destination. A legacy finding-list job deliberately leaves destination
+observations unchanged; those untouched observations therefore do not receive
+a new GhostMerge sync timestamp.
+
 If preflight or record preparation fails, GhostMerge stops before backup,
 deletion, or reload. If deletion or reload fails after the backup has been
 written, the outbound sync status retains that verified backup path. Use the

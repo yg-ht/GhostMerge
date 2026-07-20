@@ -8,7 +8,11 @@ from unittest.mock import patch
 
 import web_service
 from ghostwriter_api import GHOSTMERGE_LAST_SYNCED_AT_FIELD
-from ghostwriter_graphql_stub import ghostwriter_finding_record, running_ghostwriter_stub
+from ghostwriter_graphql_stub import (
+    ghostwriter_finding_record,
+    ghostwriter_observation_record,
+    running_ghostwriter_stub,
+)
 from globals import get_config
 from web_app import create_app, _check_api_source, _import_job_sources, _sync_job_side
 from web_service import (
@@ -1385,6 +1389,96 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(reloaded.sync_results["right"]["operation"], "outbound_api_sync")
         self.assertIn("/left/", reloaded.sync_results["left"]["backup_path"])
         self.assertIn("/right/", reloaded.sync_results["right"]["backup_path"])
+
+    def test_observation_only_outbound_sync_replaces_each_side_and_adds_timestamps(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        shared_observation = observation(title="Shared observation", description="Shared detail")
+        job = create_merge_job(
+            {"findings": [], "observations": [shared_observation]},
+            {"findings": [], "observations": [dict(shared_observation, id="2")]},
+            job_id="bilateralobssync123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        self.assertIsNone(get_next_conflict(job))
+        job.merged_observations_left[0].title = "Reviewed left observation"
+        job.merged_observations_left[0].tags = "left, reviewed"
+        job.merged_observations_left[0].extra_fields = {"owner": "left-team"}
+        job.merged_observations_right[0].title = "Reviewed right observation"
+        job.merged_observations_right[0].tags = "right, reviewed"
+        job.merged_observations_right[0].extra_fields = {"owner": "right-team"}
+        result = finalise_job(job)
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+        save_outputs(job, jobs_dir, result)
+
+        left_original = ghostwriter_observation_record(
+            10,
+            "Original left observation",
+            extra_fields={"owner": "left-original"},
+        )
+        right_original = ghostwriter_observation_record(
+            20,
+            "Original right observation",
+            extra_fields={"owner": "right-original"},
+        )
+        with running_ghostwriter_stub(
+            bearer_token="left-token",
+            observations=[left_original],
+            tags={("observation", 10): ["left-original"]},
+        ) as left_server, running_ghostwriter_stub(
+            bearer_token="right-token",
+            observations=[right_original],
+            tags={("observation", 20): ["right-original"]},
+        ) as right_server:
+            config = get_config()
+            config["ghostwriter_api"]["backup_dir"] = str(jobs_dir / "observation-backups")
+            for side, server, token in (
+                ("left", left_server, "left-token"),
+                ("right", right_server, "right-token"),
+            ):
+                config["ghostwriter_api"]["servers"][side].update(
+                    {
+                        "enabled": True,
+                        "graphql_url": server.graphql_url,
+                        "base_url": "",
+                        "bearer_token": token,
+                        "rate_limit_per_second": 1000.0,
+                    }
+                )
+
+            _sync_job_side(self.app, jobs_dir, "bilateralobssync123", "left")
+
+            self.assertEqual(
+                [item["title"] for item in left_server.observations],
+                ["Reviewed left observation"],
+            )
+            self.assertEqual(right_server.observations, [right_original])
+            self.assertEqual(right_server.requests, [])
+            self.assertEqual(left_server.observations[0]["extraFields"]["owner"], "left-team")
+            self.assertIn(
+                GHOSTMERGE_LAST_SYNCED_AT_FIELD,
+                left_server.observations[0]["extraFields"],
+            )
+            self.assertEqual(list(left_server.tags.values()), [["left", "reviewed"]])
+
+            _sync_job_side(self.app, jobs_dir, "bilateralobssync123", "right")
+
+            self.assertEqual(
+                [item["title"] for item in right_server.observations],
+                ["Reviewed right observation"],
+            )
+            self.assertEqual(right_server.observations[0]["extraFields"]["owner"], "right-team")
+            self.assertIn(
+                GHOSTMERGE_LAST_SYNCED_AT_FIELD,
+                right_server.observations[0]["extraFields"],
+            )
+            self.assertEqual(list(right_server.tags.values()), [["right", "reviewed"]])
+
+        reloaded = load_job(jobs_dir, "bilateralobssync123")
+        self.assertEqual(reloaded.sync_results["left"]["status"], "done")
+        self.assertEqual(reloaded.sync_results["left"]["total"], 1)
+        self.assertEqual(reloaded.sync_results["right"]["status"], "done")
+        self.assertEqual(reloaded.sync_results["right"]["total"], 1)
 
     def test_bilateral_sync_failure_retains_backup_without_premature_done_status(self):
         jobs_dir = Path(self.tmp_dir.name)

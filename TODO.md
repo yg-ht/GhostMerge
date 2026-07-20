@@ -160,10 +160,11 @@
       Regression coverage proves each side uses only its configured destination and reviewed output,
       preserves existing extra fields while adding `ghostmerge_last_synced_at`, retains verified
       recovery backup details after destructive-stage failures, and rejects duplicate operations.
-- [ ] Add observation synchronisation support.
-      Define observation matching, field mapping, direction, conflict handling, create/update rules,
-      permissions, validation, rate limiting, failure recovery, and backwards compatibility before
-      implementing API requests or changing persisted job data.
+- [x] Add observation synchronisation support.
+      Observation-aware jobs review and write Observation Templates alongside findings. Focused
+      bilateral HTTP regression coverage confirms destination isolation, replacement, tags,
+      preserved extra fields, and `ghostmerge_last_synced_at`; legacy finding-only jobs retain
+      destination observations for backwards compatibility.
 - [x] Define a standard `extra_fields` timestamp for the last update to each Finding Template.
       Decide the exact key name, timestamp format, and whether GhostMerge or Ghostwriter should be
       authoritative. Once agreed, populate that field during API sync and preserve it through file
