@@ -339,8 +339,6 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
     Dict[str, Any] = get_auto_suggest_values(finding_record_pair['left'], finding_record_pair['right'])
 
     """
-    tui = get_tui()
-
     log("INFO", f"Starting merge_main for: {finding_pair['left'].id} ↔ {finding_pair['right'].id}", prefix="MERGE")
 
     normalise_merge_pair(finding_pair)
@@ -371,11 +369,12 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
         log("DEBUG",f"Field '{field.name}': Left={left_value!r} "
                     f"| Right={right_value!r} | Auto={auto_side!r}",prefix="MERGE",)
 
-        # Fast‑path when both sides agree and match the offered suggestion.
+        # Fast-path when both normalised source values already agree.
         if left_value == right_value:
-            finding_pair['left'].set(field.name, auto_value.get(field.name))
-            finding_pair['right'].set(field.name, auto_value.get(field.name))
-            log("DEBUG",f"Field '{field.name}' identical across both sides – auto‑accepted.",prefix="MERGE")
+            # Equal values need no resolution. Preserve the normalised source
+            # representation, including empty optional strings; the suggested
+            # value may use a different blank sentinel such as None.
+            log("DEBUG",f"Field '{field.name}' identical across both sides – preserved.",prefix="MERGE")
             continue
         else:
             different_fields = different_fields + field.name + ' | '
@@ -431,7 +430,17 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
                 continue
 
             # ── Interactive resolution ──────────────────────────────────────────
-            if CONFIG['interactive_mode'] or not auto_value or not auto_side:
+            # Non-interactive runs may accept a deterministic offered value but
+            # must never fall through to an unseen terminal prompt.
+            if not CONFIG['interactive_mode'] and (not auto_value or not auto_side):
+                log(
+                    'ERROR',
+                    f"Non-interactive mode cannot resolve field '{field.name}' without an offered value.",
+                    prefix='MERGE',
+                )
+
+            if CONFIG['interactive_mode']:
+                tui = get_tui()
                 tui.render_left_and_right_whole_finding_record(finding_pair, different_fields)
                 log('WARN', 'Please review above, ready for merge actions', 'MERGE')
 

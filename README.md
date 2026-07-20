@@ -65,9 +65,11 @@ must not silently treat those states as equivalent. Web-only Observation Templat
 imports, durable job persistence, output approval, backups, and outbound synchronisation extend this
 shared contract.
 
-The parity contract applies to valid Finding inputs and shared configuration. Browser-specific input
-correction and the meaning of non-interactive mode are tracked as explicit parity decisions rather
-than being left as accidental differences.
+The parity contract applies to valid Finding inputs and shared configuration. Equal normalised field
+values are preserved without passing through conflict suggestions, including equal blank optional
+strings. Invalid input and interaction have explicit surface-specific behaviour: the interactive CLI
+may correct type mismatches or intentionally skip a record, while the non-interactive CLI and Web UI
+fail closed. The Web UI reports the numbered invalid record and never opens a terminal prompt.
 
 ## Installation
 
@@ -180,6 +182,13 @@ terminal editor before returning to the workflow.
 For best results, run GhostMerge in a normal terminal rather than inside a
 minimal console pane that does not handle interactive key input well.
 
+When `interactive_mode` is disabled, the CLI does not start the terminal UI or
+wait for key input. It automatically accepts deterministic offered conflict and
+sensitivity replacements. If a malformed record, a conflict without an offered
+value, or a flag-only sensitive term requires analyst judgement, the command
+stops without writing outputs and returns a non-zero exit status. Use interactive
+mode when those decisions need to be corrected or reviewed in the terminal.
+
 ## Web frontend
 
 ### Start the web app
@@ -203,6 +212,11 @@ local working data and remove it when old merge jobs are no longer needed.
 The web review flow starts with a whole-record preview for each matched pair,
 then moves through field-level conflicts. Differing fields and field-level diffs
 are highlighted.
+
+Web uploads always use strict parsing, regardless of the CLI's
+`interactive_mode` setting. A malformed Finding or Observation is rejected with
+its one-based record number; Web workers never wait on an invisible terminal
+correction prompt.
 
 On the whole-record preview page, select any changed fields whose offered values
 you want to accept, then apply them in one action. Remaining changed fields stay
@@ -509,7 +523,7 @@ Useful configuration areas include:
 | Logging | Control console and file verbosity per module. |
 | Matching | Tune fuzzy match thresholds, field weights, and optional orphan reprocessing. |
 | Output | Control default output filename suffixes. |
-| Interaction | Enable or disable interactive handling. |
+| Interaction | Enable terminal review; disabled mode accepts deterministic offers and fails closed when analyst judgement is required. |
 | Normalisation | Strip whitespace, remove empty HTML tags, normalise line endings, deduplicate references, canonicalise CVSS vectors, and reduce matching-only text noise. |
 | Sensitivity checks | Enable term scanning and configure the terms file. |
 | Web UI | Limit how many API source checks and previous merge jobs are shown on the home page. |

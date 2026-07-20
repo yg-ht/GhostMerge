@@ -197,7 +197,10 @@ def parse_findings(records: list[dict[str, Any]]) -> list[Finding]:
     findings: list[Finding] = []
     for index, record in enumerate(records, start=1):
         try:
-            finding = Finding.from_dict(record)
+            # Web workers have no analyst terminal. Invalid fields must return
+            # to the browser as an error rather than opening an invisible TUI
+            # correction prompt and blocking the request.
+            finding = Finding.from_dict(record, allow_interactive_correction=False)
         except Exception as exc:
             raise WebMergeError(f"Finding {index} could not be parsed.") from exc
         if finding is not None:

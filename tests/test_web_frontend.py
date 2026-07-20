@@ -40,6 +40,7 @@ from web_service import (
     load_job,
     load_records_from_json_text,
     list_previous_jobs,
+    parse_findings,
     reject_current_match,
     save_job,
     save_outputs,
@@ -151,6 +152,17 @@ class WebServiceTests(unittest.TestCase):
             load_records_from_json_text('{"id": 1}')
         with self.assertRaises(WebMergeError):
             load_records_from_json_text('["not a record"]')
+
+    def test_web_finding_parse_rejects_invalid_field_without_terminal_prompt(self):
+        configure_for_web_tests(interactive_mode=True)
+        invalid_record = record()
+        invalid_record["id"] = "not-an-integer"
+
+        with patch("model.prompt_user_to_fix_field") as prompt:
+            with self.assertRaisesRegex(WebMergeError, "Finding 1 could not be parsed"):
+                parse_findings([invalid_record])
+
+        prompt.assert_not_called()
 
     def test_sensitivity_snapshot_records_loaded_and_failed_configuration(self):
         configure_for_web_tests(sensitivity_check_enabled=True)

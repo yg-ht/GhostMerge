@@ -125,7 +125,11 @@ def log(level: str, msg: str, prefix: str = '', exception: Exception = None):
     }
 
     try:
-        TUI = get_tui()
+        candidate_tui = get_tui()
+        # A constructed but inactive TUI is used by non-interactive CLI mode.
+        # Send those diagnostics to the console instead of an invisible layout.
+        if getattr(candidate_tui, "_running", False):
+            TUI = candidate_tui
     except RuntimeError as e:
         if (str(e) != "TUI is not initialised") and (prefix != "TUI"):
             print(f"!!!!!! ERROR !!!!!!    Its all gone wrong:\n"
@@ -237,7 +241,9 @@ def load_json(json_path: str | Path | None = None, json_string: str | None = Non
         return data
     except Exception as e:
         if json_string:
-            log("ERROR", f"Failed to ingest {json_string[:40]} as a JSON object", prefix="UTILS", exception=e)
+            # Uploaded content can contain sensitive report data. Retain only
+            # its size in diagnostics when parsing fails.
+            log("ERROR", f"Failed to ingest JSON input ({len(json_string)} characters)", prefix="UTILS", exception=e)
         else:
             log("ERROR", f"JSON is not a str so can't be ingested", prefix="UTILS", exception=e)
         raise

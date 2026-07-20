@@ -263,7 +263,6 @@ def sensitivities_checker_records(
     ]
 
 def sensitivities_checker_single_field(field_name: str, record: Finding, field_side: str, terms: Dict[str, Optional[str]], interactive_override: Optional[bool] = None, prompt_for_flag_only: bool = True) -> Finding:
-    tui = get_tui()
     sensitivity_hits = check_for_sensitivities(record.get(field_name), terms)
 
     if len(sensitivity_hits) > 0:
@@ -281,7 +280,14 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
                     prefix="SENSITIVITY",
                 )
                 continue
+            if not interactive_mode and offered is None:
+                log(
+                    'ERROR',
+                    f"Non-interactive sensitivity review cannot resolve flag-only term in field '{field_name}'.",
+                    prefix="SENSITIVITY",
+                )
             if interactive_mode or offered is None:
+                tui = get_tui()
                 tui.blank_data()
                 tui.render_single_whole_finding_record(record, sensitive_term, field_name)
                 prompt = (f"Sensitive term [bold red]{sensitive_term}[/bold red] in [bold yellow]{field_name}[/bold yellow]"

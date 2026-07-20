@@ -20,6 +20,7 @@ from merge import (
     get_compliance_reference_placeholder_choice,
     get_auto_suggest_values,
     get_single_sided_content_choice,
+    merge_main,
     reject_matched_record,
     renumber_findings,
     reprocess_orphan_matches,
@@ -31,12 +32,14 @@ from sensitivity import (
     apply_sensitive_replacement,
     check_for_sensitivities,
     load_sensitive_terms,
+    sensitivities_checker_single_field,
     sensitive_terms_digest,
 )
 from utils import (
     Aborting,
     apply_formatting_cleanup,
     apply_configured_normalisation,
+    load_json,
     load_config,
     normalise_cvss_vector,
     normalise_line_endings,
@@ -181,6 +184,16 @@ class ConfigRegressionTests(unittest.TestCase):
         self.assertFalse(get_config()["interactive_mode"])
         self.assertIn("ghostwriter_api", get_config())
 
+    def test_invalid_json_diagnostics_do_not_include_input_content(self):
+        private_content = '{"private-customer-detail": '
+
+        with patch("utils.log") as mocked_log:
+            with self.assertRaises(json.JSONDecodeError):
+                load_json(json_string=private_content)
+
+        logged_text = " ".join(str(call) for call in mocked_log.call_args_list)
+        self.assertNotIn("private-customer-detail", logged_text)
+
 
 class FindingModelRegressionTests(unittest.TestCase):
     def setUp(self):
@@ -279,6 +292,28 @@ class FindingModelRegressionTests(unittest.TestCase):
                 with redirect_stdout(StringIO()):
                     with self.assertRaises(Aborting):
                         Finding.from_dict(record)
+
+    def test_non_interactive_invalid_field_aborts_without_terminal_prompt(self):
+        record = finding(references="").to_dict()
+        record["id"] = "not-an-integer"
+
+        with patch("model.prompt_user_to_fix_field") as prompt:
+            with redirect_stdout(StringIO()):
+                with self.assertRaises(Aborting):
+                    Finding.from_dict(record)
+
+        prompt.assert_not_called()
+
+    def test_interactive_invalid_field_can_be_corrected(self):
+        configure_for_tests(interactive_mode=True)
+        record = finding(references="").to_dict()
+        record["id"] = "not-an-integer"
+
+        with patch("model.prompt_user_to_fix_field", return_value=(0, 7)) as prompt:
+            parsed = Finding.from_dict(record)
+
+        prompt.assert_called_once()
+        self.assertEqual(parsed.id, 7)
 
 
 class NormalisationRegressionTests(unittest.TestCase):
@@ -657,6 +692,26 @@ class MergeRegressionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             renumber_findings([finding()], [], start_id=1)
 
+    def test_non_interactive_merge_preserves_equal_blank_optional_strings(self):
+        left = finding(id=1, title="Shared title", description="Left detail", finding_guidance="")
+        right = finding(id=2, title="Shared title", description="Right detail", finding_guidance="")
+
+        merged_left, merged_right = merge_main({"left": left, "right": right, "score": 95.0})
+
+        self.assertEqual(merged_left.finding_guidance, "")
+        self.assertEqual(merged_right.finding_guidance, "")
+
+    def test_non_interactive_merge_fails_closed_when_no_offered_value_exists(self):
+        left = finding(id=1, title="Shared title", finding_guidance="")
+        right = finding(id=2, title="Shared title", finding_guidance=None)
+
+        with patch("merge.get_tui") as get_tui:
+            with redirect_stdout(StringIO()):
+                with self.assertRaises(Aborting):
+                    merge_main({"left": left, "right": right, "score": 95.0})
+
+        get_tui.assert_not_called()
+
 
 class SensitivityRegressionTests(unittest.TestCase):
     def setUp(self):
@@ -697,6 +752,22 @@ class SensitivityRegressionTests(unittest.TestCase):
         self.assertNotIn(sensitive_term, logged_text)
         self.assertNotIn(sensitive_replacement, logged_text)
         self.assertNotIn("confidential context", logged_text)
+
+    def test_non_interactive_flag_only_term_fails_without_terminal_prompt(self):
+        record = finding(description="Contains a private codename")
+
+        with patch("sensitivity.get_tui") as get_tui:
+            with redirect_stdout(StringIO()):
+                with self.assertRaises(Aborting):
+                    sensitivities_checker_single_field(
+                        "description",
+                        record,
+                        "Left",
+                        {"private codename": None},
+                        interactive_override=False,
+                    )
+
+        get_tui.assert_not_called()
 
     def test_replacement_handles_literals_and_legacy_opening_tag_pairs(self):
         configure_for_tests(
@@ -761,6 +832,58 @@ class CliRegressionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--file-left", result.stdout)
         self.assertIn("--file-right", result.stdout)
+
+    def test_non_interactive_cli_rejects_invalid_record_with_failure_status(self):
+        python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
+        self.skipTest("project virtualenv is not present") if not python_bin.exists() else None
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            left_path = tmp_path / "left.json"
+            right_path = tmp_path / "right.json"
+            output_left = tmp_path / "left-output.json"
+            output_right = tmp_path / "right-output.json"
+            config_path = tmp_path / "config.json"
+            invalid_record = finding().to_dict()
+            invalid_record["id"] = "not-an-integer"
+
+            left_path.write_text(json.dumps([invalid_record]), encoding="utf-8")
+            right_path.write_text("[]", encoding="utf-8")
+            with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
+                config = json.load(handle)
+            config.update({
+                "interactive_mode": False,
+                "sensitivity_check_enabled": False,
+                "log_file_enabled": False,
+            })
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    str(python_bin),
+                    "ghostmerge.py",
+                    "--file-left",
+                    str(left_path),
+                    "--file-right",
+                    str(right_path),
+                    "--out-left",
+                    str(output_left),
+                    "--out-right",
+                    str(output_right),
+                    "--config",
+                    str(config_path),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                input="\n",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output_left.exists())
+            self.assertFalse(output_right.exists())
 
     def test_cli_entrypoint_applies_shared_pre_match_sensitivity_replacements(self):
         python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
@@ -920,7 +1043,7 @@ class CliRegressionTests(unittest.TestCase):
         common_populated_fields = {
             "host_detection_techniques": "Inspect browser process telemetry.",
             "network_detection_techniques": "Inspect unexpected script responses.",
-            "finding_guidance": "Confirm output encoding at every trust boundary.",
+            "finding_guidance": "",
         }
         left_record = finding(
             id=1,

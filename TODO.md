@@ -10,7 +10,7 @@ rather than being constrained to the CLI feature set.
 - [x] Snapshot sensitivity configuration per Web job and apply the CLI-equivalent pre-match pass.
 - [x] Add a visible, resumable post-merge sensitivity stage with persisted audit statistics.
 - [x] Validate sensitivity decisions against server-derived pending state rather than browser fields.
-- [ ] Resolve remaining shared-workflow differences in invalid-input handling and interactive mode.
+- [x] Resolve remaining shared-workflow differences in invalid-input handling and interactive mode.
       Include canonical handling of equal blank optional fields: the CLI currently resolves empty
       strings through its offered-value path while the Web service preserves them unchanged.
 - [ ] Add final output preview and explicit approval before durable output or outbound API sync.

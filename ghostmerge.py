@@ -40,11 +40,13 @@ def ghostmerge(
     else:
         load_config()
 
-    get_tui().start()
-    tui.resize_splits()
-    tui.blank_input()
-
-    tui.update_data(return_ASCII_art(), 'white', 'Welcome to GhostMerge')
+    # Non-interactive mode must not start a live terminal or wait for input.
+    # This keeps automation deterministic and lets invalid data fail promptly.
+    if CONFIG['interactive_mode']:
+        get_tui().start()
+        tui.resize_splits()
+        tui.blank_input()
+        tui.update_data(return_ASCII_art(), 'white', 'Welcome to GhostMerge')
     log("INFO", "\n"
                           "[bold] ____  _               _   __  __                      [/bold]\n"
                           "[bold]/ ___|| |__   ___  ___| |_|  \\/  | ___ _ __ __ _  ___  [/bold]\n"
@@ -206,7 +208,8 @@ def ghostmerge(
     write_json(file_out_right, [f.to_dict() for f in final_right])
     log("INFO", f"Written merged files to {file_out_left} and {file_out_right}", prefix="CLI")
 
-    tui.update_data('Merge complete')
+    if CONFIG['interactive_mode']:
+        tui.update_data('Merge complete')
 
     log("INFO", "#########################", prefix="CLI")
     log("INFO", "## Processing complete ##", prefix="CLI")
@@ -242,10 +245,16 @@ def _maybe_reprocess_cli_orphans(matches, unmatched_left, unmatched_right, rejec
 
 
 if __name__ == "__main__":
+    exit_code = 0
     try:
         app()
     except Aborting:
         log("INFO", "Caught abort signal... exiting!", prefix="CLI")
+        # Invalid non-interactive input must be observable by scripts and must
+        # not look like a successful merge that happened to omit its outputs.
+        exit_code = 1
     finally:
         if getattr(tui, "_running", False):
             tui.stop()
+    if exit_code:
+        raise SystemExit(exit_code)
