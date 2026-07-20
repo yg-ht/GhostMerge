@@ -356,7 +356,11 @@ def create_app(test_config: dict | None = None) -> Flask:
     def apply_sensitivity(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
-            apply_sensitivity_decision(job, request.form.to_dict())
+            apply_sensitivity_decision(
+                job,
+                request.form.to_dict(),
+                terms=_sensitivity_terms_for_job(job),
+            )
             save_job(job, jobs_dir)
             return redirect(url_for("sensitivity", job_id=job.job_id))
         except WebMergeError as exc:

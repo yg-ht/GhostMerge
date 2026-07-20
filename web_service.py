@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import difflib
 import json
+import secrets
 import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
@@ -141,6 +142,7 @@ class MergeJob:
     sensitivity_review_started_at: Optional[str] = None
     sensitivity_review_completed_at: Optional[str] = None
     sensitivity_review_stats: dict[str, int] = field(default_factory=empty_sensitivity_review_stats)
+    sensitivity_decision_token: Optional[str] = None
 
 
 @dataclass
@@ -623,6 +625,7 @@ def initialise_sensitivity_review(
     if job.sensitivity_phase_complete:
         job.sensitivity_review_initialised = True
         job.sensitivity_review_status = "complete"
+        job.sensitivity_decision_token = None
         if job.sensitivity_review_outcome == "pending":
             job.sensitivity_review_outcome = "legacy_complete"
         return
@@ -641,10 +644,12 @@ def initialise_sensitivity_review(
     if job.sensitivity_configuration_error:
         job.sensitivity_review_status = "configuration_error"
         job.sensitivity_review_outcome = "configuration_error"
+        job.sensitivity_decision_token = None
         return
     if not sensitivity_enabled:
         job.sensitivity_review_status = "awaiting_acknowledgement"
         job.sensitivity_review_outcome = "disabled"
+        job.sensitivity_decision_token = None
         return
 
     if terms is None:
@@ -652,6 +657,7 @@ def initialise_sensitivity_review(
         job.sensitivity_review_outcome = "configuration_error"
         if not job.sensitivity_configuration_error:
             job.sensitivity_configuration_error = "Configured sensitive-term rules could not be loaded."
+        job.sensitivity_decision_token = None
         return
 
     # Count the immutable starting workload once. Repeated GET requests can then
@@ -674,6 +680,7 @@ def initialise_sensitivity_review(
     else:
         job.sensitivity_review_status = "awaiting_acknowledgement"
         job.sensitivity_review_outcome = "no_hits"
+        job.sensitivity_decision_token = None
 
 
 def get_next_sensitivity_item(
@@ -709,6 +716,11 @@ def get_next_sensitivity_item(
                     hits = check_for_sensitivities(record.get(field_def.name), terms)
                     if hits and job.sensitivity_hit_index < len(hits):
                         sensitive_term, offered = hits[job.sensitivity_hit_index]
+                        # The token binds one browser form to this persisted
+                        # cursor. It is rotated after every accepted decision,
+                        # so stale tabs and replayed requests fail closed.
+                        if not job.sensitivity_decision_token:
+                            job.sensitivity_decision_token = secrets.token_urlsafe(32)
                         return SensitivityReviewItem(
                             template_type=job.sensitivity_template_type,
                             side=job.sensitivity_side,
@@ -743,46 +755,59 @@ def get_next_sensitivity_item(
             continue
         break
 
+    job.sensitivity_decision_token = None
     job.sensitivity_review_status = "awaiting_acknowledgement"
     return None
 
 
-def apply_sensitivity_decision(job: MergeJob, decision: dict[str, Any]) -> None:
-    """Apply a sensitivity-review decision to the selected output record."""
-    template_type = str(decision.get("template_type") or job.sensitivity_template_type or "finding")
-    if template_type not in TEMPLATE_KINDS:
-        raise WebMergeError("Unknown sensitivity decision template type.")
-    side = str(decision.get("side", ""))
-    records = {
-        "left": _merged_for_kind(job, template_type, "left"),
-        "right": _merged_for_kind(job, template_type, "right"),
-    }.get(side)
-    if records is None:
-        raise WebMergeError("Unknown sensitivity decision side.")
+def apply_sensitivity_decision(
+    job: MergeJob,
+    decision: dict[str, Any],
+    terms: Optional[dict[str, Optional[str]]] = None,
+) -> None:
+    """Apply one action to the server-derived pending sensitivity item.
 
-    record_index = int(decision.get("record_index", -1))
-    field_name = str(decision.get("field_name", ""))
-    sensitive_term = str(decision.get("sensitive_term", ""))
+    Record identity, field name, sensitive term, and offered replacement are
+    deliberately ignored when supplied by a browser. Only the action, optional
+    custom value, and one-time cursor token cross the trust boundary.
+    """
+    effective_terms = terms
+    if effective_terms is None and job.sensitivity_snapshot_version >= 1:
+        effective_terms = dict(job.sensitivity_terms)
+    item = get_next_sensitivity_item(job, effective_terms)
+    if item is None:
+        raise WebMergeError("No sensitivity decision is currently pending.")
+
+    submitted_token = str(decision.get("decision_token", ""))
+    expected_token = job.sensitivity_decision_token or ""
+    if not submitted_token or not secrets.compare_digest(submitted_token, expected_token):
+        raise WebMergeError("Sensitivity decision is stale or invalid. Reload the review page and try again.")
+
     action = str(decision.get("action", ""))
-    if record_index < 0 or record_index >= len(records):
-        raise WebMergeError("Unknown sensitivity decision record.")
-
-    record = records[record_index]
     if action == "keep":
         job.sensitivity_review_stats["values_retained"] += 1
         job.sensitivity_hit_index += 1
+        job.sensitivity_decision_token = None
         return
     if action == "offered":
-        replacement = decision.get("offered")
+        if item.offered is None:
+            raise WebMergeError("The pending sensitivity term has no offered replacement.")
+        replacement = item.offered
         job.sensitivity_review_stats["offered_replacements"] += 1
     elif action == "custom":
-        replacement = decision.get("custom_value", "")
+        replacement = str(decision.get("custom_value", ""))
         job.sensitivity_review_stats["custom_replacements"] += 1
     else:
         raise WebMergeError("Unsupported sensitivity decision.")
 
-    record.set(field_name, apply_sensitive_replacement(record.get(field_name), sensitive_term, replacement))
+    records = _merged_for_kind(job, item.template_type, item.side)
+    record = records[item.record_index]
+    record.set(
+        item.field_name,
+        apply_sensitive_replacement(record.get(item.field_name), item.sensitive_term, replacement),
+    )
     job.sensitivity_hit_index = 0
+    job.sensitivity_decision_token = None
 
 
 def acknowledge_sensitivity_review(job: MergeJob) -> None:
@@ -797,6 +822,7 @@ def acknowledge_sensitivity_review(job: MergeJob) -> None:
     job.sensitivity_phase_complete = True
     job.sensitivity_review_status = "complete"
     job.sensitivity_review_completed_at = _utc_state_timestamp()
+    job.sensitivity_decision_token = None
 
 
 def finalise_job(job: MergeJob) -> MergeResult:
@@ -1154,6 +1180,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
             **empty_sensitivity_review_stats(),
             **dict(data.get("sensitivity_review_stats") or {}),
         },
+        sensitivity_decision_token=data.get("sensitivity_decision_token"),
     )
 
 

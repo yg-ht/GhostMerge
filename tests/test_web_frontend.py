@@ -590,44 +590,121 @@ class WebServiceTests(unittest.TestCase):
         configure_for_web_tests(sensitivity_check_enabled=True)
         job = create_merge_job([record(description="ACME detail")], [], job_id="sens123")
         self.assertIsNone(get_next_conflict(job))
+        terms = {"acme": "[CLIENT]"}
 
-        item = get_next_sensitivity_item(job, {"acme": "[CLIENT]"})
+        item = get_next_sensitivity_item(job, terms)
 
         self.assertIsNotNone(item)
         self.assertTrue(any(part["hit"] for part in item.highlighted_parts))
         apply_sensitivity_decision(
             job,
             {
-                "side": item.side,
-                "record_index": item.record_index,
-                "field_name": item.field_name,
-                "sensitive_term": item.sensitive_term,
+                "decision_token": job.sensitivity_decision_token,
                 "action": "offered",
-                "offered": item.offered,
             },
+            terms=terms,
         )
         self.assertIn("[CLIENT]", job.merged_left[0].description)
         self.assertEqual(job.sensitivity_review_stats["offered_replacements"], 1)
+
+    def test_sensitivity_decision_uses_server_derived_item_not_browser_fields(self):
+        job = create_merge_job([record(description="ACME detail")], [], job_id="senstrust123")
+        self.assertIsNone(get_next_conflict(job))
+        terms = {"acme": "[CLIENT]"}
+        self.assertIsNotNone(get_next_sensitivity_item(job, terms))
+
+        apply_sensitivity_decision(
+            job,
+            {
+                "decision_token": job.sensitivity_decision_token,
+                "action": "offered",
+                "template_type": "observation",
+                "side": "right",
+                "record_index": "999",
+                "field_name": "title",
+                "sensitive_term": "detail",
+                "offered": "ATTACKER VALUE",
+            },
+            terms=terms,
+        )
+
+        self.assertEqual(job.merged_left[0].description, "[CLIENT] detail")
+        self.assertNotIn("ATTACKER VALUE", job.merged_left[0].description)
+
+    def test_sensitivity_decision_rejects_invalid_or_replayed_token(self):
+        job = create_merge_job(
+            [record(description="ACME and secret detail")],
+            [],
+            job_id="sensreplay123",
+        )
+        self.assertIsNone(get_next_conflict(job))
+        terms = {"acme": "[CLIENT]", "secret": "[SECRET]"}
+        first = get_next_sensitivity_item(job, terms)
+        first_token = job.sensitivity_decision_token
+
+        with self.assertRaisesRegex(WebMergeError, "stale or invalid"):
+            apply_sensitivity_decision(
+                job,
+                {"decision_token": "altered-token", "action": "keep"},
+                terms=terms,
+            )
+        self.assertEqual(job.sensitivity_review_stats["values_retained"], 0)
+        self.assertEqual(job.merged_left[0].description, "ACME and secret detail")
+
+        apply_sensitivity_decision(
+            job,
+            {"decision_token": first_token, "action": "keep"},
+            terms=terms,
+        )
+        second = get_next_sensitivity_item(job, terms)
+        second_token = job.sensitivity_decision_token
+        with self.assertRaisesRegex(WebMergeError, "stale or invalid"):
+            apply_sensitivity_decision(
+                job,
+                {"decision_token": first_token, "action": "keep"},
+                terms=terms,
+            )
+
+        self.assertEqual(first.sensitive_term, "acme")
+        self.assertEqual(second.sensitive_term, "secret")
+        self.assertNotEqual(first_token, second_token)
+        self.assertEqual(job.sensitivity_review_stats["values_retained"], 1)
+
+    def test_offered_action_is_rejected_when_server_has_no_replacement(self):
+        job = create_merge_job([record(description="Secret detail")], [], job_id="sensnooffer123")
+        self.assertIsNone(get_next_conflict(job))
+        terms = {"secret": None}
+        self.assertIsNotNone(get_next_sensitivity_item(job, terms))
+        token = job.sensitivity_decision_token
+
+        with self.assertRaisesRegex(WebMergeError, "no offered replacement"):
+            apply_sensitivity_decision(
+                job,
+                {"decision_token": token, "action": "offered"},
+                terms=terms,
+            )
+
+        self.assertEqual(job.merged_left[0].description, "Secret detail")
+        self.assertEqual(job.sensitivity_review_stats["offered_replacements"], 0)
+        self.assertEqual(job.sensitivity_decision_token, token)
 
     def test_sensitivity_review_handles_multiple_terms_in_same_field(self):
         configure_for_web_tests(sensitivity_check_enabled=True)
         job = create_merge_job([record(description="ACME and secret detail")], [], job_id="sens456")
         self.assertIsNone(get_next_conflict(job))
+        terms = {"acme": "[CLIENT]", "secret": "[SECRET]"}
 
-        first = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+        first = get_next_sensitivity_item(job, terms)
         self.assertIsNotNone(first)
         apply_sensitivity_decision(
             job,
             {
-                "side": first.side,
-                "record_index": first.record_index,
-                "field_name": first.field_name,
-                "sensitive_term": first.sensitive_term,
+                "decision_token": job.sensitivity_decision_token,
                 "action": "offered",
-                "offered": first.offered,
             },
+            terms=terms,
         )
-        second = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+        second = get_next_sensitivity_item(job, terms)
 
         self.assertIsNotNone(second)
         self.assertEqual(second.field_name, "description")
@@ -724,20 +801,19 @@ class WebServiceTests(unittest.TestCase):
         configure_for_web_tests(sensitivity_check_enabled=True)
         job = create_merge_job([record(description="ACME and secret detail")], [], job_id="sens789")
         self.assertIsNone(get_next_conflict(job))
+        terms = {"acme": "[CLIENT]", "secret": "[SECRET]"}
 
-        first = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+        first = get_next_sensitivity_item(job, terms)
         self.assertIsNotNone(first)
         apply_sensitivity_decision(
             job,
             {
-                "side": first.side,
-                "record_index": first.record_index,
-                "field_name": first.field_name,
-                "sensitive_term": first.sensitive_term,
+                "decision_token": job.sensitivity_decision_token,
                 "action": "keep",
             },
+            terms=terms,
         )
-        second = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+        second = get_next_sensitivity_item(job, terms)
 
         self.assertIsNotNone(second)
         self.assertEqual(second.field_name, "description")
@@ -1198,16 +1274,12 @@ class FlaskRouteTests(unittest.TestCase):
         first_hit = self.client.get(f"/jobs/{job_id}/conflicts", follow_redirects=True)
 
         self.assertIn(b"Finding sensitivity review", first_hit.data)
-        for side in ("left", "right"):
+        for _ in range(2):
+            pending_job = load_job(Path(self.tmp_dir.name), job_id)
             response = self.client.post(
                 f"/jobs/{job_id}/sensitivity",
                 data=self.with_csrf({
-                    "template_type": "finding",
-                    "side": side,
-                    "record_index": "0",
-                    "field_name": "description",
-                    "sensitive_term": "secret sauce",
-                    "offered": "proprietary technique",
+                    "decision_token": pending_job.sensitivity_decision_token,
                     "action": "offered",
                 }),
                 follow_redirects=True,
@@ -1217,6 +1289,69 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Sensitivity review ready to complete", response.data)
         self.assertIn(b"Offered replacements</dt><dd>2", response.data)
         self.assertNotIn(b"Merged output ready", response.data)
+
+    def test_sensitivity_form_uses_one_time_server_cursor_token(self):
+        config = get_config()
+        config["sensitivity_check_enabled"] = True
+        config["sensitivity_check_before_matching"] = False
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (
+                    io.BytesIO(json.dumps([record(description="Secret sauce detail")]).encode("utf-8")),
+                    "left.json",
+                ),
+                "right_file": (io.BytesIO(b"[]"), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+        review = self.client.get(f"/jobs/{job_id}/conflicts", follow_redirects=True)
+        pending_job = load_job(Path(self.tmp_dir.name), job_id)
+
+        self.assertIn(b'name="decision_token"', review.data)
+        self.assertNotIn(b'name="side"', review.data)
+        self.assertNotIn(b'name="record_index"', review.data)
+        self.assertNotIn(b'name="field_name"', review.data)
+        self.assertNotIn(b'name="sensitive_term"', review.data)
+        self.assertNotIn(b'name="offered"', review.data)
+
+        rejected = self.client.post(
+            f"/jobs/{job_id}/sensitivity",
+            data=self.with_csrf({"decision_token": "altered-token", "action": "offered"}),
+        )
+        unchanged_job = load_job(Path(self.tmp_dir.name), job_id)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn(b"stale or invalid", rejected.data)
+        self.assertEqual(unchanged_job.merged_left[0].description, "Secret sauce detail")
+        self.assertEqual(unchanged_job.sensitivity_decision_token, pending_job.sensitivity_decision_token)
+
+        accepted = self.client.post(
+            f"/jobs/{job_id}/sensitivity",
+            data=self.with_csrf({
+                "decision_token": pending_job.sensitivity_decision_token,
+                "action": "offered",
+                "sensitive_term": "detail",
+                "offered": "ATTACKER VALUE",
+            }),
+            follow_redirects=False,
+        )
+        replayed = self.client.post(
+            f"/jobs/{job_id}/sensitivity",
+            data=self.with_csrf({
+                "decision_token": pending_job.sensitivity_decision_token,
+                "action": "offered",
+            }),
+        )
+        after_replay = load_job(Path(self.tmp_dir.name), job_id)
+
+        self.assertEqual(accepted.status_code, 302)
+        self.assertEqual(replayed.status_code, 400)
+        self.assertIn(b"stale or invalid", replayed.data)
+        self.assertEqual(after_replay.merged_left[0].description, "proprietary technique detail")
+        self.assertNotIn("ATTACKER VALUE", after_replay.merged_left[0].description)
+        self.assertEqual(after_replay.sensitivity_review_stats["offered_replacements"], 1)
 
     def test_sensitivity_acknowledgement_requires_csrf_token(self):
         job = create_merge_job([record()], [], job_id="senscsrf123")

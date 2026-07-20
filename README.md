@@ -660,6 +660,13 @@ fails closed: acknowledgement and output creation remain blocked, and the Web UI
 shows a configuration diagnostic. Correct the configuration and start a new job
 so it receives a valid immutable rules snapshot.
 
+Each post-merge decision form contains a one-time token tied to the job's current
+server-side review cursor. Record identity, side, field, sensitive term, and
+offered replacement are derived again from protected job state when the form is
+submitted rather than trusted from browser fields. A stale tab, altered token, or
+replayed submission is rejected without changing merged content or audit totals;
+reload the review page to obtain the current decision.
+
 ## Formatting cleanup
 
 Formatting cleanup is configured in `ghostmerge_config.example.json` and local
