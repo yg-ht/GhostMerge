@@ -252,6 +252,10 @@ still performs the API retrieval automatically for any side set to API.
 
 When a merge job is API-backed, the completion page offers live synchronisation
 for that side after conflict review and sensitivity review are complete.
+Left and right write-back use the same workflow but remain independent: each
+side uses its own configured endpoint, bearer token, reviewed output, backup
+directory, lock, and status. Synchronising one side does not contact or modify
+the other side.
 
 ### Live sync behaviour
 
@@ -266,8 +270,9 @@ Live sync is destructive. For the selected API-backed side, GhostMerge:
 
 If preflight or record preparation fails, GhostMerge stops before backup,
 deletion, or reload. If deletion or reload fails after the backup has been
-written, use the backup browser to download the full original dataset, inspect
-the backup, or restore individual records.
+written, the outbound sync status retains that verified backup path. Use the
+backup browser to download the full original dataset, inspect the backup, or
+restore individual records.
 
 ### Sync metadata
 
@@ -275,7 +280,9 @@ When GhostMerge writes Finding or Observation Templates through live API sync, i
 write timestamp in `extra_fields.ghostmerge_last_synced_at`. GhostMerge is
 authoritative for this field. The value is a UTC ISO-8601 timestamp in
 `YYYY-MM-DDTHH:MM:SSZ` format. Existing `extra_fields` values are preserved, and
-file import/export keeps the field as ordinary `extra_fields` data.
+file import/export keeps the field as ordinary `extra_fields` data. The
+timestamp is added independently to every template written to either the left
+or right Ghostwriter destination.
 
 ### API backups and restore
 

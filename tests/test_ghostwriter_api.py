@@ -1,4 +1,5 @@
 import json
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,6 +16,7 @@ from ghostwriter_api import (
     load_server_configs,
     verify_backup,
 )
+from ghostwriter_graphql_stub import ghostwriter_finding_record, running_ghostwriter_stub
 
 
 def server_config(**overrides):
@@ -557,6 +559,76 @@ class GhostwriterApiTests(unittest.TestCase):
         self.assertEqual(fake_client.deleted_observation_ids, [77])
         self.assertEqual(fake_client.created_observations[0]["title"], "Replacement observation")
         self.assertEqual(fake_client.tag_sets, [(202, ["edr", "process"])])
+
+
+class BilateralGhostwriterSyncIntegrationTests(unittest.TestCase):
+    """Exercise both configured sides through the real HTTP GraphQL client."""
+
+    def test_left_and_right_sync_replace_only_their_target_and_add_timestamps(self):
+        left_original = ghostwriter_finding_record(10, "Original left", extra_fields={"owner": "left-original"})
+        right_original = ghostwriter_finding_record(20, "Original right", extra_fields={"owner": "right-original"})
+        with running_ghostwriter_stub(
+            bearer_token="left-token",
+            findings=[left_original],
+            tags={("finding", 10): ["left-original"]},
+        ) as left_server, running_ghostwriter_stub(
+            bearer_token="right-token",
+            findings=[right_original],
+            tags={("finding", 20): ["right-original"]},
+        ) as right_server, tempfile.TemporaryDirectory() as tmp_dir:
+            left_api = GhostwriterApi(
+                server_config(
+                    side="left",
+                    name="Left integration Ghostwriter",
+                    graphql_url=left_server.graphql_url,
+                    bearer_token="left-token",
+                )
+            )
+            right_api = GhostwriterApi(
+                server_config(
+                    side="right",
+                    name="Right integration Ghostwriter",
+                    graphql_url=right_server.graphql_url,
+                    bearer_token="right-token",
+                )
+            )
+            backup_root = Path(tmp_dir)
+
+            left_backup = left_api.replace_all_findings(
+                [finding_record(title="Reviewed left", tags="left, reviewed", extra_fields={"owner": "left-team"})],
+                backup_root,
+            )
+
+            # Completing a left-side sync must not issue any request to, or mutate, the right side.
+            self.assertEqual(right_server.findings, [right_original])
+            self.assertEqual(right_server.requests, [])
+
+            right_backup = right_api.replace_all_findings(
+                [finding_record(title="Reviewed right", tags="right, reviewed", extra_fields={"owner": "right-team"})],
+                backup_root,
+            )
+
+            left_records = left_api.fetch_findings()
+            right_records = right_api.fetch_findings()
+            left_backup_data = verify_backup(left_backup)
+            right_backup_data = verify_backup(right_backup)
+
+        self.assertEqual([item["title"] for item in left_records], ["Reviewed left"])
+        self.assertEqual([item["title"] for item in right_records], ["Reviewed right"])
+        self.assertEqual(left_records[0]["tags"], "left, reviewed")
+        self.assertEqual(right_records[0]["tags"], "right, reviewed")
+        self.assertEqual(left_records[0]["extra_fields"]["owner"], "left-team")
+        self.assertEqual(right_records[0]["extra_fields"]["owner"], "right-team")
+
+        timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        left_timestamp = left_records[0]["extra_fields"][GHOSTMERGE_LAST_SYNCED_AT_FIELD]
+        right_timestamp = right_records[0]["extra_fields"][GHOSTMERGE_LAST_SYNCED_AT_FIELD]
+        self.assertRegex(left_timestamp, timestamp_pattern)
+        self.assertRegex(right_timestamp, timestamp_pattern)
+        self.assertEqual(left_backup.parent.name, "left")
+        self.assertEqual(right_backup.parent.name, "right")
+        self.assertEqual(left_backup_data["server_side"], "left")
+        self.assertEqual(right_backup_data["server_side"], "right")
 
 
 if __name__ == "__main__":

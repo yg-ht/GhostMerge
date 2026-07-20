@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from ghostwriter_api import GHOSTMERGE_LAST_SYNCED_AT_FIELD
+from ghostwriter_graphql_stub import ghostwriter_finding_record, running_ghostwriter_stub
 from globals import get_config
 from web_app import create_app, _check_api_source, _import_job_sources, _sync_job_side
 from web_service import (
@@ -1116,28 +1118,37 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"conflict review is complete", sync_response.data)
         self.assertFalse(reloaded.sensitivity_phase_complete)
 
-    def test_live_sync_rejects_duplicate_running_sync(self):
+    def test_live_sync_rejects_duplicate_running_or_completed_sync_for_both_sides(self):
         jobs_dir = Path(self.tmp_dir.name)
-        job = create_merge_job([record()], [], job_id="running123", input_sources={"left": "api", "right": "file"})
-        self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
-        job.sensitivity_phase_complete = True
-        job.sync_results["left"] = {"status": "running"}
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
-
         config = get_config()
-        config["ghostwriter_api"]["servers"]["left"].update(
-            {
-                "enabled": True,
-                "base_url": "https://left.example",
-                "bearer_token": "left-token",
-            }
-        )
-        response = self.client.post("/jobs/running123/sync/left", data=self.with_csrf())
+        for side in ("left", "right"):
+            for status, expected_message in (("running", b"already running"), ("done", b"already completed")):
+                with self.subTest(side=side, status=status):
+                    job_id = f"{side}{status}123"
+                    job = create_merge_job(
+                        [record()],
+                        [],
+                        job_id=job_id,
+                        input_sources={side: "api", "right" if side == "left" else "left": "file"},
+                    )
+                    self.assertIsNone(get_next_conflict(job))
+                    result = finalise_job(job)
+                    job.sensitivity_phase_complete = True
+                    job.sync_results[side] = {"status": status}
+                    save_job(job, jobs_dir)
+                    save_outputs(job, jobs_dir, result)
+                    config["ghostwriter_api"]["servers"][side].update(
+                        {
+                            "enabled": True,
+                            "base_url": f"https://{side}.example",
+                            "bearer_token": f"{side}-token",
+                        }
+                    )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn(b"already running", response.data)
+                    response = self.client.post(f"/jobs/{job_id}/sync/{side}", data=self.with_csrf())
+
+                    self.assertEqual(response.status_code, 400)
+                    self.assertIn(expected_message, response.data)
 
     def test_live_sync_worker_preserves_observations_for_legacy_finding_only_job(self):
         jobs_dir = Path(self.tmp_dir.name)
@@ -1211,6 +1222,120 @@ class FlaskRouteTests(unittest.TestCase):
             _sync_job_side(self.app, jobs_dir, "emptyobssync123", "left")
 
         self.assertEqual(captured["observations"], [])
+
+    def test_live_sync_worker_uses_matching_side_server_output_and_timestamp(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record(title="Shared title")],
+            [record(id="2", title="Shared title")],
+            job_id="bilateralsync123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        self.assertIsNone(get_next_conflict(job))
+
+        # Give each final side an unmistakable value after the automatic match has completed.
+        job.merged_left[0].title = "Reviewed left output"
+        job.merged_left[0].extra_fields = {"owner": "left-team"}
+        job.merged_right[0].title = "Reviewed right output"
+        job.merged_right[0].extra_fields = {"owner": "right-team"}
+        result = finalise_job(job)
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+        save_outputs(job, jobs_dir, result)
+
+        with running_ghostwriter_stub(bearer_token="left-token") as left_server, running_ghostwriter_stub(
+            bearer_token="right-token"
+        ) as right_server:
+            config = get_config()
+            config["ghostwriter_api"]["backup_dir"] = str(jobs_dir / "api-backups")
+            config["ghostwriter_api"]["servers"]["left"].update(
+                {
+                    "enabled": True,
+                    "graphql_url": left_server.graphql_url,
+                    "base_url": "",
+                    "bearer_token": "left-token",
+                    "rate_limit_per_second": 1000.0,
+                }
+            )
+            config["ghostwriter_api"]["servers"]["right"].update(
+                {
+                    "enabled": True,
+                    "graphql_url": right_server.graphql_url,
+                    "base_url": "",
+                    "bearer_token": "right-token",
+                    "rate_limit_per_second": 1000.0,
+                }
+            )
+
+            _sync_job_side(self.app, jobs_dir, "bilateralsync123", "left")
+
+            self.assertEqual([item["title"] for item in left_server.findings], ["Reviewed left output"])
+            self.assertEqual(right_server.findings, [])
+            self.assertEqual(right_server.requests, [])
+            self.assertEqual(left_server.findings[0]["extraFields"]["owner"], "left-team")
+            self.assertIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, left_server.findings[0]["extraFields"])
+
+            _sync_job_side(self.app, jobs_dir, "bilateralsync123", "right")
+
+            self.assertEqual([item["title"] for item in right_server.findings], ["Reviewed right output"])
+            self.assertEqual(right_server.findings[0]["extraFields"]["owner"], "right-team")
+            self.assertIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, right_server.findings[0]["extraFields"])
+
+        reloaded = load_job(jobs_dir, "bilateralsync123")
+        self.assertEqual(reloaded.sync_results["left"]["status"], "done")
+        self.assertEqual(reloaded.sync_results["right"]["status"], "done")
+        self.assertIn("/left/", reloaded.sync_results["left"]["backup_path"])
+        self.assertIn("/right/", reloaded.sync_results["right"]["backup_path"])
+
+    def test_bilateral_sync_failure_retains_backup_without_premature_done_status(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        for side in ("left", "right"):
+            with self.subTest(side=side), running_ghostwriter_stub(
+                bearer_token=f"{side}-token",
+                findings=[ghostwriter_finding_record(50, f"Original {side}")],
+                fail_on_operation_call={"DeleteFinding": 2},
+            ) as server:
+                job_id = f"{side}failure123"
+                job = create_merge_job(
+                    [record(title="Reviewed output")],
+                    [],
+                    job_id=job_id,
+                    input_sources={side: "api", "right" if side == "left" else "left": "file"},
+                )
+                self.assertIsNone(get_next_conflict(job))
+                result = finalise_job(job)
+                job.sensitivity_phase_complete = True
+                save_job(job, jobs_dir)
+                save_outputs(job, jobs_dir, result)
+
+                config = get_config()
+                config["ghostwriter_api"]["backup_dir"] = str(jobs_dir / "failure-backups")
+                config["ghostwriter_api"]["servers"][side].update(
+                    {
+                        "enabled": True,
+                        "graphql_url": server.graphql_url,
+                        "base_url": "",
+                        "bearer_token": f"{side}-token",
+                        "rate_limit_per_second": 1000.0,
+                    }
+                )
+                recorded_statuses = []
+
+                def record_persisted_status(current_job, current_jobs_dir):
+                    side_state = current_job.sync_results.get(side) or {}
+                    if side_state.get("status"):
+                        recorded_statuses.append(side_state["status"])
+                    return save_job(current_job, current_jobs_dir)
+
+                with patch("web_app.save_job", side_effect=record_persisted_status):
+                    _sync_job_side(self.app, jobs_dir, job_id, side)
+
+                reloaded = load_job(jobs_dir, job_id)
+                self.assertEqual(reloaded.sync_results[side]["status"], "error")
+                self.assertNotIn("done", recorded_statuses)
+                self.assertIn("backup_path", reloaded.sync_results[side])
+                self.assertTrue(Path(reloaded.sync_results[side]["backup_path"]).exists())
+                self.assertEqual([item["title"] for item in server.findings], [f"Original {side}"])
 
     def test_complete_page_links_to_existing_sync_status(self):
         jobs_dir = Path(self.tmp_dir.name)

@@ -1203,13 +1203,20 @@ def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
     with app.app_context():
         def update(event):
             current = load_job(jobs_dir, job_id)
-            current.sync_results[side] = {
-                "status": event.status,
+            previous_state = dict(current.sync_results.get(side) or {})
+            next_state = {
+                # Fetch and backup helpers report their own local completion.  The outbound
+                # operation is complete only after the final replacement event succeeds.
+                "status": "done" if event.stage == "complete" and event.status == "done" else "running",
                 "stage": event.stage,
                 "message": event.message,
                 "complete": event.complete,
                 "total": event.total,
             }
+            backup_path = event.backup_path or previous_state.get("backup_path")
+            if backup_path:
+                next_state["backup_path"] = backup_path
+            current.sync_results[side] = next_state
             save_job(current, jobs_dir)
 
         try:
@@ -1236,13 +1243,17 @@ def _sync_job_side(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
             save_job(job, jobs_dir)
         except Exception as exc:
             job = load_job(jobs_dir, job_id)
-            job.sync_results[side] = {
-                "status": "error",
-                "stage": "error",
-                "message": str(exc),
-                "complete": 0,
-                "total": 0,
-            }
+            failed_state = dict(job.sync_results.get(side) or {})
+            failed_state.update(
+                {
+                    "status": "error",
+                    "stage": "error",
+                    "message": str(exc),
+                }
+            )
+            failed_state.setdefault("complete", 0)
+            failed_state.setdefault("total", 0)
+            job.sync_results[side] = failed_state
             save_job(job, jobs_dir)
         finally:
             _release_sync_lock(_sync_lock_path(jobs_dir, job_id, side))

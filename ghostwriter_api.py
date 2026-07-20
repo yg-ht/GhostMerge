@@ -74,6 +74,7 @@ class SyncEvent:
     complete: int = 0
     total: int = 0
     status: str = "running"
+    backup_path: Optional[str] = None
 
 
 class RateLimiter:
@@ -280,7 +281,16 @@ class GhostwriterApi:
             json.dump(backup_data, handle, indent=2)
         verify_backup(backup_path)
         total_records = len(raw_findings) + len(raw_observations)
-        self.progress(SyncEvent("backup", f"Backup written for {self.server.name}", total_records, total_records, "done"))
+        self.progress(
+            SyncEvent(
+                "backup",
+                f"Backup written for {self.server.name}",
+                total_records,
+                total_records,
+                "done",
+                backup_path=str(backup_path),
+            )
+        )
         return backup_path
 
     def fetch_raw_findings_with_tags(self) -> list[dict[str, Any]]:

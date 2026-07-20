@@ -15,6 +15,9 @@
 - [x] Generated `requirements.txt`
 - [x] File imports completed with centralised `utils`
 - [x] Type guards and defensive parsing on incoming data
+- [ ] Close Flask test-client download and static-file responses explicitly.
+      The documented `unittest` discovery run passes but emits `ResourceWarning` messages for
+      unclosed response file handles in existing web download and static asset tests.
 
 ## Matching Engine
 - [x] Built `fuzzy_match_findings()` matcher
@@ -153,10 +156,10 @@
       accurately describes the next stage, and use the chosen term consistently in help text.
 
 ## Ghostwriter API Sync
-- [ ] Verify that synchronisation to the right-hand source works end to end.
-      Cover eligible and ineligible records, create and update operations, partial API failures,
-      retry behaviour, duplicate prevention, status reporting, and regression tests that prove the
-      configured right-hand destination receives the intended data only.
+- [x] Verify that outbound synchronisation behaves consistently for both configured sides.
+      Regression coverage proves each side uses only its configured destination and reviewed output,
+      preserves existing extra fields while adding `ghostmerge_last_synced_at`, retains verified
+      recovery backup details after destructive-stage failures, and rejects duplicate operations.
 - [ ] Add observation synchronisation support.
       Define observation matching, field mapping, direction, conflict handling, create/update rules,
       permissions, validation, rate limiting, failure recovery, and backwards compatibility before
