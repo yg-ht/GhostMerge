@@ -38,13 +38,27 @@ class Finding:
 
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Finding' or None:
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+        allow_interactive_correction: Optional[bool] = None,
+    ) -> 'Finding' or None:
         """
         Convert a raw dict (e.g., from JSON) into a Finding instance, validating and coercing fields
-        with interactive user prompting when mismatches occur.
+        with optional interactive user prompting when mismatches occur.
+
+        When no override is supplied, correction follows the CLI's configured
+        interactive mode. Callers without a terminal, such as the Web service,
+        must pass False so malformed input fails closed instead of blocking on
+        an invisible prompt.
         """
         try:
-            log("DEBUG", f"Parsing finding from data: {data}", prefix="MODEL")
+            correction_enabled = (
+                bool(CONFIG.get("interactive_mode"))
+                if allow_interactive_correction is None
+                else bool(allow_interactive_correction)
+            )
+            log("DEBUG", f"Parsing finding record with {len(data)} field(s)", prefix="MODEL")
             coerced_data = {}
 
             # Resolve annotations once so we do not see unevaluated strings or typing artefacts
@@ -96,17 +110,21 @@ class Finding:
                         log('DEBUG', f'Attempting to coerce {field_name} to {expected_type_str}', prefix='MODEL')
                         coerced = coerce_value(raw_value, field_type, field_name)
                         coerced_data[field_name] = coerced
-                    except TypeError as e:
-                        log('ERROR', f"Encountered unexpected required type, aborting", prefix="MODEL")
-                        raise Aborting()
-                    except ValueError as e:
+                    except (TypeError, ValueError) as e:
                         log('WARN', f'Failed to coerce {field_name} to {expected_type_str}', prefix='MODEL')
                         log("DEBUG",
                             f"Field '{field_name}' expected {expected_type_str} but got type "
-                            f"{get_type_as_str(type(raw_value))}: \"{raw_value}\" error is:\n{e}", prefix="MODEL")
-                        tui = get_tui()
-                        tui.render_single_partial_dict_record(data)
-                        correction_status, correction_data = prompt_user_to_fix_field(field_name, field_type, raw_value)
+                            f"{get_type_as_str(type(raw_value))}", prefix="MODEL")
+                        if not correction_enabled:
+                            raise ValueError(
+                                f"Finding field '{field_name}' expected {expected_type_str}."
+                            ) from None
+                        correction_status, correction_data = prompt_user_to_fix_field(
+                            field_name,
+                            field_type,
+                            raw_value,
+                            record_data=data,
+                        )
                         if correction_status == 0:
                             log('DEBUG', f"User prompt to resolve successful", prefix="MODEL")
                             coerced_data[field_name] = correction_data
@@ -142,11 +160,15 @@ class Finding:
                     raise ValueError("CVSS score must be between 0.0 and 10.0.")
 
             finding = cls(**coerced_data)
-            log("DEBUG", f"Created Finding object: {finding}", prefix="MODEL")
+            log("DEBUG", f"Created Finding object with ID {finding.id}", prefix="MODEL")
             return finding
 
         except Exception as e:
-            log("ERROR", f"Failed to parse finding from dict", prefix="MODEL", exception=e)
+            log(
+                "ERROR",
+                f"Failed to parse finding from dict ({type(e).__name__})",
+                prefix="MODEL",
+            )
             raise Aborting()
 
 
@@ -267,7 +289,7 @@ class Observation:
     def from_dict(cls, data: Dict[str, Any]) -> 'Observation' or None:
         """Convert a raw dict into an Observation instance with light coercion."""
         try:
-            log("DEBUG", f"Parsing observation from data: {data}", prefix="MODEL")
+            log("DEBUG", f"Parsing observation record with {len(data)} field(s)", prefix="MODEL")
             coerced_data = {}
             hints = get_type_hints(cls)
 
@@ -309,13 +331,17 @@ class Observation:
                 except (TypeError, ValueError) as exc:
                     raise ValueError(
                         f"Observation field '{field_name}' expected {expected_type_str}."
-                    ) from exc
+                    ) from None
 
             observation = cls(**coerced_data)
-            log("DEBUG", f"Created Observation object: {observation}", prefix="MODEL")
+            log("DEBUG", f"Created Observation object with ID {observation.id}", prefix="MODEL")
             return observation
         except Exception as e:
-            log("ERROR", "Failed to parse observation from dict", prefix="MODEL", exception=e)
+            log(
+                "ERROR",
+                f"Failed to parse observation from dict ({type(e).__name__})",
+                prefix="MODEL",
+            )
             raise Aborting()
 
     def to_dict(self) -> dict:
@@ -377,14 +403,22 @@ class Observation:
             return True
         return False
 
-def prompt_user_to_fix_field(field_name: str, expected_type: type, current_value: Any) -> tuple[int, Any]:
+def prompt_user_to_fix_field(
+    field_name: str,
+    expected_type: type,
+    current_value: Any,
+    record_data: Optional[Dict[str, Any]] = None,
+) -> tuple[int, Any]:
     """Prompt user to correct an invalid field inline"""
     tui = get_tui()
     expected_type_str = get_type_as_str(expected_type)
 
+    if record_data is not None:
+        tui.render_single_partial_dict_record(record_data)
+
     prompt = (f"Invalid value '{current_value}' ({get_type_as_str(type(current_value))}) in "
               f"{field_name} and we need a {get_type_as_str(expected_type)} to fix it.\n")
-    log('DEBUG', f"Prompt is:\n{prompt}", prefix="MODEL")
+    log('DEBUG', f"Prompting for correction of field '{field_name}'", prefix="MODEL")
 
     options = ['Fix', 'Skip whole record']
     log("DEBUG", f"Options are: {options}")
@@ -404,7 +438,7 @@ def prompt_user_to_fix_field(field_name: str, expected_type: type, current_value
             casted = coerce_value(new_value, expected_type, field_name)
             return 0, casted
         except (ValueError, TypeError):
-            return prompt_user_to_fix_field(field_name, expected_type, new_value)
+            return prompt_user_to_fix_field(field_name, expected_type, new_value, record_data=record_data)
     elif action == "s":
         log("WARN", f"User skipped this whole finding", prefix="MODEL")
         return 1, None
@@ -453,7 +487,7 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
     if origin_or_expected_type is Union:
         log(
             "DEBUG",
-            f"Union type expected | field={field_name} | value_preview={repr(value)[:200]} | "
+            f"Union type expected | field={field_name} | value_type={type(value).__name__} | "
             f"expected_type={getattr(expected_type, '__name__', str(expected_type))}",
             prefix="MODEL",
         )
@@ -491,21 +525,19 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
                         "DEBUG",
                         f"Value did not match current Union member type | "
                         f"member_type={get_type_as_str(type_member)} | "
-                        f"exception_type={type(e).__name__} | exception_msg={str(e)}",
+                        f"exception_type={type(e).__name__}",
                         prefix="MODEL",
-                        exception=e,
                     )
                     last_err = e
                     continue
         log(
             "DEBUG",
             "Value did not match any Union member types | "
-            f"field={field_name} | value_preview={repr(value)[:50]} | "
+            f"field={field_name} | value_type={type(value).__name__} | "
             f"union_members={tuple(get_type_as_str(a) for a in type_args)} | "
             f"attempted_members={tuple(get_type_as_str(a) for a in non_none)} | "
             f"attempt_count={len(non_none)} | had_exception={last_err is not None}",
             prefix="MODEL",
-            exception=last_err,
         )
         raise last_err if last_err else ValueError(f"Value {value!r} does not match {expected_type}")
 
@@ -520,7 +552,7 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
                 return True
             if s in {"false", "0", "no", "n", "off"}:
                 return False
-        raise ValueError(f"Cannot coerce to bool: {value!r}")
+        raise ValueError("Value cannot be coerced to bool.")
 
     # List[T]
     if origin_or_expected_type is list:
@@ -545,18 +577,18 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
             value = parsed
         # if it still isn't a list
         if not isinstance(value, list):
-            log("DEBUG", f"Expected list, got {type(value)} with value {value!r}", prefix="MODEL")
+            log("DEBUG", f"Expected list, got {type(value).__name__}", prefix="MODEL")
             raise TypeError(f"Expected List, got {type(value)}")
 
         coerced_list = [coerce_value(v, inner, field_name) for v in value]
-        log("DEBUG", f"Coerced list values: {coerced_list!r}", prefix="MODEL")
+        log("DEBUG", f"Coerced list with {len(coerced_list)} item(s)", prefix="MODEL")
         return coerced_list
 
     # dict[K, V]
     if origin_or_expected_type is dict:
         log(
             "DEBUG",
-            f"Dict type expected | field={field_name} | value_preview={repr(value)[:50]} | "
+            f"Dict type expected | field={field_name} | value_type={type(value).__name__} | "
             f"type_args={tuple(get_type_as_str(a) for a in type_args) if type_args else '()'}",
             prefix="MODEL",
         )
@@ -581,26 +613,24 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
                 elif isinstance(parsed, list):
                     # normalise from a List to a single Dict
                     if len(parsed) != 1 or not isinstance(parsed[0], dict):
-                        log('ERROR', f'Expected a single Dict inside the List', prefix="MODEL")
+                        raise ValueError("Expected a single Dict inside the List.")
                     dict_data = parsed[0]
                     log('DEBUG', f'Removed outer List structure from inner Dict', prefix="MODEL")
                 else:
                     raise TypeError(f"Expected the JSON parsed data to be a Dict or List of Dicts, got {type(parsed)}")
 
-                for key, value in dict_data.items():
-                    log('DEBUG', f'Key found: "{key}" with value: "{value}"', prefix="MODEL")
+                log('DEBUG', f'Parsed Dict contains {len(dict_data)} entr(y/ies)', prefix="MODEL")
 
                 return dict_data
 
             except ValueError as e:
                 log(
-                    "ERROR",
-                    f"Failed to parse dict from string | field={field_name} | value_preview={repr(value)[:50]} | "
-                    f"exception_type={type(e).__name__} | exception_msg={str(e)}",
+                    "WARN",
+                    f"Failed to parse dict from string | field={field_name} | "
+                    f"exception_type={type(e).__name__}",
                     prefix="MODEL",
-                    exception=e,
                 )
-                return None
+                raise ValueError(f"Field '{field_name}' must contain a JSON object.") from None
 
         if not isinstance(value, dict):
             log("WARN", f"Expected dict, got {type(value)} | field={field_name}", prefix="MODEL")
@@ -611,7 +641,7 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
         for key, v in value.items():
             log(
                 "DEBUG",
-                f"Coercing dict entry | raw_key_preview={repr(key)[:50]} | raw_val_preview={repr(v)[:50]}",
+                f"Coercing dict entry | key_type={type(key).__name__} | value_type={type(v).__name__}",
                 prefix="MODEL",
             )
             coerced_key = str(key)
@@ -619,10 +649,10 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
             if not isinstance(coerced_key, (str, int, float, bool, tuple, type(None))):
                 log(
                     "WARN",
-                    f"Coerced key is unhashable | coerced_key_preview={repr(coerced_key)[:50]} | type={type(coerced_key)}",
+                    f"Coerced key is unhashable | type={type(coerced_key).__name__}",
                     prefix="MODEL",
                 )
-                raise TypeError(f"Coerced key is unhashable: {coerced_key!r}")
+                raise TypeError("Coerced dictionary key is unhashable.")
             coerced_value = coerce_value(v, val_t, field_name)
             coerced[coerced_key] = coerced_value
             log(
@@ -630,7 +660,7 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
                 f"Coerced dict entry | key_type={type(coerced_key).__name__} | val_type={type(coerced_value).__name__}",
                 prefix="MODEL",
             )
-        log("DEBUG", f"Coerced dict values: {coerced!r}", prefix="MODEL")
+        log("DEBUG", f"Coerced dict with {len(coerced)} entr(y/ies)", prefix="MODEL")
         return coerced
 
     # Scalars
@@ -638,11 +668,11 @@ def coerce_value(value: Any, expected_type: type, field_name: Optional[str] = No
         log("DEBUG", "Int or Float type expected", prefix="MODEL")
         try:
             result = expected_type(value)
-            log("DEBUG", f"Coerced scalar to {get_type_as_str(expected_type)}: {result!r}", prefix="MODEL")
+            log("DEBUG", f"Coerced scalar to {get_type_as_str(expected_type)}", prefix="MODEL")
             return result
         except ValueError:
-            log("WARN", f"Failed scalar coercion to {get_type_as_str(expected_type)} for value {value!r}", prefix="MODEL")
-            raise ValueError(f"Failed scalar coercion to {get_type_as_str(expected_type)} for value {value!r}")
+            log("WARN", f"Failed scalar coercion to {get_type_as_str(expected_type)}", prefix="MODEL")
+            raise ValueError(f"Failed scalar coercion to {get_type_as_str(expected_type)}.") from None
 
     # Unsupported typing artefact
     raise TypeError(f"Unsupported expected_type for coercion: {expected_type!r}")

@@ -14,9 +14,17 @@ from ghostwriter_graphql_stub import (
     running_ghostwriter_stub,
 )
 from globals import get_config
-from web_app import create_app, _check_api_source, _import_job_sources, _sync_job_side
+from web_app import (
+    _build_sensitivity_snapshot,
+    _check_api_source,
+    _import_job_sources,
+    _sync_job_side,
+    create_app,
+)
 from web_service import (
     WebMergeError,
+    approve_output_preview,
+    acknowledge_sensitivity_review,
     acknowledge_current_preview,
     accept_offered_fields_for_current_match,
     apply_conflict_decision,
@@ -29,9 +37,12 @@ from web_service import (
     get_next_conflict,
     get_next_sensitivity_item,
     get_review_progress,
+    initialise_sensitivity_review,
     load_job,
     load_records_from_json_text,
     list_previous_jobs,
+    parse_findings,
+    prepare_output_preview,
     reject_current_match,
     save_job,
     save_outputs,
@@ -120,6 +131,14 @@ def record(**overrides):
     return data
 
 
+def approve_and_save_output(job, jobs_dir):
+    """Exercise the real service approval boundary for durable-output fixtures."""
+    preview = prepare_output_preview(job)
+    result = approve_output_preview(job, job.output_preview_token)
+    save_outputs(job, jobs_dir, result)
+    return preview
+
+
 def observation(**overrides):
     data = {
         "id": "1",
@@ -143,6 +162,41 @@ class WebServiceTests(unittest.TestCase):
             load_records_from_json_text('{"id": 1}')
         with self.assertRaises(WebMergeError):
             load_records_from_json_text('["not a record"]')
+
+    def test_web_finding_parse_rejects_invalid_field_without_terminal_prompt(self):
+        configure_for_web_tests(interactive_mode=True)
+        invalid_record = record()
+        invalid_record["id"] = "not-an-integer"
+
+        with patch("model.prompt_user_to_fix_field") as prompt:
+            with self.assertRaisesRegex(WebMergeError, "Finding 1 could not be parsed"):
+                parse_findings([invalid_record])
+
+        prompt.assert_not_called()
+
+    def test_sensitivity_snapshot_records_loaded_and_failed_configuration(self):
+        configure_for_web_tests(sensitivity_check_enabled=True)
+
+        loaded_snapshot = _build_sensitivity_snapshot()
+
+        self.assertEqual(loaded_snapshot["version"], 1)
+        self.assertTrue(loaded_snapshot["enabled"])
+        self.assertIn("acme-corp", loaded_snapshot["terms"])
+        self.assertEqual(len(loaded_snapshot["terms_digest"]), 64)
+        self.assertIsNone(loaded_snapshot["configuration_error"])
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            configure_for_web_tests(
+                sensitivity_check_enabled=True,
+                sensitivity_check_terms_file="missing-terms.txt",
+                script_dir=Path(tmp_dir),
+            )
+            failed_snapshot = _build_sensitivity_snapshot()
+
+        self.assertTrue(failed_snapshot["enabled"])
+        self.assertEqual(failed_snapshot["terms"], {})
+        self.assertIsNone(failed_snapshot["terms_digest"])
+        self.assertIsNotNone(failed_snapshot["configuration_error"])
 
     def test_finalise_rejects_incomplete_conflict_review(self):
         job = create_merge_job(
@@ -380,16 +434,93 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(loaded.match_index, job.match_index)
         self.assertEqual(loaded.field_index, job.field_index)
 
+    def test_pre_match_sensitivity_snapshot_applies_to_findings_and_observations(self):
+        configure_for_web_tests(
+            sensitivity_check_enabled=True,
+            sensitivity_check_before_matching=True,
+        )
+        snapshot = {
+            "version": 1,
+            "enabled": True,
+            "pre_match_enabled": True,
+            "terms": {"acme": "[CLIENT]", "secret": None},
+            "terms_digest": "snapshot-digest",
+            "terms_source": "terms.txt",
+            "configuration_error": None,
+        }
+        # The job snapshot, not mutable process configuration, controls the
+        # pre-match decision after an asynchronous import has started.
+        get_config()["sensitivity_check_before_matching"] = False
+
+        job = create_merge_job(
+            {
+                "findings": [record(title="ACME portal", description="Secret detail")],
+                "observations": [observation(title="ACME process", description="Secret observation")],
+            },
+            {"findings": [], "observations": []},
+            job_id="prematchsnapshot123",
+            sensitivity_snapshot=snapshot,
+        )
+
+        self.assertEqual(job.unmatched_left[0].title, "[CLIENT] portal")
+        self.assertEqual(job.unmatched_left[0].description, "Secret detail")
+        self.assertEqual(job.unmatched_observations_left[0].title, "[CLIENT] process")
+        self.assertEqual(job.unmatched_observations_left[0].description, "Secret observation")
+        self.assertEqual(job.pre_match_sensitivity_stats["finding_left"]["replacements_applied"], 1)
+        self.assertEqual(job.pre_match_sensitivity_stats["finding_left"]["flag_only_hits_deferred"], 1)
+        self.assertEqual(job.pre_match_sensitivity_stats["observation_left"]["replacements_applied"], 1)
+        self.assertEqual(job.pre_match_sensitivity_stats["observation_left"]["flag_only_hits_deferred"], 1)
+
+    def test_sensitivity_snapshot_round_trips_and_legacy_jobs_default_to_version_zero(self):
+        snapshot = {
+            "version": 1,
+            "enabled": True,
+            "pre_match_enabled": False,
+            "terms": {"acme": "[CLIENT]"},
+            "terms_digest": "snapshot-digest",
+            "terms_source": "terms.txt",
+            "configuration_error": None,
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            job = create_merge_job(
+                [record()],
+                [],
+                job_id="snapsh6001",
+                sensitivity_snapshot=snapshot,
+            )
+            save_job(job, jobs_dir)
+
+            loaded = load_job(jobs_dir, "snapsh6001")
+            job_path = jobs_dir / "snapsh6001" / "job.json"
+            legacy_data = json.loads(job_path.read_text(encoding="utf-8"))
+            for key in list(legacy_data):
+                if key.startswith("sensitivity_snapshot") or key in {
+                    "sensitivity_enabled",
+                    "sensitivity_pre_match_enabled",
+                    "sensitivity_terms",
+                    "sensitivity_terms_digest",
+                    "sensitivity_terms_source",
+                    "sensitivity_configuration_error",
+                    "pre_match_sensitivity_stats",
+                }:
+                    legacy_data.pop(key)
+            legacy_job = web_service.job_from_dict(legacy_data)
+
+        self.assertEqual(loaded.sensitivity_snapshot_version, 1)
+        self.assertEqual(loaded.sensitivity_terms, {"acme": "[CLIENT]"})
+        self.assertEqual(loaded.sensitivity_terms_digest, "snapshot-digest")
+        self.assertEqual(legacy_job.sensitivity_snapshot_version, 0)
+        self.assertEqual(legacy_job.sensitivity_terms, {})
+
     def test_previous_jobs_are_listed_from_job_store(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             jobs_dir = Path(tmp_dir)
             job = create_merge_job([record()], [], job_id="oldjob123")
             get_next_conflict(job)
-            result = finalise_job(job)
             job.sensitivity_phase_complete = True
             job.sync_results["left"] = {"status": "running", "message": "Creating reviewed findings"}
-            save_job(job, jobs_dir)
-            save_outputs(job, jobs_dir, result)
+            approve_and_save_output(job, jobs_dir)
 
             previous_jobs = list_previous_jobs(jobs_dir)
 
@@ -409,9 +540,12 @@ class WebServiceTests(unittest.TestCase):
             job.sensitivity_phase_complete = True
             self.assertEqual(get_review_progress(job)["phase"], "ready_to_finalise")
 
-            result = finalise_job(job)
+            preview = prepare_output_preview(job)
+            self.assertEqual(len(preview.left_records), 1)
+            self.assertIsNone(job.final_left)
+            self.assertFalse(job.output_approved)
             self.assertFalse(job.output_phase_complete)
-            save_outputs(job, jobs_dir, result)
+            approve_and_save_output(job, jobs_dir)
 
             reloaded = load_job(jobs_dir, "lifecycle123")
             self.assertTrue(reloaded.output_phase_complete)
@@ -422,19 +556,86 @@ class WebServiceTests(unittest.TestCase):
             self.assertFalse(missing_output.output_phase_complete)
             self.assertEqual(get_review_progress(missing_output)["phase"], "ready_to_finalise")
 
+    def test_save_outputs_rejects_unapproved_and_changed_payloads(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            job = create_merge_job([record()], [], job_id="approvalguard123")
+            self.assertIsNone(get_next_conflict(job))
+            job.sensitivity_phase_complete = True
+            unapproved_result = finalise_job(job)
+
+            with self.assertRaisesRegex(WebMergeError, "explicitly approved"):
+                save_outputs(job, jobs_dir, unapproved_result)
+
+            prepare_output_preview(job)
+            approved_result = approve_output_preview(job, job.output_preview_token)
+            changed_result = web_service.MergeResult(
+                left_records=[dict(approved_result.left_records[0], title="Changed after approval")],
+                right_records=approved_result.right_records,
+            )
+            with self.assertRaisesRegex(WebMergeError, "does not match"):
+                save_outputs(job, jobs_dir, changed_result)
+
+            job.final_left[0].title = "Changed attached final record"
+            with self.assertRaisesRegex(WebMergeError, "Finalised job records"):
+                save_outputs(job, jobs_dir, approved_result)
+
+            self.assertFalse((jobs_dir / "approvalguard123" / "left.json").exists())
+
+    def test_persisted_final_record_change_revokes_output_readiness(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            job = create_merge_job([record()], [], job_id="tamperedfinal123")
+            self.assertIsNone(get_next_conflict(job))
+            job.sensitivity_phase_complete = True
+            approve_and_save_output(job, jobs_dir)
+
+            job.final_left[0].title = "Changed after durable approval"
+            save_job(job, jobs_dir)
+            reloaded = load_job(jobs_dir, "tamperedfinal123")
+
+            self.assertFalse(reloaded.output_approved)
+            self.assertFalse(reloaded.output_phase_complete)
+
+    def test_changed_preview_invalidates_stale_approval_token(self):
+        job = create_merge_job([record()], [], job_id="staleapproval123")
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        prepare_output_preview(job)
+        stale_token = job.output_preview_token
+        stale_digest = job.output_preview_digest
+
+        job.merged_left[0].title = "Changed after preview"
+        with self.assertRaisesRegex(WebMergeError, "stale or invalid"):
+            approve_output_preview(job, stale_token)
+
+        self.assertNotEqual(job.output_preview_digest, stale_digest)
+        self.assertFalse(job.output_approved)
+        self.assertIsNone(job.final_left)
+
     def test_legacy_finalised_job_is_ready_only_when_both_outputs_exist(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             jobs_dir = Path(tmp_dir)
             job = create_merge_job([record()], [], job_id="legacyoutput123")
             self.assertIsNone(get_next_conflict(job))
             job.sensitivity_phase_complete = True
-            save_outputs(job, jobs_dir, finalise_job(job))
+            approve_and_save_output(job, jobs_dir)
             job_path = jobs_dir / "legacyoutput123" / "job.json"
             legacy_data = json.loads(job_path.read_text(encoding="utf-8"))
             legacy_data.pop("output_phase_complete")
+            for key in (
+                "output_approved",
+                "output_approved_at",
+                "output_preview_digest",
+                "output_preview_token",
+                "output_preview_generated_at",
+            ):
+                legacy_data.pop(key)
             job_path.write_text(json.dumps(legacy_data), encoding="utf-8")
 
-            self.assertTrue(load_job(jobs_dir, "legacyoutput123").output_phase_complete)
+            legacy_job = load_job(jobs_dir, "legacyoutput123")
+            self.assertTrue(legacy_job.output_approved)
+            self.assertTrue(legacy_job.output_phase_complete)
 
             (jobs_dir / "legacyoutput123" / "left.json").unlink()
             self.assertFalse(load_job(jobs_dir, "legacyoutput123").output_phase_complete)
@@ -445,7 +646,8 @@ class WebServiceTests(unittest.TestCase):
             job = create_merge_job([record()], [], job_id="outputfailure123")
             self.assertIsNone(get_next_conflict(job))
             job.sensitivity_phase_complete = True
-            result = finalise_job(job)
+            prepare_output_preview(job)
+            result = approve_output_preview(job, job.output_preview_token)
             real_atomic_write = web_service._write_json_atomic
 
             def fail_right_output(path, data):
@@ -458,6 +660,7 @@ class WebServiceTests(unittest.TestCase):
                     save_outputs(job, jobs_dir, result)
 
             reloaded = load_job(jobs_dir, "outputfailure123")
+            self.assertTrue(reloaded.output_approved)
             self.assertFalse(reloaded.output_phase_complete)
             self.assertTrue((jobs_dir / "outputfailure123" / "left.json").exists())
             self.assertFalse((jobs_dir / "outputfailure123" / "right.json").exists())
@@ -479,70 +682,235 @@ class WebServiceTests(unittest.TestCase):
         configure_for_web_tests(sensitivity_check_enabled=True)
         job = create_merge_job([record(description="ACME detail")], [], job_id="sens123")
         self.assertIsNone(get_next_conflict(job))
+        terms = {"acme": "[CLIENT]"}
 
-        item = get_next_sensitivity_item(job, {"acme": "[CLIENT]"})
+        item = get_next_sensitivity_item(job, terms)
 
         self.assertIsNotNone(item)
         self.assertTrue(any(part["hit"] for part in item.highlighted_parts))
         apply_sensitivity_decision(
             job,
             {
-                "side": item.side,
-                "record_index": item.record_index,
-                "field_name": item.field_name,
-                "sensitive_term": item.sensitive_term,
+                "decision_token": job.sensitivity_decision_token,
                 "action": "offered",
-                "offered": item.offered,
             },
+            terms=terms,
         )
         self.assertIn("[CLIENT]", job.merged_left[0].description)
+        self.assertEqual(job.sensitivity_review_stats["offered_replacements"], 1)
+
+    def test_sensitivity_decision_uses_server_derived_item_not_browser_fields(self):
+        job = create_merge_job([record(description="ACME detail")], [], job_id="senstrust123")
+        self.assertIsNone(get_next_conflict(job))
+        terms = {"acme": "[CLIENT]"}
+        self.assertIsNotNone(get_next_sensitivity_item(job, terms))
+
+        apply_sensitivity_decision(
+            job,
+            {
+                "decision_token": job.sensitivity_decision_token,
+                "action": "offered",
+                "template_type": "observation",
+                "side": "right",
+                "record_index": "999",
+                "field_name": "title",
+                "sensitive_term": "detail",
+                "offered": "ATTACKER VALUE",
+            },
+            terms=terms,
+        )
+
+        self.assertEqual(job.merged_left[0].description, "[CLIENT] detail")
+        self.assertNotIn("ATTACKER VALUE", job.merged_left[0].description)
+
+    def test_sensitivity_decision_rejects_invalid_or_replayed_token(self):
+        job = create_merge_job(
+            [record(description="ACME and secret detail")],
+            [],
+            job_id="sensreplay123",
+        )
+        self.assertIsNone(get_next_conflict(job))
+        terms = {"acme": "[CLIENT]", "secret": "[SECRET]"}
+        first = get_next_sensitivity_item(job, terms)
+        first_token = job.sensitivity_decision_token
+
+        with self.assertRaisesRegex(WebMergeError, "stale or invalid"):
+            apply_sensitivity_decision(
+                job,
+                {"decision_token": "altered-token", "action": "keep"},
+                terms=terms,
+            )
+        self.assertEqual(job.sensitivity_review_stats["values_retained"], 0)
+        self.assertEqual(job.merged_left[0].description, "ACME and secret detail")
+
+        apply_sensitivity_decision(
+            job,
+            {"decision_token": first_token, "action": "keep"},
+            terms=terms,
+        )
+        second = get_next_sensitivity_item(job, terms)
+        second_token = job.sensitivity_decision_token
+        with self.assertRaisesRegex(WebMergeError, "stale or invalid"):
+            apply_sensitivity_decision(
+                job,
+                {"decision_token": first_token, "action": "keep"},
+                terms=terms,
+            )
+
+        self.assertEqual(first.sensitive_term, "acme")
+        self.assertEqual(second.sensitive_term, "secret")
+        self.assertNotEqual(first_token, second_token)
+        self.assertEqual(job.sensitivity_review_stats["values_retained"], 1)
+
+    def test_offered_action_is_rejected_when_server_has_no_replacement(self):
+        job = create_merge_job([record(description="Secret detail")], [], job_id="sensnooffer123")
+        self.assertIsNone(get_next_conflict(job))
+        terms = {"secret": None}
+        self.assertIsNotNone(get_next_sensitivity_item(job, terms))
+        token = job.sensitivity_decision_token
+
+        with self.assertRaisesRegex(WebMergeError, "no offered replacement"):
+            apply_sensitivity_decision(
+                job,
+                {"decision_token": token, "action": "offered"},
+                terms=terms,
+            )
+
+        self.assertEqual(job.merged_left[0].description, "Secret detail")
+        self.assertEqual(job.sensitivity_review_stats["offered_replacements"], 0)
+        self.assertEqual(job.sensitivity_decision_token, token)
 
     def test_sensitivity_review_handles_multiple_terms_in_same_field(self):
         configure_for_web_tests(sensitivity_check_enabled=True)
         job = create_merge_job([record(description="ACME and secret detail")], [], job_id="sens456")
         self.assertIsNone(get_next_conflict(job))
+        terms = {"acme": "[CLIENT]", "secret": "[SECRET]"}
 
-        first = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+        first = get_next_sensitivity_item(job, terms)
         self.assertIsNotNone(first)
         apply_sensitivity_decision(
             job,
             {
-                "side": first.side,
-                "record_index": first.record_index,
-                "field_name": first.field_name,
-                "sensitive_term": first.sensitive_term,
+                "decision_token": job.sensitivity_decision_token,
                 "action": "offered",
-                "offered": first.offered,
             },
+            terms=terms,
         )
-        second = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+        second = get_next_sensitivity_item(job, terms)
 
         self.assertIsNotNone(second)
         self.assertEqual(second.field_name, "description")
         self.assertEqual(second.sensitive_term, "secret")
+
+    def test_zero_hit_sensitivity_review_requires_acknowledgement_and_persists_audit(self):
+        snapshot = {
+            "version": 1,
+            "enabled": True,
+            "pre_match_enabled": False,
+            "terms": {"never-present": None},
+            "terms_digest": "snapshot-digest",
+            "terms_source": "terms.txt",
+            "configuration_error": None,
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            job = create_merge_job(
+                [record()],
+                [],
+                job_id="zerohits123",
+                sensitivity_snapshot=snapshot,
+            )
+            self.assertIsNone(get_next_conflict(job))
+            self.assertIsNone(get_next_sensitivity_item(job, snapshot["terms"]))
+
+            self.assertFalse(job.sensitivity_phase_complete)
+            self.assertEqual(job.sensitivity_review_status, "awaiting_acknowledgement")
+            self.assertEqual(job.sensitivity_review_outcome, "no_hits")
+            self.assertEqual(job.sensitivity_review_stats["records_scanned"], 2)
+            self.assertEqual(job.sensitivity_review_stats["hits_found"], 0)
+            save_job(job, jobs_dir)
+            reloaded = load_job(jobs_dir, "zerohits123")
+
+        self.assertEqual(reloaded.sensitivity_review_stats, job.sensitivity_review_stats)
+        acknowledge_sensitivity_review(reloaded)
+        self.assertTrue(reloaded.sensitivity_phase_complete)
+        self.assertEqual(reloaded.sensitivity_review_status, "complete")
+        self.assertIsNotNone(reloaded.sensitivity_review_completed_at)
+
+    def test_disabled_sensitivity_review_requires_explicit_acknowledgement(self):
+        snapshot = {
+            "version": 1,
+            "enabled": False,
+            "pre_match_enabled": False,
+            "terms": {},
+            "terms_digest": None,
+            "terms_source": None,
+            "configuration_error": None,
+        }
+        job = create_merge_job(
+            [record()],
+            [],
+            job_id="disabledsens123",
+            sensitivity_snapshot=snapshot,
+        )
+        self.assertIsNone(get_next_conflict(job))
+
+        initialise_sensitivity_review(job, None)
+
+        self.assertEqual(job.sensitivity_review_outcome, "disabled")
+        self.assertEqual(job.sensitivity_review_status, "awaiting_acknowledgement")
+        self.assertFalse(job.sensitivity_phase_complete)
+        acknowledge_sensitivity_review(job)
+        self.assertTrue(job.sensitivity_phase_complete)
+
+    def test_sensitivity_configuration_error_blocks_review_acknowledgement(self):
+        snapshot = {
+            "version": 1,
+            "enabled": True,
+            "pre_match_enabled": True,
+            "terms": {},
+            "terms_digest": None,
+            "terms_source": "missing.txt",
+            "configuration_error": "Configured sensitive-term rules could not be loaded.",
+        }
+        job = create_merge_job(
+            [record()],
+            [],
+            job_id="sensconfigerror123",
+            sensitivity_snapshot=snapshot,
+        )
+        self.assertIsNone(get_next_conflict(job))
+
+        with self.assertRaisesRegex(WebMergeError, "could not be loaded"):
+            get_next_sensitivity_item(job, None)
+        with self.assertRaisesRegex(WebMergeError, "cannot complete"):
+            acknowledge_sensitivity_review(job)
+
+        self.assertEqual(job.sensitivity_review_status, "configuration_error")
+        self.assertFalse(job.sensitivity_phase_complete)
 
     def test_sensitivity_review_keep_advances_to_next_term_in_same_field(self):
         configure_for_web_tests(sensitivity_check_enabled=True)
         job = create_merge_job([record(description="ACME and secret detail")], [], job_id="sens789")
         self.assertIsNone(get_next_conflict(job))
+        terms = {"acme": "[CLIENT]", "secret": "[SECRET]"}
 
-        first = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+        first = get_next_sensitivity_item(job, terms)
         self.assertIsNotNone(first)
         apply_sensitivity_decision(
             job,
             {
-                "side": first.side,
-                "record_index": first.record_index,
-                "field_name": first.field_name,
-                "sensitive_term": first.sensitive_term,
+                "decision_token": job.sensitivity_decision_token,
                 "action": "keep",
             },
+            terms=terms,
         )
-        second = get_next_sensitivity_item(job, {"acme": "[CLIENT]", "secret": "[SECRET]"})
+        second = get_next_sensitivity_item(job, terms)
 
         self.assertIsNotNone(second)
         self.assertEqual(second.field_name, "description")
         self.assertEqual(second.sensitive_term, "secret")
+        self.assertEqual(job.sensitivity_review_stats["values_retained"], 1)
 
 
 class FlaskRouteTests(unittest.TestCase):
@@ -570,6 +938,23 @@ class FlaskRouteTests(unittest.TestCase):
         submitted = dict(data or {})
         submitted["_csrf_token"] = self.csrf_token()
         return submitted
+
+    def acknowledge_sensitivity_for_job(self, job_id: str):
+        return self.client.post(
+            f"/jobs/{job_id}/sensitivity/acknowledge",
+            data=self.with_csrf(),
+            follow_redirects=True,
+        )
+
+    def approve_output_for_job(self, job_id: str):
+        preview = self.client.get(f"/jobs/{job_id}/complete")
+        self.assertEqual(preview.status_code, 200)
+        job = load_job(Path(self.tmp_dir.name), job_id)
+        return self.client.post(
+            f"/jobs/{job_id}/complete/approve",
+            data=self.with_csrf({"approval_token": job.output_preview_token}),
+            follow_redirects=True,
+        )
 
     def test_upload_rejects_invalid_json(self):
         response = self.client.post(
@@ -827,13 +1212,27 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"data-shortcut=\"ArrowLeft\"", conflict.data)
         self.assertIn(b"Highlighted difference", conflict.data)
 
-        completed = self.client.post(
+        sensitivity_summary = self.client.post(
             f"/jobs/{job_id}/conflicts",
             data=self.with_csrf({"field_name": "description", "action": "right"}),
             follow_redirects=True,
         )
+        self.assertEqual(sensitivity_summary.status_code, 200)
+        self.assertIn(b"Sensitivity review ready to complete", sensitivity_summary.data)
+
+        bypass = self.client.get(f"/jobs/{job_id}/complete")
+        self.assertEqual(bypass.status_code, 400)
+        self.assertIn(b"sensitivity review is complete", bypass.data)
+
+        completed = self.acknowledge_sensitivity_for_job(job_id)
         self.assertEqual(completed.status_code, 200)
-        self.assertIn(b"Merged output ready", completed.data)
+        self.assertIn(b"Final output preview", completed.data)
+        self.assertIn(b"Right detail", completed.data)
+        self.assertFalse((Path(self.tmp_dir.name) / job_id / "left.json").exists())
+
+        approved = self.approve_output_for_job(job_id)
+        self.assertEqual(approved.status_code, 200)
+        self.assertIn(b"Merged output ready", approved.data)
 
         left_download = self.client.get(f"/jobs/{job_id}/download/left")
         right_download = self.client.get(f"/jobs/{job_id}/download/right")
@@ -842,6 +1241,313 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(right_download.status_code, 200)
         self.assertEqual(left_download.get_json()[0]["description"], "Right detail")
         self.assertEqual(right_download.get_json()[0]["description"], "Right detail")
+
+    def test_final_preview_rejects_invalid_approval_without_writing_outputs(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record(title="Reviewed final title")], [], job_id="invalidapproval123")
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+
+        preview = self.client.get("/jobs/invalidapproval123/complete")
+        reloaded_preview = load_job(jobs_dir, "invalidapproval123")
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn(b"Final output preview", preview.data)
+        self.assertIn(b"Reviewed final title", preview.data)
+        self.assertIn(b"Approve and create output files", preview.data)
+        self.assertIsNone(reloaded_preview.final_left)
+        self.assertFalse(reloaded_preview.output_approved)
+        self.assertFalse((jobs_dir / "invalidapproval123" / "left.json").exists())
+
+        missing_csrf = self.client.post(
+            "/jobs/invalidapproval123/complete/approve",
+            data={"approval_token": reloaded_preview.output_preview_token},
+        )
+        self.assertEqual(missing_csrf.status_code, 400)
+        self.assertIn(b"Invalid or missing form token", missing_csrf.data)
+
+        rejected = self.client.post(
+            "/jobs/invalidapproval123/complete/approve",
+            data=self.with_csrf({"approval_token": "stale-browser-token"}),
+        )
+
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn(b"stale or invalid", rejected.data)
+        self.assertFalse((jobs_dir / "invalidapproval123" / "left.json").exists())
+        self.assertFalse((jobs_dir / "invalidapproval123" / "right.json").exists())
+
+    def test_final_output_approval_token_cannot_be_replayed(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record()], [], job_id="approvalreplay123")
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+        self.client.get("/jobs/approvalreplay123/complete")
+        approval_token = load_job(jobs_dir, "approvalreplay123").output_preview_token
+
+        approved = self.client.post(
+            "/jobs/approvalreplay123/complete/approve",
+            data=self.with_csrf({"approval_token": approval_token}),
+        )
+        replayed = self.client.post(
+            "/jobs/approvalreplay123/complete/approve",
+            data=self.with_csrf({"approval_token": approval_token}),
+        )
+
+        self.assertEqual(approved.status_code, 302)
+        self.assertEqual(replayed.status_code, 400)
+        self.assertIn(b"already been approved and created", replayed.data)
+        self.assertTrue((jobs_dir / "approvalreplay123" / "left.json").exists())
+        self.assertTrue((jobs_dir / "approvalreplay123" / "right.json").exists())
+
+    def test_final_preview_includes_observation_templates(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            {"findings": [], "observations": [observation(title="Reviewed observation output")]},
+            {"findings": [], "observations": []},
+            job_id="observationpreview123",
+        )
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+
+        preview = self.client.get("/jobs/observationpreview123/complete")
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn(b"Observation Templates (1)", preview.data)
+        self.assertIn(b"Reviewed observation output", preview.data)
+        self.assertFalse((jobs_dir / "observationpreview123" / "left.json").exists())
+
+    def test_file_upload_snapshots_terms_and_applies_pre_match_replacements(self):
+        config = get_config()
+        config["sensitivity_check_enabled"] = True
+        config["sensitivity_check_before_matching"] = True
+        left = json.dumps([record(title="ACME-CORP portal")]).encode("utf-8")
+        right = json.dumps([record(id="2", title="[REDACTED COMPANY] portal")]).encode("utf-8")
+
+        response = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = response.headers["Location"].rstrip("/").split("/")[-2]
+        job = load_job(Path(self.tmp_dir.name), job_id)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(job.sensitivity_snapshot_version, 1)
+        self.assertTrue(job.sensitivity_enabled)
+        self.assertEqual(len(job.sensitivity_terms_digest), 64)
+        self.assertEqual(job.matches[0]["left"].title, "[REDACTED COMPANY] portal")
+        self.assertEqual(job.pre_match_sensitivity_stats["finding_left"]["replacements_applied"], 1)
+
+    def test_sensitivity_review_uses_job_snapshot_after_runtime_config_changes(self):
+        config = get_config()
+        config["sensitivity_check_before_matching"] = False
+        snapshot = {
+            "version": 1,
+            "enabled": True,
+            "pre_match_enabled": False,
+            "terms": {"acme": None},
+            "terms_digest": "snapshot-digest",
+            "terms_source": "terms.txt",
+            "configuration_error": None,
+        }
+        job = create_merge_job(
+            [record(description="ACME detail")],
+            [],
+            job_id="snapreview123",
+            sensitivity_snapshot=snapshot,
+        )
+        self.assertIsNone(get_next_conflict(job))
+        save_job(job, Path(self.tmp_dir.name))
+
+        # A resumed job must keep the rules it started with rather than adopting
+        # a later deployment-wide configuration change.
+        config["sensitivity_check_enabled"] = False
+        response = self.client.get("/jobs/snapreview123/sensitivity")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Finding sensitivity review", response.data)
+        self.assertIn(b"ACME", response.data)
+
+    def test_zero_hit_sensitivity_scan_is_visible_resumable_and_acknowledged(self):
+        config = get_config()
+        config["sensitivity_check_enabled"] = True
+        config["sensitivity_check_before_matching"] = False
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(json.dumps([record()]).encode("utf-8")), "left.json"),
+                "right_file": (io.BytesIO(b"[]"), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+
+        first = self.client.get(f"/jobs/{job_id}/conflicts", follow_redirects=True)
+        first_job = load_job(Path(self.tmp_dir.name), job_id)
+        resumed = self.client.get(f"/jobs/{job_id}/sensitivity")
+        resumed_job = load_job(Path(self.tmp_dir.name), job_id)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertIn(b"Sensitivity review ready to complete", first.data)
+        self.assertIn(b"found no configured sensitive terms", first.data)
+        self.assertIn(b"Initial hits found</dt><dd>0", first.data)
+        self.assertEqual(first_job.sensitivity_review_outcome, "no_hits")
+        self.assertFalse(first_job.sensitivity_phase_complete)
+        self.assertEqual(resumed.status_code, 200)
+        self.assertEqual(resumed_job.sensitivity_review_stats, first_job.sensitivity_review_stats)
+
+        completed = self.acknowledge_sensitivity_for_job(job_id)
+        final_job = load_job(Path(self.tmp_dir.name), job_id)
+        self.assertIn(b"Final output preview", completed.data)
+        self.assertTrue(final_job.sensitivity_phase_complete)
+        self.assertIsNotNone(final_job.sensitivity_review_completed_at)
+
+    def test_missing_sensitivity_rules_fail_closed_with_visible_diagnostic(self):
+        config = get_config()
+        config["sensitivity_check_enabled"] = True
+        config["sensitivity_check_terms_file"] = "definitely-missing-sensitive-terms.txt"
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(json.dumps([record()]).encode("utf-8")), "left.json"),
+                "right_file": (io.BytesIO(b"[]"), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+
+        blocked = self.client.get(f"/jobs/{job_id}/conflicts", follow_redirects=True)
+        acknowledgement = self.acknowledge_sensitivity_for_job(job_id)
+        completion = self.client.get(f"/jobs/{job_id}/complete")
+        job_dir = Path(self.tmp_dir.name) / job_id
+
+        self.assertEqual(blocked.status_code, 200)
+        self.assertIn(b"Sensitivity review blocked", blocked.data)
+        self.assertIn(b"could not be loaded", blocked.data)
+        self.assertNotIn(b"Acknowledge sensitivity result", blocked.data)
+        self.assertEqual(acknowledgement.status_code, 400)
+        self.assertEqual(completion.status_code, 400)
+        self.assertFalse((job_dir / "left.json").exists())
+        self.assertFalse((job_dir / "right.json").exists())
+
+    def test_sensitivity_hits_finish_on_auditable_summary(self):
+        config = get_config()
+        config["sensitivity_check_enabled"] = True
+        config["sensitivity_check_before_matching"] = False
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (
+                    io.BytesIO(json.dumps([record(description="Secret sauce detail")]).encode("utf-8")),
+                    "left.json",
+                ),
+                "right_file": (io.BytesIO(b"[]"), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+        first_hit = self.client.get(f"/jobs/{job_id}/conflicts", follow_redirects=True)
+
+        self.assertIn(b"Finding sensitivity review", first_hit.data)
+        for _ in range(2):
+            pending_job = load_job(Path(self.tmp_dir.name), job_id)
+            response = self.client.post(
+                f"/jobs/{job_id}/sensitivity",
+                data=self.with_csrf({
+                    "decision_token": pending_job.sensitivity_decision_token,
+                    "action": "offered",
+                }),
+                follow_redirects=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Sensitivity review ready to complete", response.data)
+        self.assertIn(b"Offered replacements</dt><dd>2", response.data)
+        self.assertNotIn(b"Merged output ready", response.data)
+
+    def test_sensitivity_form_uses_one_time_server_cursor_token(self):
+        config = get_config()
+        config["sensitivity_check_enabled"] = True
+        config["sensitivity_check_before_matching"] = False
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (
+                    io.BytesIO(json.dumps([record(description="Secret sauce detail")]).encode("utf-8")),
+                    "left.json",
+                ),
+                "right_file": (io.BytesIO(b"[]"), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+        review = self.client.get(f"/jobs/{job_id}/conflicts", follow_redirects=True)
+        pending_job = load_job(Path(self.tmp_dir.name), job_id)
+
+        self.assertIn(b'name="decision_token"', review.data)
+        self.assertNotIn(b'name="side"', review.data)
+        self.assertNotIn(b'name="record_index"', review.data)
+        self.assertNotIn(b'name="field_name"', review.data)
+        self.assertNotIn(b'name="sensitive_term"', review.data)
+        self.assertNotIn(b'name="offered"', review.data)
+
+        rejected = self.client.post(
+            f"/jobs/{job_id}/sensitivity",
+            data=self.with_csrf({"decision_token": "altered-token", "action": "offered"}),
+        )
+        unchanged_job = load_job(Path(self.tmp_dir.name), job_id)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn(b"stale or invalid", rejected.data)
+        self.assertEqual(unchanged_job.merged_left[0].description, "Secret sauce detail")
+        self.assertEqual(unchanged_job.sensitivity_decision_token, pending_job.sensitivity_decision_token)
+
+        accepted = self.client.post(
+            f"/jobs/{job_id}/sensitivity",
+            data=self.with_csrf({
+                "decision_token": pending_job.sensitivity_decision_token,
+                "action": "offered",
+                "sensitive_term": "detail",
+                "offered": "ATTACKER VALUE",
+            }),
+            follow_redirects=False,
+        )
+        replayed = self.client.post(
+            f"/jobs/{job_id}/sensitivity",
+            data=self.with_csrf({
+                "decision_token": pending_job.sensitivity_decision_token,
+                "action": "offered",
+            }),
+        )
+        after_replay = load_job(Path(self.tmp_dir.name), job_id)
+
+        self.assertEqual(accepted.status_code, 302)
+        self.assertEqual(replayed.status_code, 400)
+        self.assertIn(b"stale or invalid", replayed.data)
+        self.assertEqual(after_replay.merged_left[0].description, "proprietary technique detail")
+        self.assertNotIn("ATTACKER VALUE", after_replay.merged_left[0].description)
+        self.assertEqual(after_replay.sensitivity_review_stats["offered_replacements"], 1)
+
+    def test_sensitivity_acknowledgement_requires_csrf_token(self):
+        job = create_merge_job([record()], [], job_id="senscsrf123")
+        self.assertIsNone(get_next_conflict(job))
+        initialise_sensitivity_review(job, None)
+        save_job(job, Path(self.tmp_dir.name))
+
+        response = self.client.post("/jobs/senscsrf123/sensitivity/acknowledge")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Invalid or missing form token", response.data)
 
     def test_preview_reject_match_preserves_both_records_as_unmatched_outputs(self):
         left = json.dumps([record(title="Shared title", description="Left detail")]).encode("utf-8")
@@ -870,12 +1576,17 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(prompt.status_code, 200)
         self.assertIn(b"Reprocess orphan finding records", prompt.data)
 
-        completed = self.client.post(
+        sensitivity_summary = self.client.post(
             f"/jobs/{job_id}/conflicts",
             data=self.with_csrf({"preview_action": "stop_orphan_reprocessing"}),
             follow_redirects=True,
         )
+        self.assertIn(b"Sensitivity review ready to complete", sensitivity_summary.data)
+
+        completed = self.acknowledge_sensitivity_for_job(job_id)
         self.assertEqual(completed.status_code, 200)
+        self.assertIn(b"Final output preview", completed.data)
+        completed = self.approve_output_for_job(job_id)
         self.assertIn(b"Merged output ready", completed.data)
 
         left_records = self.client.get(f"/jobs/{job_id}/download/left").get_json()
@@ -1013,13 +1724,18 @@ class FlaskRouteTests(unittest.TestCase):
         preview = self.client.get(f"/jobs/{job_id}/conflicts", follow_redirects=True)
 
         self.assertEqual(preview.status_code, 200)
-        self.assertIn(b"Merged output ready", preview.data)
+        self.assertIn(b"Sensitivity review ready to complete", preview.data)
         self.assertNotIn(b"Record preview", preview.data)
         self.assertNotIn(b"<th class=\"field-cell\">id</th>", preview.data)
         self.assertNotIn(b"changed selectable", preview.data)
         self.assertNotIn(b"Accept offered id", preview.data)
         self.assertNotIn(b"diff-line removed", preview.data)
         self.assertNotIn(b"diff-line added", preview.data)
+
+        completed = self.acknowledge_sensitivity_for_job(job_id)
+        self.assertIn(b"Final output preview", completed.data)
+        completed = self.approve_output_for_job(job_id)
+        self.assertIn(b"Merged output ready", completed.data)
 
     def test_id_only_match_does_not_skip_next_record_preview(self):
         left = json.dumps(
@@ -1090,6 +1806,114 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"cannot be abandoned while outbound API sync is running", response.data)
         self.assertTrue((Path(self.tmp_dir.name) / "syncabandon123").exists())
 
+    def test_completed_current_and_legacy_jobs_cannot_be_abandoned(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                job_id = "legacycomplete123" if legacy else "currentcomplete123"
+                job = create_merge_job([record()], [], job_id=job_id)
+                self.assertIsNone(get_next_conflict(job))
+                job.sensitivity_phase_complete = True
+                approve_and_save_output(job, jobs_dir)
+
+                if legacy:
+                    job_path = jobs_dir / job_id / "job.json"
+                    state = json.loads(job_path.read_text(encoding="utf-8"))
+                    for key in (
+                        "output_phase_complete",
+                        "output_approved",
+                        "output_approved_at",
+                        "output_preview_digest",
+                        "output_preview_token",
+                        "output_preview_generated_at",
+                    ):
+                        state.pop(key)
+                    job_path.write_text(json.dumps(state), encoding="utf-8")
+
+                summary = self.client.get(f"/jobs/{job_id}/summary")
+                response = self.client.post(
+                    f"/jobs/{job_id}/abandon",
+                    data=self.with_csrf(),
+                )
+
+                self.assertEqual(summary.status_code, 200)
+                self.assertNotIn(b"Abandon merge", summary.data)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(b"completed merge job cannot be abandoned", response.data)
+                self.assertTrue((jobs_dir / job_id).exists())
+
+    def test_composite_legacy_job_resumes_as_completed_and_downloadable(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record(title="Legacy reviewed output")],
+            [],
+            job_id="compositelegacy123",
+        )
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        approve_and_save_output(job, jobs_dir)
+
+        job_path = jobs_dir / "compositelegacy123" / "job.json"
+        state = json.loads(job_path.read_text(encoding="utf-8"))
+        legacy_only_fields = {
+            "finding_conflict_phase_complete",
+            "observation_matches",
+            "unmatched_observations_left",
+            "unmatched_observations_right",
+            "merged_observations_left",
+            "merged_observations_right",
+            "final_observations_left",
+            "final_observations_right",
+            "observation_match_index",
+            "observation_field_index",
+            "observation_conflict_phase_complete",
+            "includes_observations",
+            "rejected_match_keys",
+            "finding_orphan_reprocessing_stopped",
+            "observation_orphan_reprocessing_stopped",
+            "preview_acknowledged",
+            "sensitivity_snapshot_version",
+            "sensitivity_enabled",
+            "sensitivity_pre_match_enabled",
+            "sensitivity_terms",
+            "sensitivity_terms_digest",
+            "sensitivity_terms_source",
+            "sensitivity_configuration_error",
+            "pre_match_sensitivity_stats",
+            "sensitivity_review_initialised",
+            "sensitivity_review_status",
+            "sensitivity_review_outcome",
+            "sensitivity_review_started_at",
+            "sensitivity_review_completed_at",
+            "sensitivity_review_stats",
+            "sensitivity_decision_token",
+            "output_approved",
+            "output_approved_at",
+            "output_preview_digest",
+            "output_preview_token",
+            "output_preview_generated_at",
+            "output_phase_complete",
+        }
+        for key in legacy_only_fields:
+            state.pop(key)
+        job_path.write_text(json.dumps(state), encoding="utf-8")
+
+        completion = self.client.get("/jobs/compositelegacy123/complete")
+        summary = self.client.get("/jobs/compositelegacy123/summary")
+        with self.client.get("/jobs/compositelegacy123/download/left") as download:
+            downloaded_records = download.get_json()
+
+        reloaded = load_job(jobs_dir, "compositelegacy123")
+        self.assertEqual(completion.status_code, 200)
+        self.assertIn(b"Merged output ready", completion.data)
+        self.assertIn(b"compatible legacy job", completion.data)
+        self.assertEqual(summary.status_code, 200)
+        self.assertNotIn(b"Abandon merge", summary.data)
+        self.assertEqual(downloaded_records[0]["title"], "Legacy reviewed output")
+        self.assertTrue(reloaded.output_approved)
+        self.assertTrue(reloaded.output_phase_complete)
+        self.assertEqual(reloaded.sensitivity_review_outcome, "legacy_complete")
+
     def test_preview_can_accept_offered_values_for_current_match(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")
         right = json.dumps([record(id="2", description="Right detail")]).encode("utf-8")
@@ -1111,7 +1935,11 @@ class FlaskRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Merged output ready", response.data)
+        self.assertIn(b"Sensitivity review ready to complete", response.data)
+        completed = self.acknowledge_sensitivity_for_job(job_id)
+        self.assertIn(b"Final output preview", completed.data)
+        completed = self.approve_output_for_job(job_id)
+        self.assertIn(b"Merged output ready", completed.data)
 
     def test_preview_can_apply_explicit_left_right_field_choices(self):
         left = json.dumps([record(description="Left detail", impact="Left impact")]).encode("utf-8")
@@ -1138,7 +1966,11 @@ class FlaskRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Merged output ready", response.data)
+        self.assertIn(b"Sensitivity review ready to complete", response.data)
+        completed = self.acknowledge_sensitivity_for_job(job_id)
+        self.assertIn(b"Final output preview", completed.data)
+        completed = self.approve_output_for_job(job_id)
+        self.assertIn(b"Merged output ready", completed.data)
         left_result = self.client.get(f"/jobs/{job_id}/download/left").get_json()[0]
         right_result = self.client.get(f"/jobs/{job_id}/download/right").get_json()[0]
         self.assertEqual(left_result["description"], "Left detail")
@@ -1150,10 +1982,8 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="filebacked123")
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         response = self.client.get("/jobs/filebacked123/sync/left")
 
@@ -1212,7 +2042,7 @@ class FlaskRouteTests(unittest.TestCase):
         response = self.client.get("/jobs/notready123/sync/left")
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn(b"merged output is ready", response.data)
+        self.assertIn(b"final output approval", response.data)
 
     def test_live_sync_rejects_duplicate_running_or_completed_sync_for_both_sides(self):
         jobs_dir = Path(self.tmp_dir.name)
@@ -1228,11 +2058,9 @@ class FlaskRouteTests(unittest.TestCase):
                         input_sources={side: "api", "right" if side == "left" else "left": "file"},
                     )
                     self.assertIsNone(get_next_conflict(job))
-                    result = finalise_job(job)
                     job.sensitivity_phase_complete = True
                     job.sync_results[side] = {"status": status}
-                    save_job(job, jobs_dir)
-                    save_outputs(job, jobs_dir, result)
+                    approve_and_save_output(job, jobs_dir)
                     config["ghostwriter_api"]["servers"][side].update(
                         {
                             "enabled": True,
@@ -1250,10 +2078,8 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="findingonlysync123", input_sources={"left": "api", "right": "file"})
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(
@@ -1289,10 +2115,8 @@ class FlaskRouteTests(unittest.TestCase):
             input_sources={"left": "api", "right": "file"},
         )
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(
@@ -1334,10 +2158,8 @@ class FlaskRouteTests(unittest.TestCase):
         job.merged_left[0].extra_fields = {"owner": "left-team"}
         job.merged_right[0].title = "Reviewed right output"
         job.merged_right[0].extra_fields = {"owner": "right-team"}
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         # Outbound sync must consume the durable final arrays, not mutable review state.
         job.merged_left[0].title = "Unsaved later left edit"
@@ -1406,10 +2228,8 @@ class FlaskRouteTests(unittest.TestCase):
         job.merged_observations_right[0].title = "Reviewed right observation"
         job.merged_observations_right[0].tags = "right, reviewed"
         job.merged_observations_right[0].extra_fields = {"owner": "right-team"}
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         left_original = ghostwriter_observation_record(
             10,
@@ -1496,10 +2316,8 @@ class FlaskRouteTests(unittest.TestCase):
                     input_sources={side: "api", "right" if side == "left" else "left": "file"},
                 )
                 self.assertIsNone(get_next_conflict(job))
-                result = finalise_job(job)
                 job.sensitivity_phase_complete = True
-                save_job(job, jobs_dir)
-                save_outputs(job, jobs_dir, result)
+                approve_and_save_output(job, jobs_dir)
 
                 config = get_config()
                 config["ghostwriter_api"]["backup_dir"] = str(jobs_dir / "failure-backups")
@@ -1534,7 +2352,6 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="rejoin123", input_sources={"left": "api", "right": "file"})
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
         job.sync_results["left"] = {
             "status": "running",
@@ -1543,8 +2360,7 @@ class FlaskRouteTests(unittest.TestCase):
             "complete": 1,
             "total": 2,
         }
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(
@@ -1570,10 +2386,8 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="locked123", input_sources={"left": "api", "right": "file"})
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
         (jobs_dir / "locked123" / "sync-left.lock").write_text("running\n", encoding="utf-8")
 
         config = get_config()
@@ -1607,10 +2421,8 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="csrf123", input_sources={"left": "api", "right": "file"})
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         response = self.client.post("/jobs/csrf123/sync/left")
 
@@ -1648,6 +2460,8 @@ class FlaskRouteTests(unittest.TestCase):
         )
         self.assertEqual(state["operation"], "inbound_api_import")
         self.assertEqual(state["direction"], "inbound")
+        self.assertEqual(state["sensitivity_snapshot"]["version"], 1)
+        self.assertFalse(state["sensitivity_snapshot"]["enabled"])
         status = self.client.get(response.headers["Location"])
         self.assertEqual(status.status_code, 200)
         self.assertIn(b"Inbound API import status", status.data)
@@ -1808,6 +2622,10 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(state["api_total"], 1)
         self.assertEqual(state["api_estimated_total"], 12)
         self.assertEqual(state["side_name"], "Left Test Ghostwriter")
+        self.assertNotIn("sensitivity_snapshot", state)
+        imported_job = load_job(jobs_dir, state["job_id"])
+        self.assertEqual(imported_job.sensitivity_snapshot_version, 1)
+        self.assertFalse(imported_job.sensitivity_enabled)
 
     def test_home_shows_api_fetch_check_for_configured_sources(self):
         config = get_config()

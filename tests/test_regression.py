@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -19,6 +20,7 @@ from merge import (
     get_compliance_reference_placeholder_choice,
     get_auto_suggest_values,
     get_single_sided_content_choice,
+    merge_main,
     reject_matched_record,
     renumber_findings,
     reprocess_orphan_matches,
@@ -26,14 +28,18 @@ from merge import (
 )
 from model import Finding, Observation
 from sensitivity import (
+    apply_pre_match_sensitivity_replacements,
     apply_sensitive_replacement,
     check_for_sensitivities,
     load_sensitive_terms,
+    sensitivities_checker_single_field,
+    sensitive_terms_digest,
 )
 from utils import (
     Aborting,
     apply_formatting_cleanup,
     apply_configured_normalisation,
+    load_json,
     load_config,
     normalise_cvss_vector,
     normalise_line_endings,
@@ -178,6 +184,16 @@ class ConfigRegressionTests(unittest.TestCase):
         self.assertFalse(get_config()["interactive_mode"])
         self.assertIn("ghostwriter_api", get_config())
 
+    def test_invalid_json_diagnostics_do_not_include_input_content(self):
+        private_content = '{"private-customer-detail": '
+
+        with patch("utils.log") as mocked_log:
+            with self.assertRaises(json.JSONDecodeError):
+                load_json(json_string=private_content)
+
+        logged_text = " ".join(str(call) for call in mocked_log.call_args_list)
+        self.assertNotIn("private-customer-detail", logged_text)
+
 
 class FindingModelRegressionTests(unittest.TestCase):
     def setUp(self):
@@ -276,6 +292,28 @@ class FindingModelRegressionTests(unittest.TestCase):
                 with redirect_stdout(StringIO()):
                     with self.assertRaises(Aborting):
                         Finding.from_dict(record)
+
+    def test_non_interactive_invalid_field_aborts_without_terminal_prompt(self):
+        record = finding(references="").to_dict()
+        record["id"] = "not-an-integer"
+
+        with patch("model.prompt_user_to_fix_field") as prompt:
+            with redirect_stdout(StringIO()):
+                with self.assertRaises(Aborting):
+                    Finding.from_dict(record)
+
+        prompt.assert_not_called()
+
+    def test_interactive_invalid_field_can_be_corrected(self):
+        configure_for_tests(interactive_mode=True)
+        record = finding(references="").to_dict()
+        record["id"] = "not-an-integer"
+
+        with patch("model.prompt_user_to_fix_field", return_value=(0, 7)) as prompt:
+            parsed = Finding.from_dict(record)
+
+        prompt.assert_called_once()
+        self.assertEqual(parsed.id, 7)
 
 
 class NormalisationRegressionTests(unittest.TestCase):
@@ -654,6 +692,26 @@ class MergeRegressionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             renumber_findings([finding()], [], start_id=1)
 
+    def test_non_interactive_merge_preserves_equal_blank_optional_strings(self):
+        left = finding(id=1, title="Shared title", description="Left detail", finding_guidance="")
+        right = finding(id=2, title="Shared title", description="Right detail", finding_guidance="")
+
+        merged_left, merged_right = merge_main({"left": left, "right": right, "score": 95.0})
+
+        self.assertEqual(merged_left.finding_guidance, "")
+        self.assertEqual(merged_right.finding_guidance, "")
+
+    def test_non_interactive_merge_fails_closed_when_no_offered_value_exists(self):
+        left = finding(id=1, title="Shared title", finding_guidance="")
+        right = finding(id=2, title="Shared title", finding_guidance=None)
+
+        with patch("merge.get_tui") as get_tui:
+            with redirect_stdout(StringIO()):
+                with self.assertRaises(Aborting):
+                    merge_main({"left": left, "right": right, "score": 95.0})
+
+        get_tui.assert_not_called()
+
 
 class SensitivityRegressionTests(unittest.TestCase):
     def setUp(self):
@@ -673,6 +731,43 @@ class SensitivityRegressionTests(unittest.TestCase):
         hits = check_for_sensitivities("The ACME platform is secret.", {"acme": "[CLIENT]", "secret": None})
 
         self.assertEqual(hits, [("acme", "[CLIENT]"), ("secret", None)])
+
+    def test_sensitive_rules_and_scanned_content_are_not_written_to_logs(self):
+        sensitive_term = "customer-private-codename"
+        sensitive_replacement = "internal-replacement-value"
+        sensitive_content = f"Finding contains {sensitive_term} and confidential context"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            terms_path = Path(tmp_dir) / "terms.txt"
+            terms_path.write_text(
+                f"{sensitive_term} => {sensitive_replacement}\n",
+                encoding="utf-8",
+            )
+            with patch("sensitivity.log") as mocked_log:
+                terms = load_sensitive_terms("terms.txt", tmp_dir)
+                hits = check_for_sensitivities(sensitive_content, terms)
+
+        logged_text = " ".join(str(call) for call in mocked_log.call_args_list)
+        self.assertEqual(hits, [(sensitive_term, sensitive_replacement)])
+        self.assertNotIn(sensitive_term, logged_text)
+        self.assertNotIn(sensitive_replacement, logged_text)
+        self.assertNotIn("confidential context", logged_text)
+
+    def test_non_interactive_flag_only_term_fails_without_terminal_prompt(self):
+        record = finding(description="Contains a private codename")
+
+        with patch("sensitivity.get_tui") as get_tui:
+            with redirect_stdout(StringIO()):
+                with self.assertRaises(Aborting):
+                    sensitivities_checker_single_field(
+                        "description",
+                        record,
+                        "Left",
+                        {"private codename": None},
+                        interactive_override=False,
+                    )
+
+        get_tui.assert_not_called()
 
     def test_replacement_handles_literals_and_legacy_opening_tag_pairs(self):
         configure_for_tests(
@@ -694,6 +789,29 @@ class SensitivityRegressionTests(unittest.TestCase):
             "<strong>secret</strong>",
         )
 
+    def test_pre_match_processing_applies_replacements_and_defers_flag_only_hits(self):
+        record = finding(title="ACME portal", description="Contains a secret value")
+
+        stats = apply_pre_match_sensitivity_replacements(
+            [record],
+            {"acme": "[CLIENT]", "secret": None},
+        )
+
+        self.assertEqual(record.title, "[CLIENT] portal")
+        self.assertEqual(record.description, "Contains a secret value")
+        self.assertEqual(stats["records_scanned"], 1)
+        self.assertGreater(stats["fields_scanned"], 0)
+        self.assertEqual(stats["hits_found"], 2)
+        self.assertEqual(stats["replacements_applied"], 1)
+        self.assertEqual(stats["flag_only_hits_deferred"], 1)
+
+    def test_sensitive_terms_digest_is_stable_without_exposing_term_order(self):
+        first = sensitive_terms_digest({"secret": None, "acme": "[CLIENT]"})
+        second = sensitive_terms_digest({"acme": "[CLIENT]", "secret": None})
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 64)
+
 
 class CliRegressionTests(unittest.TestCase):
     def setUp(self):
@@ -714,6 +832,170 @@ class CliRegressionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--file-left", result.stdout)
         self.assertIn("--file-right", result.stdout)
+
+    def test_non_interactive_cli_rejects_invalid_record_with_failure_status(self):
+        python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
+        self.skipTest("project virtualenv is not present") if not python_bin.exists() else None
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            left_path = tmp_path / "left.json"
+            right_path = tmp_path / "right.json"
+            output_left = tmp_path / "left-output.json"
+            output_right = tmp_path / "right-output.json"
+            config_path = tmp_path / "config.json"
+            invalid_record = finding().to_dict()
+            invalid_record["id"] = "not-an-integer"
+
+            left_path.write_text(json.dumps([invalid_record]), encoding="utf-8")
+            right_path.write_text("[]", encoding="utf-8")
+            with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
+                config = json.load(handle)
+            config.update({
+                "interactive_mode": False,
+                "sensitivity_check_enabled": False,
+                "log_file_enabled": False,
+            })
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    str(python_bin),
+                    "ghostmerge.py",
+                    "--file-left",
+                    str(left_path),
+                    "--file-right",
+                    str(right_path),
+                    "--out-left",
+                    str(output_left),
+                    "--out-right",
+                    str(output_right),
+                    "--config",
+                    str(config_path),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                input="\n",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output_left.exists())
+            self.assertFalse(output_right.exists())
+
+    def test_cli_fails_closed_when_enabled_sensitivity_rules_are_unavailable(self):
+        python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
+        self.skipTest("project virtualenv is not present") if not python_bin.exists() else None
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            left_path = tmp_path / "left.json"
+            right_path = tmp_path / "right.json"
+            output_left = tmp_path / "left-output.json"
+            output_right = tmp_path / "right-output.json"
+            config_path = tmp_path / "config.json"
+            left_path.write_text(json.dumps([finding().to_dict()]), encoding="utf-8")
+            right_path.write_text("[]", encoding="utf-8")
+
+            with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
+                config = json.load(handle)
+            config.update({
+                "interactive_mode": False,
+                "sensitivity_check_enabled": True,
+                "sensitivity_check_terms_file": "missing-sensitive-rules.txt",
+                "log_file_enabled": False,
+            })
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    str(python_bin),
+                    "ghostmerge.py",
+                    "--file-left",
+                    str(left_path),
+                    "--file-right",
+                    str(right_path),
+                    "--out-left",
+                    str(output_left),
+                    "--out-right",
+                    str(output_right),
+                    "--config",
+                    str(config_path),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                input="\n",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("configured rules could not be loaded", result.stdout)
+            self.assertFalse(output_left.exists())
+            self.assertFalse(output_right.exists())
+
+    def test_cli_entrypoint_applies_shared_pre_match_sensitivity_replacements(self):
+        python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
+        self.skipTest("project virtualenv is not present") if not python_bin.exists() else None
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            left_path = tmp_path / "left.json"
+            right_path = tmp_path / "right.json"
+            output_left = tmp_path / "left-output.json"
+            output_right = tmp_path / "right-output.json"
+            terms_path = tmp_path / "terms.txt"
+            config_path = tmp_path / "config.json"
+            input_record = finding(title="ACME portal").to_dict()
+
+            left_path.write_text(json.dumps([input_record]), encoding="utf-8")
+            right_path.write_text(json.dumps([input_record]), encoding="utf-8")
+            terms_path.write_text("acme => [CLIENT]\nsecret\n", encoding="utf-8")
+            with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
+                config = json.load(handle)
+            config.update(
+                {
+                    "interactive_mode": False,
+                    "sensitivity_check_enabled": True,
+                    "sensitivity_check_before_matching": True,
+                    "sensitivity_check_terms_file": str(terms_path),
+                    "log_file_enabled": False,
+                }
+            )
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    str(python_bin),
+                    "ghostmerge.py",
+                    "--file-left",
+                    str(left_path),
+                    "--file-right",
+                    str(right_path),
+                    "--out-left",
+                    str(output_left),
+                    "--out-right",
+                    str(output_right),
+                    "--config",
+                    str(config_path),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                input="\n",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            merged_left = json.loads(output_left.read_text(encoding="utf-8"))
+            merged_right = json.loads(output_right.read_text(encoding="utf-8"))
+
+        self.assertEqual(merged_left[0]["title"], "[CLIENT] portal")
+        self.assertEqual(merged_right[0]["title"], "[CLIENT] portal")
 
     def test_unmatched_records_are_copied_between_outputs(self):
         left_only = finding(title="Left only")
@@ -805,12 +1087,28 @@ class CliRegressionTests(unittest.TestCase):
         self.assertEqual(unmatched_left, [])
         self.assertEqual(unmatched_right, [rejected_right])
 
-    def test_cli_can_merge_sample_files_with_config_path(self):
+    def test_cli_and_web_service_produce_equivalent_shared_finding_outputs(self):
+        """Keep the common non-interactive Finding workflow equivalent across both interfaces."""
         python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
         self.skipTest("project virtualenv is not present") if not python_bin.exists() else None
 
-        left_record = finding(id=1, title="Cross-site scripting", description="Left detail").to_dict()
-        right_record = finding(id=2, title="Cross site scripting", description="Right detail").to_dict()
+        common_populated_fields = {
+            "host_detection_techniques": "Inspect browser process telemetry.",
+            "network_detection_techniques": "Inspect unexpected script responses.",
+            "finding_guidance": "",
+        }
+        left_record = finding(
+            id=1,
+            title="Cross-site scripting",
+            description="Left detail",
+            **common_populated_fields,
+        ).to_dict()
+        right_record = finding(
+            id=2,
+            title="Cross site scripting",
+            description="Right detail",
+            **common_populated_fields,
+        ).to_dict()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -865,11 +1163,236 @@ class CliRegressionTests(unittest.TestCase):
             merged_left = json.loads(out_left.read_text(encoding="utf-8"))
             merged_right = json.loads(out_right.read_text(encoding="utf-8"))
 
+        # Import locally so the CLI-focused regression module does not make the
+        # Flask service a prerequisite for unrelated model and merge tests.
+        from web_service import (
+            apply_conflict_decision,
+            create_merge_job,
+            finalise_job,
+            get_next_conflict,
+        )
+
+        web_job = create_merge_job([left_record], [right_record], job_id="paritybaseline123")
+        while (conflict := get_next_conflict(web_job)) is not None:
+            # Non-interactive CLI mode accepts the offered value for this
+            # controlled fixture, so apply the same decision to the Web job.
+            apply_conflict_decision(
+                web_job,
+                {"field_name": conflict.field_name, "action": "offered"},
+            )
+        web_result = finalise_job(web_job)
+
         self.assertEqual(len(merged_left), 1)
         self.assertEqual(len(merged_right), 1)
         self.assertEqual(merged_left[0]["id"], "1")
         self.assertEqual(merged_right[0]["id"], "1")
         self.assertEqual(merged_left[0]["description"], merged_right[0]["description"])
+        self.assertEqual(web_result.left_records, merged_left)
+        self.assertEqual(web_result.right_records, merged_right)
+
+    def test_cli_and_web_remain_equivalent_through_both_sensitivity_passes(self):
+        """Exercise matching, unmatched copying, both sensitivity passes, and final serialisation."""
+        python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
+        self.skipTest("project virtualenv is not present") if not python_bin.exists() else None
+
+        left_records = [
+            finding(id=1, title="ACME-CORP portal", description="Short detail").to_dict(),
+            finding(id=2, title="Left-only ACME-CORP record", description="Left-only detail").to_dict(),
+        ]
+        right_records = [
+            finding(
+                id=20,
+                title="ACME-CORP portal",
+                description="A substantially more complete right-side detail.",
+            ).to_dict(),
+            finding(id=21, title="Right-only ACME-CORP record", description="Right-only detail").to_dict(),
+        ]
+        terms = {
+            "acme-corp": "confidential-client",
+            "confidential-client": "[CLIENT]",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            left_path = tmp_path / "left.json"
+            right_path = tmp_path / "right.json"
+            out_left = tmp_path / "left-out.json"
+            out_right = tmp_path / "right-out.json"
+            terms_path = tmp_path / "sensitive-terms.txt"
+            config_path = tmp_path / "config.json"
+            left_path.write_text(json.dumps(left_records), encoding="utf-8")
+            right_path.write_text(json.dumps(right_records), encoding="utf-8")
+            terms_path.write_text(
+                "acme-corp => confidential-client\nconfidential-client => [CLIENT]\n",
+                encoding="utf-8",
+            )
+
+            with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
+                config = json.load(handle)
+            config.update({
+                "interactive_mode": False,
+                "sensitivity_check_enabled": True,
+                "sensitivity_check_before_matching": True,
+                "sensitivity_check_terms_file": str(terms_path),
+                "orphan_reprocessing_enabled": False,
+                "fuzzy_match_threshold": [70],
+                "log_file_enabled": False,
+            })
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            cli = subprocess.run(
+                [
+                    str(python_bin),
+                    "ghostmerge.py",
+                    "--file-left",
+                    str(left_path),
+                    "--file-right",
+                    str(right_path),
+                    "--out-left",
+                    str(out_left),
+                    "--out-right",
+                    str(out_right),
+                    "--config",
+                    str(config_path),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                input="\n",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+
+            self.assertEqual(cli.returncode, 0, cli.stderr)
+            cli_left = json.loads(out_left.read_text(encoding="utf-8"))
+            cli_right = json.loads(out_right.read_text(encoding="utf-8"))
+
+        configure_for_tests(
+            sensitivity_check_enabled=True,
+            sensitivity_check_before_matching=True,
+            orphan_reprocessing_enabled=False,
+            fuzzy_match_threshold=[70],
+        )
+        from web_service import (
+            acknowledge_sensitivity_review,
+            approve_output_preview,
+            apply_conflict_decision,
+            apply_sensitivity_decision,
+            create_merge_job,
+            get_next_conflict,
+            get_next_sensitivity_item,
+            prepare_output_preview,
+            save_outputs,
+        )
+
+        web_job = create_merge_job(
+            left_records,
+            right_records,
+            job_id="sensitiveparity123",
+            sensitivity_snapshot={
+                "version": 1,
+                "enabled": True,
+                "pre_match_enabled": True,
+                "terms": terms,
+                "terms_digest": sensitive_terms_digest(terms),
+                "terms_source": "sensitive-terms.txt",
+                "configuration_error": None,
+            },
+        )
+        while (conflict := get_next_conflict(web_job)) is not None:
+            apply_conflict_decision(
+                web_job,
+                {"field_name": conflict.field_name, "action": "offered"},
+            )
+        while get_next_sensitivity_item(web_job, terms) is not None:
+            apply_sensitivity_decision(
+                web_job,
+                {"action": "offered", "decision_token": web_job.sensitivity_decision_token},
+                terms=terms,
+            )
+        acknowledge_sensitivity_review(web_job)
+        prepare_output_preview(web_job)
+        web_result = approve_output_preview(web_job, web_job.output_preview_token)
+
+        with tempfile.TemporaryDirectory() as web_tmp_dir:
+            web_jobs_dir = Path(web_tmp_dir)
+            save_outputs(web_job, web_jobs_dir, web_result)
+            durable_web_left = json.loads(
+                (web_jobs_dir / web_job.job_id / "left.json").read_text(encoding="utf-8")
+            )
+            durable_web_right = json.loads(
+                (web_jobs_dir / web_job.job_id / "right.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(web_result.left_records, cli_left)
+        self.assertEqual(web_result.right_records, cli_right)
+        self.assertEqual(durable_web_left, cli_left)
+        self.assertEqual(durable_web_right, cli_right)
+        serialised_output = json.dumps({"left": cli_left, "right": cli_right}).lower()
+        self.assertNotIn("acme-corp", serialised_output)
+        self.assertNotIn("confidential-client", serialised_output)
+        self.assertIn("[client]", serialised_output)
+
+    def test_cli_flag_only_sensitivity_failure_redacts_content_and_writes_no_output(self):
+        python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
+        self.skipTest("project virtualenv is not present") if not python_bin.exists() else None
+        sensitive_value = "ultra-secret-customer-name"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            left_path = tmp_path / "left.json"
+            right_path = tmp_path / "right.json"
+            out_left = tmp_path / "left-out.json"
+            out_right = tmp_path / "right-out.json"
+            terms_path = tmp_path / "sensitive-terms.txt"
+            config_path = tmp_path / "config.json"
+            left_path.write_text(
+                json.dumps([finding(description=f"Contains {sensitive_value}").to_dict()]),
+                encoding="utf-8",
+            )
+            right_path.write_text("[]", encoding="utf-8")
+            terms_path.write_text(f"{sensitive_value}\n", encoding="utf-8")
+
+            with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
+                config = json.load(handle)
+            config.update({
+                "interactive_mode": False,
+                "sensitivity_check_enabled": True,
+                "sensitivity_check_before_matching": False,
+                "sensitivity_check_terms_file": str(terms_path),
+                "log_file_enabled": False,
+            })
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            cli = subprocess.run(
+                [
+                    str(python_bin),
+                    "ghostmerge.py",
+                    "--file-left",
+                    str(left_path),
+                    "--file-right",
+                    str(right_path),
+                    "--out-left",
+                    str(out_left),
+                    "--out-right",
+                    str(out_right),
+                    "--config",
+                    str(config_path),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                input="\n",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+
+            diagnostics = f"{cli.stdout}\n{cli.stderr}".lower()
+            self.assertNotEqual(cli.returncode, 0)
+            self.assertNotIn(sensitive_value, diagnostics)
+            self.assertIn("cannot resolve flag-only term", diagnostics)
+            self.assertFalse(out_left.exists())
+            self.assertFalse(out_right.exists())
 
 
 if __name__ == "__main__":

@@ -191,11 +191,33 @@
       .record-preview-table pre {
         max-height: 420px;
       }
+      .final-output-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .final-output-grid details {
+        margin-top: 12px;
+      }
+      .final-output-grid summary {
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .final-output-grid pre {
+        max-height: 320px;
+        white-space: pre-wrap;
+        overflow: auto;
+      }
       .preview-diff {
         margin-top: 10px;
         border: 1px solid var(--line);
         border-radius: 5px;
         overflow: hidden;
+      }
+      @media (max-width: 900px) {
+        .final-output-grid {
+          grid-template-columns: 1fr;
+        }
       }
       .preview-diff .diff-line {
         grid-template-columns: 84px 1fr;

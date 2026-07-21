@@ -12,7 +12,11 @@ from utils import load_config, log, load_json, write_json, return_ASCII_art, Abo
 from model import Finding
 from matching import fuzzy_match_findings
 from merge import append_unmatched_records, merge_main, reject_matched_record, renumber_findings, reprocess_orphan_matches
-from sensitivity import sensitivities_checker_single_record, load_sensitive_terms, sensitivities_checker_records
+from sensitivity import (
+    apply_pre_match_sensitivity_replacements,
+    sensitivities_checker_single_record,
+    load_sensitive_terms,
+)
 
 # run the app
 app = typer.Typer()
@@ -36,11 +40,13 @@ def ghostmerge(
     else:
         load_config()
 
-    get_tui().start()
-    tui.resize_splits()
-    tui.blank_input()
-
-    tui.update_data(return_ASCII_art(), 'white', 'Welcome to GhostMerge')
+    # Non-interactive mode must not start a live terminal or wait for input.
+    # This keeps automation deterministic and lets invalid data fail promptly.
+    if CONFIG['interactive_mode']:
+        get_tui().start()
+        tui.resize_splits()
+        tui.blank_input()
+        tui.update_data(return_ASCII_art(), 'white', 'Welcome to GhostMerge')
     log("INFO", "\n"
                           "[bold] ____  _               _   __  __                      [/bold]\n"
                           "[bold]/ ___|| |__   ___  ___| |_|  \\/  | ___ _ __ __ _  ___  [/bold]\n"
@@ -108,6 +114,15 @@ def ghostmerge(
     terms = None
     if CONFIG['sensitivity_check_enabled']:
         terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"], CONFIG["script_dir"])
+        if terms is None:
+            # An enabled protection must never degrade silently. Abort before
+            # matching or output writes so automation can detect and correct
+            # the missing or unreadable rule configuration.
+            log(
+                "ERROR",
+                "Sensitivity checking is enabled but its configured rules could not be loaded.",
+                prefix="CLI",
+            )
 
         if CONFIG.get('sensitivity_check_before_matching', False) and terms:
             log(
@@ -115,19 +130,14 @@ def ghostmerge(
                 "Applying explicit sensitive-term replacements before fuzzy matching",
                 prefix="CLI",
             )
-            findings_left = sensitivities_checker_records(
-                findings_left,
-                'Left',
-                terms,
-                interactive_override=False,
-                prompt_for_flag_only=False,
-            )
-            findings_right = sensitivities_checker_records(
-                findings_right,
-                'Right',
-                terms,
-                interactive_override=False,
-                prompt_for_flag_only=False,
+            left_pre_match_stats = apply_pre_match_sensitivity_replacements(findings_left, terms)
+            right_pre_match_stats = apply_pre_match_sensitivity_replacements(findings_right, terms)
+            log(
+                "INFO",
+                "Pre-match sensitivity processing completed "
+                f"({left_pre_match_stats['replacements_applied']} left replacement(s), "
+                f"{right_pre_match_stats['replacements_applied']} right replacement(s))",
+                prefix="CLI",
             )
 
     matches: List[Dict[str,Finding|float]] = []
@@ -207,7 +217,8 @@ def ghostmerge(
     write_json(file_out_right, [f.to_dict() for f in final_right])
     log("INFO", f"Written merged files to {file_out_left} and {file_out_right}", prefix="CLI")
 
-    tui.update_data('Merge complete')
+    if CONFIG['interactive_mode']:
+        tui.update_data('Merge complete')
 
     log("INFO", "#########################", prefix="CLI")
     log("INFO", "## Processing complete ##", prefix="CLI")
@@ -243,10 +254,16 @@ def _maybe_reprocess_cli_orphans(matches, unmatched_left, unmatched_right, rejec
 
 
 if __name__ == "__main__":
+    exit_code = 0
     try:
         app()
     except Aborting:
         log("INFO", "Caught abort signal... exiting!", prefix="CLI")
+        # Invalid non-interactive input must be observable by scripts and must
+        # not look like a successful merge that happened to omit its outputs.
+        exit_code = 1
     finally:
         if getattr(tui, "_running", False):
             tui.stop()
+    if exit_code:
+        raise SystemExit(exit_code)

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block main_class %}wide-main{% endblock %}
+{% macro render_records(records, heading, empty_message) %}
+<section class="panel">
+  <h2>{{ heading }} ({{ records|length }})</h2>
+  {% if records %}
+    {% for record in records %}
+    <details{% if loop.first %} open{% endif %}>
+      <summary>{{ record.title or (heading ~ " " ~ loop.index) }}{% if record.id is defined %} — ID {{ record.id }}{% endif %}</summary>
+      <div class="record-preview-scroll">
+        <table class="record-table">
+          <tbody>
+            {% for field_name, field_value in record.items() %}
+            <tr>
+              <th class="field-cell">{{ field_name }}</th>
+              <td><pre>{{ field_value }}</pre></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endfor %}
+  {% else %}
+  <p>{{ empty_message }}</p>
+  {% endif %}
+</section>
+{% endmacro %}
+{% block content %}
+<h1>Final output preview</h1>
+<section class="panel">
+  <p>Review every final record below. No output files have been created and outbound API synchronisation remains locked.</p>
+  <dl>
+    <dt>Left destination</dt><dd>{{ preview_source_labels.left }}</dd>
+    <dt>Right destination</dt><dd>{{ preview_source_labels.right }}</dd>
+    <dt>Preview digest</dt><dd><code>{{ job.output_preview_digest }}</code></dd>
+    {% if job.output_preview_generated_at %}<dt>Prepared</dt><dd>{{ job.output_preview_generated_at }}</dd>{% endif %}
+  </dl>
+</section>
+
+<div class="final-output-grid">
+  <div>
+    <h2>{{ preview_source_labels.left }} output</h2>
+    {{ render_records(preview.left_records, "Findings", "No Findings will be written.") }}
+    {% if job.includes_observations or preview.left_observations %}
+    {{ render_records(preview.left_observations, "Observation Templates", "No Observation Templates will be written.") }}
+    {% endif %}
+  </div>
+  <div>
+    <h2>{{ preview_source_labels.right }} output</h2>
+    {{ render_records(preview.right_records, "Findings", "No Findings will be written.") }}
+    {% if job.includes_observations or preview.right_observations %}
+    {{ render_records(preview.right_observations, "Observation Templates", "No Observation Templates will be written.") }}
+    {% endif %}
+  </div>
+</div>
+
+<form class="panel" action="{{ url_for('approve_output', job_id=job.job_id) }}" method="post">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="approval_token" value="{{ job.output_preview_token }}">
+  {% if job.output_approved %}
+  <p>The displayed content was previously approved, but output creation did not complete. Confirm it again to retry safely.</p>
+  {% else %}
+  <p>Approval records this exact digest, creates both durable output files, and unlocks downloads and any configured outbound API synchronisation.</p>
+  {% endif %}
+  <button type="submit">Approve and create output files</button>
+</form>
+
+{% with job_id=job.job_id %}
+{% include "_abandon_merge_form.html" %}
+{% endwith %}
+{% endblock %}

@@ -1,11 +1,31 @@
 # GhostMerge TODO
 
-## Current priorities (ranked)
+## Active development: Web and CLI workflow parity
 
-1. **Protect completed merge output from abandonment.** Remove or disable the destructive
+The current development goal is to make every shared processing stage explicit, equivalent, and
+verifiable in the Web UI. Web-only API and Observation Template features remain supported extensions
+rather than being constrained to the CLI feature set.
+
+- [x] Define the shared workflow contract and add a baseline CLI/Web output-equivalence regression.
+- [x] Snapshot sensitivity configuration per Web job and apply the CLI-equivalent pre-match pass.
+- [x] Add a visible, resumable post-merge sensitivity stage with persisted audit statistics.
+- [x] Validate sensitivity decisions against server-derived pending state rather than browser fields.
+- [x] Resolve remaining shared-workflow differences in invalid-input handling and interactive mode.
+      Include canonical handling of equal blank optional fields: the CLI currently resolves empty
+      strings through its offered-value path while the Web service preserves them unchanged.
+- [x] Add final output preview and explicit approval before durable output or outbound API sync.
+- [x] Complete end-to-end parity, failure-mode, security, and backwards-compatibility regression tests.
+- [x] Update operator documentation after the implemented workflow passes final review.
+      The README now provides separate CLI and Web operator runbooks, enumerates every visible Web
+      review and approval gate, explains resume and failure behaviour, and includes a destructive
+      outbound-sync checklist.
+
+## Other current priorities (ranked)
+
+1. **Protect completed merge output from abandonment. (Completed.)** Remove or disable the destructive
    “Abandon merge” action once output is ready, and reject direct abandonment requests for
    completed jobs. This closes the clearest remaining local data-loss path.
-2. **Preview and approve final merged output before writing or outbound sync.** Give operators a
+2. **Preview and approve final merged output before writing or outbound sync. (Completed.)** Give operators a
    last verification point after all review and sensitivity decisions, before durable output can
    become the source of a destructive API replacement.
 3. **Show unambiguous source identity throughout left/right review.** Use configured API names and
@@ -100,7 +120,7 @@ and third reduce the risk of approving or synchronising the wrong reviewed conte
 - [ ] Allow manual matching of unmatched findings
 - [x] Implement config file `threshold` override to adjust sensitivity of fuzzy matching
 - [x] Preview matched records before field-level web review
-- [ ] Preview final merged output before final write and prompt for acceptance
+- [x] Preview final merged output before final write and prompt for acceptance
 - [x] Improve UX for interactive handling of extra_fields with auto-suggestion and placeholder handling
 - [x] Improve UX for interactive handling of tags with deterministic combined suggestions
 - [x] Pause / resume web merge jobs by persisting and reopening previous jobs
@@ -120,7 +140,7 @@ and third reduce the risk of approving or synchronising the wrong reviewed conte
       Inbound API import, merge/output, and outbound API sync now have distinct persisted state.
       Output is ready only after conflict and sensitivity review and durable creation of both JSON
       files. Optional left and right outbound sync states do not block local output completion.
-- [ ] Remove or disable the “Abandon merge” button when a merge job is complete.
+- [x] Remove or disable the “Abandon merge” button when a merge job is complete.
       Define the terminal job states consistently and ensure completed output cannot be deleted or
       invalidated through an abandonment action that is no longer applicable.
 - [x] Remove user-facing references to “AzSure”.

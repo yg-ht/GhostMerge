@@ -24,10 +24,12 @@ from ghostwriter_api import (
     verify_backup,
 )
 from globals import get_config
-from sensitivity import load_sensitive_terms
+from sensitivity import load_sensitive_terms, sensitive_terms_digest
 from utils import load_config
 from web_service import (
     WebMergeError,
+    approve_output_preview,
+    acknowledge_sensitivity_review,
     accept_offered_fields_for_current_match,
     accept_offered_for_current_match,
     acknowledge_current_preview,
@@ -35,7 +37,6 @@ from web_service import (
     apply_conflict_decision,
     apply_sensitivity_decision,
     create_merge_job,
-    finalise_job,
     finalised_job_result,
     get_active_conflict_position,
     get_current_match_preview,
@@ -43,15 +44,18 @@ from web_service import (
     get_orphan_reprocessing_prompt,
     get_next_sensitivity_item,
     get_review_progress,
+    initialise_sensitivity_review,
     job_summary,
     list_previous_jobs,
     load_job,
     load_records_from_json_text,
+    prepare_output_preview,
     reject_current_match,
     reprocess_orphans_for_current_kind,
     reset_match_to_preview,
     save_job,
     save_outputs,
+    sensitivity_audit_summary,
     stop_orphan_reprocessing_for_current_kind,
 )
 
@@ -145,7 +149,12 @@ def create_app(test_config: dict | None = None) -> Flask:
                 return redirect(url_for("import_status", import_id=import_id))
             left_records = _load_records_for_side("left", request.files.get("left_file"), input_sources["left"])
             right_records = _load_records_for_side("right", request.files.get("right_file"), input_sources["right"])
-            job = create_merge_job(left_records, right_records, input_sources=input_sources)
+            job = create_merge_job(
+                left_records,
+                right_records,
+                input_sources=input_sources,
+                sensitivity_snapshot=_build_sensitivity_snapshot(),
+            )
             save_job(job, jobs_dir)
             return redirect(url_for("summary", job_id=job.job_id))
         except (UnicodeDecodeError, WebMergeError, GhostwriterApiError) as exc:
@@ -287,6 +296,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     def abandon_job(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
+            _require_job_abandonable(job)
             _require_no_running_live_sync(jobs_dir, job)
             _delete_job_directory(jobs_dir, job.job_id)
             return redirect(url_for("index", abandoned=job.job_id))
@@ -297,10 +307,34 @@ def create_app(test_config: dict | None = None) -> Flask:
     def sensitivity(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
-            item = get_next_sensitivity_item(job, _load_terms())
+            terms = _sensitivity_terms_for_job(job)
+            if (
+                job.sensitivity_snapshot_version == 0
+                and CONFIG.get("sensitivity_check_enabled")
+                and terms is None
+            ):
+                # Legacy jobs did not persist a load error. Preserve their live
+                # configuration lookup but fail closed when it is unavailable.
+                job.sensitivity_configuration_error = "Configured sensitive-term rules could not be loaded."
+            initialise_sensitivity_review(job, terms)
+            if job.sensitivity_review_status == "configuration_error":
+                save_job(job, jobs_dir)
+                return render_template(
+                    "sensitivity_summary.html",
+                    job=job,
+                    audit=sensitivity_audit_summary(job),
+                    progress=get_review_progress(job),
+                )
+
+            item = get_next_sensitivity_item(job, terms)
             save_job(job, jobs_dir)
             if item is None:
-                return redirect(url_for("complete", job_id=job.job_id))
+                return render_template(
+                    "sensitivity_summary.html",
+                    job=job,
+                    audit=sensitivity_audit_summary(job),
+                    progress=get_review_progress(job),
+                )
             return render_template(
                 "sensitivity.html",
                 job=job,
@@ -310,11 +344,25 @@ def create_app(test_config: dict | None = None) -> Flask:
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
+    @app.post("/jobs/<job_id>/sensitivity/acknowledge")
+    def acknowledge_sensitivity(job_id: str):
+        try:
+            job = load_job(jobs_dir, job_id)
+            acknowledge_sensitivity_review(job)
+            save_job(job, jobs_dir)
+            return redirect(url_for("complete", job_id=job.job_id))
+        except WebMergeError as exc:
+            return render_template("error.html", error=str(exc)), 400
+
     @app.post("/jobs/<job_id>/sensitivity")
     def apply_sensitivity(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
-            apply_sensitivity_decision(job, request.form.to_dict())
+            apply_sensitivity_decision(
+                job,
+                request.form.to_dict(),
+                terms=_sensitivity_terms_for_job(job),
+            )
             save_job(job, jobs_dir)
             return redirect(url_for("sensitivity", job_id=job.job_id))
         except WebMergeError as exc:
@@ -326,14 +374,34 @@ def create_app(test_config: dict | None = None) -> Flask:
             job = load_job(jobs_dir, job_id)
             _require_completed_review(job, action="Completion")
             if not job.output_phase_complete:
-                result = finalise_job(job)
-                save_outputs(job, jobs_dir, result)
+                preview = prepare_output_preview(job)
+                save_job(job, jobs_dir)
+                return render_template(
+                    "final_output_preview.html",
+                    job=job,
+                    preview=preview,
+                    preview_source_labels=_preview_source_labels(job),
+                    progress=get_review_progress(job),
+                )
             return render_template(
                 "complete.html",
                 job=job,
                 progress=get_review_progress(job),
                 api_servers=configured_server_summary(CONFIG),
             )
+        except WebMergeError as exc:
+            return render_template("error.html", error=str(exc)), 400
+
+    @app.post("/jobs/<job_id>/complete/approve")
+    def approve_output(job_id: str):
+        try:
+            job = load_job(jobs_dir, job_id)
+            _require_completed_review(job, action="Output approval")
+            if job.output_phase_complete:
+                raise WebMergeError("Final output has already been approved and created.")
+            result = approve_output_preview(job, request.form.get("approval_token", ""))
+            save_outputs(job, jobs_dir, result)
+            return redirect(url_for("complete", job_id=job.job_id))
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
@@ -855,6 +923,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
             _server_for_side(side)
     api_sides = [side for side in ("left", "right") if input_sources[side] == "api"]
     api_estimated_totals = {side: _last_known_api_record_count(jobs_dir, side) for side in api_sides}
+    sensitivity_snapshot = _build_sensitivity_snapshot()
     _ACTIVE_API_IMPORTS.add(import_id)
     _save_import_state(
         jobs_dir,
@@ -871,6 +940,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
             "api_estimated_totals": api_estimated_totals,
             "input_sources": input_sources,
             "file_records": file_records,
+            "sensitivity_snapshot": sensitivity_snapshot,
             "job_id": None,
             "worker_pid": os.getpid(),
         },
@@ -951,7 +1021,12 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                     }
                 )
                 _save_import_state(jobs_dir, import_id, state)
-            job = create_merge_job(records["left"], records["right"], input_sources=input_sources)
+            job = create_merge_job(
+                records["left"],
+                records["right"],
+                input_sources=input_sources,
+                sensitivity_snapshot=state.get("sensitivity_snapshot"),
+            )
             save_job(job, jobs_dir)
             state = _load_import_state(jobs_dir, import_id)
             state.update(
@@ -967,6 +1042,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
             )
             # Drop copied records once the durable merge job exists so the import file does not duplicate data.
             state.pop("file_records", None)
+            state.pop("sensitivity_snapshot", None)
             _save_import_state(jobs_dir, import_id, state)
         except Exception as exc:
             state.update({"status": "error", "stage": "error", "message": str(exc)})
@@ -1305,8 +1381,8 @@ def _require_completed_review(job, action: str = "Outbound API sync") -> None:
 
 def _require_output_ready(job) -> None:
     _require_completed_review(job, action="Outbound API sync")
-    if not job.output_phase_complete:
-        raise WebMergeError("Outbound API sync is only available after merged output is ready.")
+    if not job.output_approved or not job.output_phase_complete:
+        raise WebMergeError("Outbound API sync is only available after final output approval and creation.")
 
 
 def _require_api_backed_side(job, side: str) -> None:
@@ -1327,6 +1403,12 @@ def _require_no_running_live_sync(jobs_dir: Path, job) -> None:
         status = (job.sync_results.get(side) or {}).get("status")
         if status in RUNNING_OPERATION_STATUSES or _sync_lock_path(jobs_dir, job.job_id, side).exists():
             raise WebMergeError("This merge job cannot be abandoned while outbound API sync is running.")
+
+
+def _require_job_abandonable(job) -> None:
+    """Protect durable completed output from deletion through abandonment."""
+    if job.output_phase_complete:
+        raise WebMergeError("A completed merge job cannot be abandoned because its output is ready.")
 
 
 def _delete_job_directory(jobs_dir: Path, job_id: str) -> None:
@@ -1389,6 +1471,53 @@ def _load_terms():
         CONFIG["sensitivity_check_terms_file"],
         CONFIG.get("script_dir", Path(__file__).resolve().parent),
     )
+
+
+def _build_sensitivity_snapshot() -> dict[str, Any]:
+    """Freeze one Web job's protected sensitivity policy without logging it."""
+    enabled = bool(CONFIG.get("sensitivity_check_enabled"))
+    if not enabled:
+        return {
+            "version": 1,
+            "enabled": False,
+            "pre_match_enabled": bool(CONFIG.get("sensitivity_check_before_matching", False)),
+            "terms": {},
+            "terms_digest": None,
+            "terms_source": None,
+            "configuration_error": None,
+        }
+
+    terms = _load_terms()
+    configured_source = Path(str(CONFIG.get("sensitivity_check_terms_file", ""))).name or None
+    if terms is None:
+        return {
+            "version": 1,
+            "enabled": True,
+            "pre_match_enabled": bool(CONFIG.get("sensitivity_check_before_matching", False)),
+            "terms": {},
+            "terms_digest": None,
+            "terms_source": configured_source,
+            "configuration_error": "Configured sensitive-term rules could not be loaded.",
+        }
+
+    return {
+        "version": 1,
+        "enabled": True,
+        "pre_match_enabled": bool(CONFIG.get("sensitivity_check_before_matching", False)),
+        "terms": dict(terms),
+        "terms_digest": sensitive_terms_digest(terms),
+        "terms_source": configured_source,
+        "configuration_error": None,
+    }
+
+
+def _sensitivity_terms_for_job(job) -> Optional[dict[str, Optional[str]]]:
+    """Use a new job's immutable snapshot while preserving legacy job behaviour."""
+    if job.sensitivity_snapshot_version >= 1:
+        if not job.sensitivity_enabled or job.sensitivity_configuration_error:
+            return None
+        return dict(job.sensitivity_terms)
+    return _load_terms()
 
 
 if __name__ == "__main__":

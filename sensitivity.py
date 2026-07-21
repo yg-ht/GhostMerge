@@ -1,11 +1,30 @@
 # external module imports
 from imports import (Any, BeautifulSoup, Dict, fields, key, List, NavigableString, os, re, Tuple, Optional)
+from hashlib import sha256
+import json
 # get global state objects (CONFIG and TUI)
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
 from utils import log, stringify_field, apply_configured_normalisation, _normalise_sensitive_term_for_matching
 from model import Finding
+
+
+def empty_pre_match_sensitivity_stats() -> Dict[str, int]:
+    """Return a fresh counter set for one pre-match record collection."""
+    return {
+        "records_scanned": 0,
+        "fields_scanned": 0,
+        "hits_found": 0,
+        "replacements_applied": 0,
+        "flag_only_hits_deferred": 0,
+    }
+
+
+def sensitive_terms_digest(terms: Dict[str, Optional[str]]) -> str:
+    """Return a stable digest without exposing configured terms in diagnostics."""
+    canonical_terms = json.dumps(terms, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return sha256(canonical_terms.encode("utf-8")).hexdigest()
 
 def _opening_tag_name(tag_text: str) -> Optional[str]:
     """Return the element name if tag_text is an opening HTML tag."""
@@ -121,11 +140,13 @@ def load_sensitive_terms(filename: str, filepath: str) -> Dict[str, Optional[str
                     continue
                 if " => " in original_line:
                     term, replacement = map(str.strip, original_line.split(" => ", 1))
-                    log("DEBUG", f"Parsed replacement line {line_number}: '{term}' => '{replacement}'", prefix="SENSITIVITY")
+                    # Rule values can themselves be sensitive, so diagnostics
+                    # identify only the rule shape and source line.
+                    log("DEBUG", f"Parsed replacement rule on line {line_number}", prefix="SENSITIVITY")
                     normalised_term = _normalise_sensitive_term_for_matching(term).lower()
                     terms[normalised_term] = replacement
                 else:
-                    log("DEBUG", f"Parsed flag-only line {line_number}: '{original_line}'", prefix="SENSITIVITY")
+                    log("DEBUG", f"Parsed flag-only rule on line {line_number}", prefix="SENSITIVITY")
                     normalised_term = _normalise_sensitive_term_for_matching(original_line).lower()
                     terms[normalised_term] = None
         log("DEBUG", f"Loaded {len(terms)} sensitive terms", prefix="SENSITIVITY")
@@ -147,16 +168,17 @@ def check_for_sensitivities(field, terms) -> List[Tuple[str, Optional[str]]]:
     results = []
     field = apply_configured_normalisation(field)
     stringified_field = stringify_field(field)
-    log("DEBUG", f'Checking content starting: "{stringified_field[:50]}" for sensitive content', prefix="SENSITIVITY")
     if not stringified_field or not isinstance(stringified_field, str):
-        log("DEBUG", f"Skipping field '{field}' (empty or non-string)", prefix="SENSITIVITY")
+        log("DEBUG", "Skipping empty sensitivity-check field", prefix="SENSITIVITY")
         return results
     else:
         lowered = stringified_field.lower()
         log("DEBUG", f"Scanning text ({len(stringified_field)} chars) for {len(terms)} terms", prefix="SENSITIVITY")
         for term, replacement in terms.items():
             if term in lowered:
-                log("INFO", f"Sensitive term found: '{term}' → Suggested: '{replacement}'", prefix="SENSITIVITY")
+                # Record the event without copying source content, rules, or
+                # proposed replacements into application logs.
+                log("INFO", "Sensitive term match found", prefix="SENSITIVITY")
                 results.append((term, replacement))
     return results
 
@@ -182,6 +204,46 @@ def apply_sensitive_replacement(field_value: Any, sensitive_term: str, replaceme
     replaced = _replace_literal_or_opening_tag_pair(field_value, sensitive_term, replacement)
     return apply_configured_normalisation(replaced)
 
+
+def apply_pre_match_sensitivity_replacements(
+    records: List[Any],
+    terms: Dict[str, Optional[str]],
+) -> Dict[str, int]:
+    """Apply explicit replacements before matching and return non-sensitive counters.
+
+    Flag-only terms deliberately remain unchanged for the later analyst review.
+    Records are updated in place so callers can continue through their existing
+    matching pipeline without converting model objects a second time.
+    """
+    stats = empty_pre_match_sensitivity_stats()
+    if not terms:
+        return stats
+
+    for record in records:
+        stats["records_scanned"] += 1
+        for field_def in fields(record):
+            if field_def.name == "id":
+                continue
+
+            field_value = record.get(field_def.name)
+            if not field_value:
+                continue
+
+            stats["fields_scanned"] += 1
+            for sensitive_term, offered in check_for_sensitivities(field_value, terms):
+                stats["hits_found"] += 1
+                if offered is None:
+                    stats["flag_only_hits_deferred"] += 1
+                    continue
+
+                current_value = record.get(field_def.name)
+                replaced_value = apply_sensitive_replacement(current_value, sensitive_term, offered)
+                if replaced_value != current_value:
+                    record.set(field_def.name, replaced_value)
+                    stats["replacements_applied"] += 1
+
+    return stats
+
 def sensitivities_checker_records(
     records: List[Finding],
     field_side: str,
@@ -201,7 +263,6 @@ def sensitivities_checker_records(
     ]
 
 def sensitivities_checker_single_field(field_name: str, record: Finding, field_side: str, terms: Dict[str, Optional[str]], interactive_override: Optional[bool] = None, prompt_for_flag_only: bool = True) -> Finding:
-    tui = get_tui()
     sensitivity_hits = check_for_sensitivities(record.get(field_name), terms)
 
     if len(sensitivity_hits) > 0:
@@ -215,11 +276,18 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
             if offered is None and not prompt_for_flag_only:
                 log(
                     'DEBUG',
-                    f'Skipping flag-only sensitive term "{sensitive_term}" during non-interactive sensitivity pass',
+                    'Skipping flag-only sensitive term during non-interactive sensitivity pass',
                     prefix="SENSITIVITY",
                 )
                 continue
+            if not interactive_mode and offered is None:
+                log(
+                    'ERROR',
+                    f"Non-interactive sensitivity review cannot resolve flag-only term in field '{field_name}'.",
+                    prefix="SENSITIVITY",
+                )
             if interactive_mode or offered is None:
+                tui = get_tui()
                 tui.blank_data()
                 tui.render_single_whole_finding_record(record, sensitive_term, field_name)
                 prompt = (f"Sensitive term [bold red]{sensitive_term}[/bold red] in [bold yellow]{field_name}[/bold yellow]"
@@ -249,12 +317,12 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
                         analyst_choice_debug_out = 'Right'
 
                 if action == "o" and offered is not None:
-                    log('DEBUG', f'User chose Offered solution: "{offered}"', prefix="SENSITIVITY")
+                    log('DEBUG', 'User chose the offered sensitivity replacement', prefix="SENSITIVITY")
                     result = apply_sensitive_replacement(record.get(field_name), sensitive_term, offered)
                     record.set(field_name, result)
                 elif action == "e" or action == key.UP:
                     edited_term = tui.invoke_editor(record.get(field_name))
-                    log('DEBUG', f'User chose to edit and set: "{edited_term}"', prefix="SENSITIVITY")
+                    log('DEBUG', 'User supplied a custom sensitivity replacement', prefix="SENSITIVITY")
                     result = apply_sensitive_replacement(record.get(field_name), sensitive_term, edited_term)
                     record.set(field_name, result)
                 elif action == "k" or action == key.DOWN:
@@ -264,7 +332,7 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
                 # We are auto-accepting the auto-offered values if we are configured not to use interactive mode and
                 # the offered variable is populated.  This is perfectly valid, but will result in "best
                 # guess" scenarios that will likely not be as desired.
-                log('DEBUG', f'Auto-accepted Offered solution: "{offered}"', prefix="SENSITIVITY")
+                log('DEBUG', 'Auto-accepted the offered sensitivity replacement', prefix="SENSITIVITY")
                 result = apply_sensitive_replacement(record.get(field_name), sensitive_term, offered)
                 record.set(field_name, result)
 
@@ -298,7 +366,7 @@ def sensitivities_checker_single_record(
                 if result_sensitivities:
                     log(
                         'DEBUG',
-                        f'Sensitivity check of "{field.name}" resulted in: "{str(result_sensitivities.get(field.name))[:30]}"',
+                        f'Sensitivity check of "{field.name}" completed with a result',
                         prefix="SENSITIVITY",
                     )
 

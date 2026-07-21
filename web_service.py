@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import copy
 import difflib
+import hashlib
 import json
+import secrets
 import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
@@ -22,7 +24,12 @@ from merge import (
     renumber_records,
 )
 from model import Finding, Observation, get_type_as_str, is_optional_field
-from sensitivity import apply_sensitive_replacement, check_for_sensitivities
+from sensitivity import (
+    apply_pre_match_sensitivity_replacements,
+    apply_sensitive_replacement,
+    check_for_sensitivities,
+    empty_pre_match_sensitivity_stats,
+)
 from utils import blank_for_type, normalise_finding_record, stringify_field, wrap_string
 
 CONFIG = get_config()
@@ -30,6 +37,18 @@ NON_REVIEWABLE_FIELDS = {"id"}
 TEMPLATE_KINDS = ("finding", "observation")
 TEMPLATE_MODELS = {"finding": Finding, "observation": Observation}
 TEMPLATE_PLURALS = {"finding": "findings", "observation": "observations"}
+
+
+def empty_sensitivity_review_stats() -> dict[str, int]:
+    """Return fresh audit counters for the post-merge sensitivity stage."""
+    return {
+        "records_scanned": 0,
+        "fields_scanned": 0,
+        "hits_found": 0,
+        "offered_replacements": 0,
+        "custom_replacements": 0,
+        "values_retained": 0,
+    }
 
 
 class WebMergeError(ValueError):
@@ -93,6 +112,11 @@ class MergeJob:
     observation_conflict_phase_complete: bool = False
     conflict_phase_complete: bool = False
     sensitivity_phase_complete: bool = False
+    output_approved: bool = False
+    output_approved_at: Optional[str] = None
+    output_preview_digest: Optional[str] = None
+    output_preview_token: Optional[str] = None
+    output_preview_generated_at: Optional[str] = None
     output_phase_complete: bool = False
     sensitivity_template_type: str = "finding"
     sensitivity_side: str = "left"
@@ -110,6 +134,21 @@ class MergeJob:
     rejected_match_keys: list[str] = field(default_factory=list)
     finding_orphan_reprocessing_stopped: bool = False
     observation_orphan_reprocessing_stopped: bool = False
+    sensitivity_snapshot_version: int = 0
+    sensitivity_enabled: bool = False
+    sensitivity_pre_match_enabled: bool = False
+    sensitivity_terms: dict[str, Optional[str]] = field(default_factory=dict)
+    sensitivity_terms_digest: Optional[str] = None
+    sensitivity_terms_source: Optional[str] = None
+    sensitivity_configuration_error: Optional[str] = None
+    pre_match_sensitivity_stats: dict[str, dict[str, int]] = field(default_factory=dict)
+    sensitivity_review_initialised: bool = False
+    sensitivity_review_status: str = "pending"
+    sensitivity_review_outcome: str = "pending"
+    sensitivity_review_started_at: Optional[str] = None
+    sensitivity_review_completed_at: Optional[str] = None
+    sensitivity_review_stats: dict[str, int] = field(default_factory=empty_sensitivity_review_stats)
+    sensitivity_decision_token: Optional[str] = None
 
 
 @dataclass
@@ -164,7 +203,10 @@ def parse_findings(records: list[dict[str, Any]]) -> list[Finding]:
     findings: list[Finding] = []
     for index, record in enumerate(records, start=1):
         try:
-            finding = Finding.from_dict(record)
+            # Web workers have no analyst terminal. Invalid fields must return
+            # to the browser as an error rather than opening an invisible TUI
+            # correction prompt and blocking the request.
+            finding = Finding.from_dict(record, allow_interactive_correction=False)
         except Exception as exc:
             raise WebMergeError(f"Finding {index} could not be parsed.") from exc
         if finding is not None:
@@ -200,6 +242,7 @@ def create_merge_job(
     right_records: list[dict[str, Any]] | dict[str, list[dict[str, Any]]],
     job_id: Optional[str] = None,
     input_sources: Optional[dict[str, str]] = None,
+    sensitivity_snapshot: Optional[dict[str, Any]] = None,
 ) -> MergeJob:
     """Create a merge job and run the existing fuzzy matching rounds."""
     includes_observations = _input_includes_observations(left_records) or _input_includes_observations(right_records)
@@ -209,6 +252,47 @@ def create_merge_job(
     findings_right = parse_findings(right_templates["findings"])
     observations_left = parse_observations(left_templates["observations"])
     observations_right = parse_observations(right_templates["observations"])
+
+    # Only new Web entry points provide a versioned snapshot. Direct service
+    # callers and legacy persisted jobs retain version zero semantics until the
+    # visible sensitivity milestone supplies an explicit migration path.
+    snapshot = sensitivity_snapshot or {}
+    snapshot_version = int(snapshot.get("version", 0))
+    sensitivity_enabled = bool(snapshot.get("enabled", False))
+    sensitivity_pre_match_enabled = bool(snapshot.get("pre_match_enabled", False))
+    sensitivity_terms = dict(snapshot.get("terms") or {})
+    pre_match_stats = {
+        "finding_left": empty_pre_match_sensitivity_stats(),
+        "finding_right": empty_pre_match_sensitivity_stats(),
+        "observation_left": empty_pre_match_sensitivity_stats(),
+        "observation_right": empty_pre_match_sensitivity_stats(),
+    }
+
+    if (
+        snapshot_version >= 1
+        and sensitivity_enabled
+        and not snapshot.get("configuration_error")
+        and sensitivity_pre_match_enabled
+        and sensitivity_terms
+    ):
+        # Apply the same explicit-replacement policy used by the CLI before
+        # fuzzy matching. Flag-only hits remain untouched for analyst review.
+        pre_match_stats["finding_left"] = apply_pre_match_sensitivity_replacements(
+            findings_left,
+            sensitivity_terms,
+        )
+        pre_match_stats["finding_right"] = apply_pre_match_sensitivity_replacements(
+            findings_right,
+            sensitivity_terms,
+        )
+        pre_match_stats["observation_left"] = apply_pre_match_sensitivity_replacements(
+            observations_left,
+            sensitivity_terms,
+        )
+        pre_match_stats["observation_right"] = apply_pre_match_sensitivity_replacements(
+            observations_right,
+            sensitivity_terms,
+        )
 
     matches: list[dict[str, Any]] = []
     unmatched_left = findings_left
@@ -258,6 +342,14 @@ def create_merge_job(
         merged_observations_right=[],
         input_sources=input_sources or {"left": "file", "right": "file"},
         includes_observations=includes_observations,
+        sensitivity_snapshot_version=snapshot_version,
+        sensitivity_enabled=sensitivity_enabled,
+        sensitivity_pre_match_enabled=sensitivity_pre_match_enabled,
+        sensitivity_terms=sensitivity_terms,
+        sensitivity_terms_digest=snapshot.get("terms_digest"),
+        sensitivity_terms_source=snapshot.get("terms_source"),
+        sensitivity_configuration_error=snapshot.get("configuration_error"),
+        pre_match_sensitivity_stats=pre_match_stats,
     )
 
 
@@ -532,15 +624,85 @@ def apply_conflict_decision(job: MergeJob, decision: dict[str, Any]) -> None:
     _advance_field_after_decision(job, kind, field_name)
 
 
+def initialise_sensitivity_review(
+    job: MergeJob,
+    terms: Optional[dict[str, Optional[str]]],
+) -> None:
+    """Initialise one auditable sensitivity pass without advancing its cursor."""
+    if not job.conflict_phase_complete:
+        raise WebMergeError("Conflict review must be complete before sensitivity review.")
+    if job.sensitivity_phase_complete:
+        job.sensitivity_review_initialised = True
+        job.sensitivity_review_status = "complete"
+        job.sensitivity_decision_token = None
+        if job.sensitivity_review_outcome == "pending":
+            job.sensitivity_review_outcome = "legacy_complete"
+        return
+    if job.sensitivity_review_initialised:
+        return
+
+    job.sensitivity_review_initialised = True
+    job.sensitivity_review_started_at = _utc_state_timestamp()
+    job.sensitivity_review_stats = empty_sensitivity_review_stats()
+
+    sensitivity_enabled = (
+        job.sensitivity_enabled
+        if job.sensitivity_snapshot_version >= 1
+        else terms is not None or bool(job.sensitivity_configuration_error)
+    )
+    if job.sensitivity_configuration_error:
+        job.sensitivity_review_status = "configuration_error"
+        job.sensitivity_review_outcome = "configuration_error"
+        job.sensitivity_decision_token = None
+        return
+    if not sensitivity_enabled:
+        job.sensitivity_review_status = "awaiting_acknowledgement"
+        job.sensitivity_review_outcome = "disabled"
+        job.sensitivity_decision_token = None
+        return
+
+    if terms is None:
+        job.sensitivity_review_status = "configuration_error"
+        job.sensitivity_review_outcome = "configuration_error"
+        if not job.sensitivity_configuration_error:
+            job.sensitivity_configuration_error = "Configured sensitive-term rules could not be loaded."
+        job.sensitivity_decision_token = None
+        return
+
+    # Count the immutable starting workload once. Repeated GET requests can then
+    # redisplay the same pending decision without inflating audit statistics.
+    for template_type in TEMPLATE_KINDS:
+        for side in ("left", "right"):
+            for record in _merged_for_kind(job, template_type, side):
+                job.sensitivity_review_stats["records_scanned"] += 1
+                for field_def in fields(TEMPLATE_MODELS[template_type]):
+                    if field_def.name == "id" or not record.get(field_def.name):
+                        continue
+                    job.sensitivity_review_stats["fields_scanned"] += 1
+                    job.sensitivity_review_stats["hits_found"] += len(
+                        check_for_sensitivities(record.get(field_def.name), terms)
+                    )
+
+    if job.sensitivity_review_stats["hits_found"]:
+        job.sensitivity_review_status = "reviewing"
+        job.sensitivity_review_outcome = "hits_found"
+    else:
+        job.sensitivity_review_status = "awaiting_acknowledgement"
+        job.sensitivity_review_outcome = "no_hits"
+        job.sensitivity_decision_token = None
+
+
 def get_next_sensitivity_item(
     job: MergeJob,
     terms: Optional[dict[str, Optional[str]]],
 ) -> Optional[SensitivityReviewItem]:
     """Return the next post-merge sensitivity item that requires human review."""
-    if not job.conflict_phase_complete:
-        raise WebMergeError("Conflict review must be complete before sensitivity review.")
-    if not terms:
-        job.sensitivity_phase_complete = True
+    initialise_sensitivity_review(job, terms)
+    if job.sensitivity_phase_complete:
+        return None
+    if job.sensitivity_review_status == "configuration_error":
+        raise WebMergeError(job.sensitivity_configuration_error or "Sensitivity configuration is unavailable.")
+    if job.sensitivity_review_outcome == "disabled" or not terms:
         return None
 
     while job.sensitivity_template_type in TEMPLATE_KINDS:
@@ -563,6 +725,11 @@ def get_next_sensitivity_item(
                     hits = check_for_sensitivities(record.get(field_def.name), terms)
                     if hits and job.sensitivity_hit_index < len(hits):
                         sensitive_term, offered = hits[job.sensitivity_hit_index]
+                        # The token binds one browser form to this persisted
+                        # cursor. It is rotated after every accepted decision,
+                        # so stale tabs and replayed requests fail closed.
+                        if not job.sensitivity_decision_token:
+                            job.sensitivity_decision_token = secrets.token_urlsafe(32)
                         return SensitivityReviewItem(
                             template_type=job.sensitivity_template_type,
                             side=job.sensitivity_side,
@@ -597,47 +764,80 @@ def get_next_sensitivity_item(
             continue
         break
 
-    job.sensitivity_phase_complete = True
+    job.sensitivity_decision_token = None
+    job.sensitivity_review_status = "awaiting_acknowledgement"
     return None
 
 
-def apply_sensitivity_decision(job: MergeJob, decision: dict[str, Any]) -> None:
-    """Apply a sensitivity-review decision to the selected output record."""
-    template_type = str(decision.get("template_type") or job.sensitivity_template_type or "finding")
-    if template_type not in TEMPLATE_KINDS:
-        raise WebMergeError("Unknown sensitivity decision template type.")
-    side = str(decision.get("side", ""))
-    records = {
-        "left": _merged_for_kind(job, template_type, "left"),
-        "right": _merged_for_kind(job, template_type, "right"),
-    }.get(side)
-    if records is None:
-        raise WebMergeError("Unknown sensitivity decision side.")
+def apply_sensitivity_decision(
+    job: MergeJob,
+    decision: dict[str, Any],
+    terms: Optional[dict[str, Optional[str]]] = None,
+) -> None:
+    """Apply one action to the server-derived pending sensitivity item.
 
-    record_index = int(decision.get("record_index", -1))
-    field_name = str(decision.get("field_name", ""))
-    sensitive_term = str(decision.get("sensitive_term", ""))
+    Record identity, field name, sensitive term, and offered replacement are
+    deliberately ignored when supplied by a browser. Only the action, optional
+    custom value, and one-time cursor token cross the trust boundary.
+    """
+    effective_terms = terms
+    if effective_terms is None and job.sensitivity_snapshot_version >= 1:
+        effective_terms = dict(job.sensitivity_terms)
+    item = get_next_sensitivity_item(job, effective_terms)
+    if item is None:
+        raise WebMergeError("No sensitivity decision is currently pending.")
+
+    submitted_token = str(decision.get("decision_token", ""))
+    expected_token = job.sensitivity_decision_token or ""
+    if not submitted_token or not secrets.compare_digest(submitted_token, expected_token):
+        raise WebMergeError("Sensitivity decision is stale or invalid. Reload the review page and try again.")
+
     action = str(decision.get("action", ""))
-    if record_index < 0 or record_index >= len(records):
-        raise WebMergeError("Unknown sensitivity decision record.")
-
-    record = records[record_index]
     if action == "keep":
+        job.sensitivity_review_stats["values_retained"] += 1
         job.sensitivity_hit_index += 1
+        job.sensitivity_decision_token = None
         return
     if action == "offered":
-        replacement = decision.get("offered")
+        if item.offered is None:
+            raise WebMergeError("The pending sensitivity term has no offered replacement.")
+        replacement = item.offered
+        job.sensitivity_review_stats["offered_replacements"] += 1
     elif action == "custom":
-        replacement = decision.get("custom_value", "")
+        replacement = str(decision.get("custom_value", ""))
+        job.sensitivity_review_stats["custom_replacements"] += 1
     else:
         raise WebMergeError("Unsupported sensitivity decision.")
 
-    record.set(field_name, apply_sensitive_replacement(record.get(field_name), sensitive_term, replacement))
+    records = _merged_for_kind(job, item.template_type, item.side)
+    record = records[item.record_index]
+    record.set(
+        item.field_name,
+        apply_sensitive_replacement(record.get(item.field_name), item.sensitive_term, replacement),
+    )
     job.sensitivity_hit_index = 0
+    job.sensitivity_decision_token = None
 
 
-def finalise_job(job: MergeJob) -> MergeResult:
-    """Renumber and serialise final left/right output records."""
+def acknowledge_sensitivity_review(job: MergeJob) -> None:
+    """Complete sensitivity review only after its visible result is acknowledged."""
+    if not job.conflict_phase_complete:
+        raise WebMergeError("Conflict review must be complete before sensitivity review.")
+    if job.sensitivity_review_status == "configuration_error" or job.sensitivity_configuration_error:
+        raise WebMergeError("Sensitivity review cannot complete while its configuration is unavailable.")
+    if job.sensitivity_review_status != "awaiting_acknowledgement":
+        raise WebMergeError("Sensitivity review is not ready for acknowledgement.")
+
+    job.sensitivity_phase_complete = True
+    job.sensitivity_review_status = "complete"
+    job.sensitivity_review_completed_at = _utc_state_timestamp()
+    job.sensitivity_decision_token = None
+
+
+def _renumbered_final_records(
+    job: MergeJob,
+) -> tuple[list[Finding], list[Finding], list[Observation], list[Observation]]:
+    """Copy and renumber all reviewed collections without mutating the job."""
     if not job.conflict_phase_complete:
         raise WebMergeError("Conflict review must be complete before finalising output.")
 
@@ -647,6 +847,23 @@ def finalise_job(job: MergeJob) -> MergeResult:
     observations_right = [copy.deepcopy(item) for item in job.merged_observations_right]
     left, right = renumber_records(left, right, start_id=1)
     observations_left, observations_right = renumber_records(observations_left, observations_right, start_id=1)
+    return left, right, observations_left, observations_right
+
+
+def build_final_output(job: MergeJob) -> MergeResult:
+    """Build the deterministic final payload without mutating or persisting the job."""
+    left, right, observations_left, observations_right = _renumbered_final_records(job)
+    return MergeResult(
+        left_records=[item.to_dict() for item in left],
+        right_records=[item.to_dict() for item in right],
+        left_observations=[item.to_dict() for item in observations_left],
+        right_observations=[item.to_dict() for item in observations_right],
+    )
+
+
+def finalise_job(job: MergeJob) -> MergeResult:
+    """Renumber final records and attach them to the job for durable output."""
+    left, right, observations_left, observations_right = _renumbered_final_records(job)
     job.final_left = left
     job.final_right = right
     job.final_observations_left = observations_left
@@ -657,6 +874,74 @@ def finalise_job(job: MergeJob) -> MergeResult:
         left_observations=[item.to_dict() for item in observations_left],
         right_observations=[item.to_dict() for item in observations_right],
     )
+
+
+def _final_output_digest(result: MergeResult) -> str:
+    """Return a stable digest binding approval to all four final collections."""
+    canonical_payload = json.dumps(
+        asdict(result),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_payload).hexdigest()
+
+
+def _attached_final_output(job: MergeJob) -> MergeResult:
+    """Serialise final records already attached to a job."""
+    if job.final_left is None or job.final_right is None:
+        raise WebMergeError("Finalised merge output is incomplete.")
+    observations_left = job.final_observations_left or []
+    observations_right = job.final_observations_right or []
+    return MergeResult(
+        left_records=[item.to_dict() for item in job.final_left],
+        right_records=[item.to_dict() for item in job.final_right],
+        left_observations=[item.to_dict() for item in observations_left],
+        right_observations=[item.to_dict() for item in observations_right],
+    )
+
+
+def prepare_output_preview(job: MergeJob) -> MergeResult:
+    """Prepare an approval-bound preview without creating durable output files."""
+    if not job.conflict_phase_complete or not job.sensitivity_phase_complete:
+        raise WebMergeError("All review stages must be complete before previewing merged output.")
+
+    result = build_final_output(job)
+    digest = _final_output_digest(result)
+
+    # Any change to the proposed payload invalidates an earlier browser form
+    # and any approval recorded for different content.
+    if not secrets.compare_digest(job.output_preview_digest or "", digest):
+        job.output_preview_digest = digest
+        job.output_preview_token = secrets.token_urlsafe(32)
+        job.output_preview_generated_at = _utc_state_timestamp()
+        job.output_approved = False
+        job.output_approved_at = None
+    elif not job.output_preview_token:
+        # A fresh token permits an explicit retry after an interrupted or
+        # failed write while keeping the already-recorded approval auditable.
+        job.output_preview_token = secrets.token_urlsafe(32)
+
+    return result
+
+
+def approve_output_preview(job: MergeJob, submitted_token: str) -> MergeResult:
+    """Approve the current server-derived preview and attach its final records."""
+    result = prepare_output_preview(job)
+    expected_token = job.output_preview_token or ""
+    if not submitted_token or not secrets.compare_digest(str(submitted_token), expected_token):
+        raise WebMergeError("Final output approval is stale or invalid. Reload the preview and try again.")
+
+    # Rebuild through the existing finalisation boundary only after the exact
+    # preview has been approved. The digest check in save_outputs protects
+    # callers from substituting a different MergeResult afterwards.
+    result = finalise_job(job)
+    if not secrets.compare_digest(_final_output_digest(result), job.output_preview_digest or ""):
+        raise WebMergeError("Final output changed during approval. Reload the preview and try again.")
+    job.output_approved = True
+    job.output_approved_at = _utc_state_timestamp()
+    job.output_preview_token = None
+    return result
 
 
 def save_job(job: MergeJob, jobs_dir: Path) -> Path:
@@ -731,8 +1016,16 @@ def save_outputs(job: MergeJob, jobs_dir: Path, result: MergeResult) -> None:
     """Persist both outputs before marking the merge output as ready."""
     if not job.conflict_phase_complete or not job.sensitivity_phase_complete:
         raise WebMergeError("All review stages must be complete before saving merged output.")
-    if job.final_left is None or job.final_right is None:
-        raise WebMergeError("Merge output must be finalised before it can be saved.")
+    if not job.output_approved or not job.output_approved_at:
+        raise WebMergeError("Final output must be explicitly approved before it can be saved.")
+    if not job.output_preview_digest or not secrets.compare_digest(
+        _final_output_digest(result),
+        job.output_preview_digest,
+    ):
+        raise WebMergeError("Approved final output does not match the output being saved.")
+    attached_result = _attached_final_output(job)
+    if not secrets.compare_digest(_final_output_digest(attached_result), job.output_preview_digest):
+        raise WebMergeError("Finalised job records do not match the approved output.")
     job_dir = _job_dir(jobs_dir, job.job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     left_output = _output_payload(result.left_records, result.left_observations)
@@ -753,21 +1046,18 @@ def save_outputs(job: MergeJob, jobs_dir: Path, result: MergeResult) -> None:
 
 def finalised_job_result(job: MergeJob) -> MergeResult:
     """Return already-finalised output for download or outbound synchronisation."""
-    if not job.output_phase_complete:
+    if not job.output_approved or not job.output_phase_complete:
         raise WebMergeError("Merged output must be ready before outbound API synchronisation.")
-    if job.final_left is None or job.final_right is None:
-        raise WebMergeError("Finalised merge output is incomplete.")
-    observations_left = job.final_observations_left or []
-    observations_right = job.final_observations_right or []
-    return MergeResult(
-        left_records=[item.to_dict() for item in job.final_left],
-        right_records=[item.to_dict() for item in job.final_right],
-        left_observations=[item.to_dict() for item in observations_left],
-        right_observations=[item.to_dict() for item in observations_right],
-    )
+    result = _attached_final_output(job)
+    if job.output_preview_digest and not secrets.compare_digest(
+        _final_output_digest(result),
+        job.output_preview_digest,
+    ):
+        raise WebMergeError("Finalised merge output no longer matches its recorded approval.")
+    return result
 
 
-def job_summary(job: MergeJob) -> dict[str, int | bool | str]:
+def job_summary(job: MergeJob) -> dict[str, Any]:
     summary = get_review_progress(job)
     summary.update({
         "job_id": job.job_id,
@@ -781,10 +1071,38 @@ def job_summary(job: MergeJob) -> dict[str, int | bool | str]:
         "merged_observations": len(job.merged_observations_left),
         "conflict_phase_complete": job.conflict_phase_complete,
         "sensitivity_phase_complete": job.sensitivity_phase_complete,
+        "sensitivity_review_status": job.sensitivity_review_status,
+        "sensitivity_review_outcome": job.sensitivity_review_outcome,
+        "sensitivity_review_started_at": job.sensitivity_review_started_at,
+        "sensitivity_review_completed_at": job.sensitivity_review_completed_at,
+        "sensitivity_review_stats": dict(job.sensitivity_review_stats),
+        "output_approved": job.output_approved,
+        "output_approved_at": job.output_approved_at,
         "output_phase_complete": job.output_phase_complete,
         "sync_results": job.sync_results,
     })
     return summary
+
+
+def sensitivity_audit_summary(job: MergeJob) -> dict[str, Any]:
+    """Return template-safe sensitivity state without exposing snapshotted terms."""
+    pre_match_totals = empty_pre_match_sensitivity_stats()
+    for collection_stats in job.pre_match_sensitivity_stats.values():
+        for key in pre_match_totals:
+            pre_match_totals[key] += int(collection_stats.get(key, 0))
+
+    return {
+        "enabled": job.sensitivity_enabled if job.sensitivity_snapshot_version >= 1 else None,
+        "status": job.sensitivity_review_status,
+        "outcome": job.sensitivity_review_outcome,
+        "terms_source": job.sensitivity_terms_source,
+        "terms_digest": job.sensitivity_terms_digest,
+        "configuration_error": job.sensitivity_configuration_error,
+        "pre_match": pre_match_totals,
+        "post_merge": dict(job.sensitivity_review_stats),
+        "started_at": job.sensitivity_review_started_at,
+        "completed_at": job.sensitivity_review_completed_at,
+    }
 
 
 def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
@@ -799,7 +1117,7 @@ def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
     phase_labels = {
         "conflict_review": "Conflict review",
         "sensitivity_review": "Sensitivity review",
-        "ready_to_finalise": "Ready to finalise",
+        "ready_to_finalise": "Ready for final preview",
         "output_ready": "Merged output ready",
     }
 
@@ -917,6 +1235,21 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         observation_conflict_phase_complete=data.get("observation_conflict_phase_complete", data.get("conflict_phase_complete", False)),
         conflict_phase_complete=data["conflict_phase_complete"],
         sensitivity_phase_complete=data["sensitivity_phase_complete"],
+        output_approved=bool(data.get("output_approved", False)),
+        output_approved_at=(
+            data.get("output_approved_at") if isinstance(data.get("output_approved_at"), str) else None
+        ),
+        output_preview_digest=(
+            data.get("output_preview_digest") if isinstance(data.get("output_preview_digest"), str) else None
+        ),
+        output_preview_token=(
+            data.get("output_preview_token") if isinstance(data.get("output_preview_token"), str) else None
+        ),
+        output_preview_generated_at=(
+            data.get("output_preview_generated_at")
+            if isinstance(data.get("output_preview_generated_at"), str)
+            else None
+        ),
         output_phase_complete=bool(data.get("output_phase_complete", False)),
         sensitivity_template_type=data.get("sensitivity_template_type", "finding"),
         sensitivity_side=data["sensitivity_side"],
@@ -940,6 +1273,32 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
             "observation_orphan_reprocessing_stopped",
             data.get("observation_orphan_reprocess_complete", False),
         ),
+        sensitivity_snapshot_version=int(data.get("sensitivity_snapshot_version", 0)),
+        sensitivity_enabled=bool(data.get("sensitivity_enabled", False)),
+        sensitivity_pre_match_enabled=bool(data.get("sensitivity_pre_match_enabled", False)),
+        sensitivity_terms=dict(data.get("sensitivity_terms") or {}),
+        sensitivity_terms_digest=data.get("sensitivity_terms_digest"),
+        sensitivity_terms_source=data.get("sensitivity_terms_source"),
+        sensitivity_configuration_error=data.get("sensitivity_configuration_error"),
+        pre_match_sensitivity_stats=dict(data.get("pre_match_sensitivity_stats") or {}),
+        sensitivity_review_initialised=bool(
+            data.get("sensitivity_review_initialised", data.get("sensitivity_phase_complete", False))
+        ),
+        sensitivity_review_status=data.get(
+            "sensitivity_review_status",
+            "complete" if data.get("sensitivity_phase_complete", False) else "pending",
+        ),
+        sensitivity_review_outcome=data.get(
+            "sensitivity_review_outcome",
+            "legacy_complete" if data.get("sensitivity_phase_complete", False) else "pending",
+        ),
+        sensitivity_review_started_at=data.get("sensitivity_review_started_at"),
+        sensitivity_review_completed_at=data.get("sensitivity_review_completed_at"),
+        sensitivity_review_stats={
+            **empty_sensitivity_review_stats(),
+            **dict(data.get("sensitivity_review_stats") or {}),
+        },
+        sensitivity_decision_token=data.get("sensitivity_decision_token"),
     )
 
 
@@ -947,12 +1306,35 @@ def _reconcile_output_state(job: MergeJob, data: dict[str, Any], job_dir: Path) 
     """Validate persisted completion against final data and both durable output files."""
     has_final_records = job.final_left is not None and job.final_right is not None
     has_output_files = (job_dir / "left.json").is_file() and (job_dir / "right.json").is_file()
+    final_digest_matches = True
+    if has_final_records and job.output_preview_digest:
+        final_digest_matches = secrets.compare_digest(
+            _final_output_digest(_attached_final_output(job)),
+            job.output_preview_digest,
+        )
+
+    if "output_approved" in data:
+        # Current jobs retain approval across a retryable output-write failure,
+        # but cannot be considered ready until both output files also exist.
+        job.output_approved = bool(data.get("output_approved")) and has_final_records and final_digest_matches
+    else:
+        # Legacy jobs pre-date explicit approval. Only already-complete jobs get
+        # compatibility approval; incomplete legacy jobs still enter preview.
+        job.output_approved = has_final_records and has_output_files
+        if job.output_approved and not job.output_approved_at:
+            job.output_approved_at = data.get("sensitivity_review_completed_at")
+
     if "output_phase_complete" in data:
-        job.output_phase_complete = bool(data.get("output_phase_complete")) and has_final_records and has_output_files
+        job.output_phase_complete = (
+            bool(data.get("output_phase_complete"))
+            and job.output_approved
+            and has_final_records
+            and has_output_files
+        )
     else:
         # Jobs written before the explicit marker are complete only when their old
         # final arrays and both files provide equivalent durable evidence.
-        job.output_phase_complete = has_final_records and has_output_files
+        job.output_phase_complete = job.output_approved and has_final_records and has_output_files
 
 
 def _get_next_conflict_for_kind(job: MergeJob, kind: str) -> Optional[ConflictReviewItem]:
@@ -1233,6 +1615,11 @@ def _winners_from_state(winners: dict[str, Any]) -> dict[str, Any]:
 
 def _human_file_mtime(path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _utc_state_timestamp() -> str:
+    """Return a stable UTC timestamp for persisted workflow audit state."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _job_dir(jobs_dir: Path, job_id: str) -> Path:
