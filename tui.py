@@ -5,12 +5,10 @@ from imports import (difflib, escape, fields, os, subprocess, tempfile, threadin
 from globals import get_config, set_tui
 from model import Finding, get_type_as_str
 from merge import ResolvedWinner
-from utils import Aborting
-
 CONFIG = get_config()
 
 # local module imports
-from utils import log, blank_for_type, stringify_field, wrap_string
+from utils import Aborting, blank_for_type, extra_fields_for_comparison, log, stringify_field, wrap_string
 
 __all__ = ["tui"]
 
@@ -344,8 +342,15 @@ class TUI:
         score = finding_record['score']
         log('INFO', f'These two records have a {score:.2f}% match overall', prefix='TUI')
         for field in fields(Finding):
-            left_value_raw = str(getattr(left_record, field.name, blank_for_type(get_type_as_str(field.type))))
-            right_value_raw = str(getattr(right_record, field.name, blank_for_type(get_type_as_str(field.type))))
+            left_value = getattr(left_record, field.name, blank_for_type(get_type_as_str(field.type)))
+            right_value = getattr(right_record, field.name, blank_for_type(get_type_as_str(field.type)))
+            if field.name == "extra_fields":
+                # Keep transport-only timestamps out of the record preview as
+                # well as the field-level comparison that opened this review.
+                left_value = extra_fields_for_comparison(left_value)
+                right_value = extra_fields_for_comparison(right_value)
+            left_value_raw = str(left_value)
+            right_value_raw = str(right_value)
 
             if len(left_value_raw) > CONFIG["max_chars_field_render"]:
                 left_value = f'{left_value_raw[:CONFIG["max_chars_field_render"] - 3]}...'

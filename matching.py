@@ -4,7 +4,12 @@ from imports import (fields, fuzz, Dict, List, Tuple)
 from globals import get_config
 CONFIG = get_config()
 # local module imports
-from utils import log, normalise_finding_record, normalise_text_for_matching
+from utils import (
+    extra_fields_for_comparison,
+    log,
+    normalise_finding_record,
+    normalise_text_for_matching,
+)
 from model import Finding, Observation
 
 MergeRecord = Finding | Observation
@@ -140,6 +145,11 @@ def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> f
 
         left_value = getattr(finding_left, field.name)
         right_value = getattr(finding_right, field.name)
+        if field.name == "extra_fields":
+            # Synchronisation timestamps are transport metadata, not finding
+            # content, so they must not influence candidate selection.
+            left_value = extra_fields_for_comparison(left_value)
+            right_value = extra_fields_for_comparison(right_value)
         if isinstance(left_value, str) or isinstance(right_value, str):
             # Free-text common fields should benefit from the same comparison-only
             # punctuation and whitespace cleanup as the primary weighted fields.

@@ -8,8 +8,49 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 # ── Config & Logging ────────────────────────────────────────────────
 LEVEL_ORDER = ["DEBUG", "INFO", "WARN", "ERROR"]
 
+# This field describes GhostMerge's transport history rather than template
+# content. Comparing it would make otherwise equivalent records appear to
+# conflict after each side was synchronised at a different time.
+COMPARISON_IGNORED_EXTRA_FIELD_KEYS = frozenset({"ghostmerge_last_synced_at"})
+
+
 class Aborting(Exception):
     pass
+
+
+def extra_fields_for_comparison(value: Any) -> Any:
+    """Return extra fields without GhostMerge-owned comparison metadata.
+
+    Non-dictionary values are returned unchanged so existing validation and
+    error handling remain responsible for malformed input.
+    """
+    if not isinstance(value, dict):
+        return value
+
+    return {
+        key: item
+        for key, item in value.items()
+        if key not in COMPARISON_IGNORED_EXTRA_FIELD_KEYS
+    }
+
+
+def preserve_ignored_extra_fields(resolved_value: Any, original_value: Any) -> Any:
+    """Reattach one record's own ignored metadata after resolving content.
+
+    A shallow copy is sufficient because only the top-level metadata key is
+    replaced. Nested user-controlled extra fields remain untouched.
+    """
+    if not isinstance(resolved_value, dict):
+        return resolved_value
+
+    # Always remove ignored values supplied by a chosen/opposite record first.
+    # A side without its own timestamp must not inherit one incidentally.
+    preserved_value = extra_fields_for_comparison(resolved_value)
+    if isinstance(original_value, dict):
+        for key in COMPARISON_IGNORED_EXTRA_FIELD_KEYS:
+            if key in original_value:
+                preserved_value[key] = original_value[key]
+    return preserved_value
 
 
 def load_config(config_path: str | Path = f"{SCRIPT_DIR}/ghostmerge_config.json"):

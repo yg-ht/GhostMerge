@@ -6,7 +6,15 @@ from imports import (Any, auto, Dict, Enum, fields, key, List, md5, Tuple)
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, normalise_tags, normalise_finding_record, is_blank, blank_for_type
+from utils import (
+    blank_for_type,
+    extra_fields_for_comparison,
+    is_blank,
+    log,
+    normalise_finding_record,
+    normalise_tags,
+    preserve_ignored_extra_fields,
+)
 from model import Finding, Observation, is_optional_field, get_type_as_str
 from matching import score_record_similarity
 
@@ -16,6 +24,25 @@ class ResolvedWinner(Enum):
     NONE = auto()
     LEFT = auto()
     RIGHT = auto()
+
+
+def set_record_pair_field_values(
+    left_record: MergeRecord,
+    right_record: MergeRecord,
+    field_name: str,
+    left_value: Any,
+    right_value: Any,
+) -> None:
+    """Set resolved values while retaining side-local comparison metadata."""
+    if field_name == "extra_fields":
+        # Conflict choices operate only on comparable content. Reattach the
+        # timestamp from each original record so one side never inherits the
+        # other side's synchronisation history.
+        left_value = preserve_ignored_extra_fields(left_value, left_record.extra_fields)
+        right_value = preserve_ignored_extra_fields(right_value, right_record.extra_fields)
+
+    left_record.set(field_name, left_value)
+    right_record.set(field_name, right_value)
 
 # ── Conflict Resolution ─────────────────────────────────────────────
 def resolve_conflict(value_from_left, value_from_right) -> Tuple[ResolvedWinner, str | None]:
@@ -105,6 +132,10 @@ def get_auto_suggest_values(finding_from_left: MergeRecord, finding_from_right: 
             log("DEBUG", f"Tags normalised and combined for auto-value", prefix="MERGE")
 
         elif field_name == "extra_fields":
+            # Auto-suggestions contain only user-meaningful content. The
+            # side-specific ignored values are restored when a choice is set.
+            value_from_left = extra_fields_for_comparison(value_from_left)
+            value_from_right = extra_fields_for_comparison(value_from_right)
             should_accept_placeholder, placeholder_side, placeholder_value = get_compliance_reference_placeholder_choice(
                 value_from_left,
                 value_from_right,
@@ -399,6 +430,9 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
 
         left_value: Any = getattr(finding_pair.get('left'), field.name, blank_for_type(expected_type_str))
         right_value: Any = getattr(finding_pair.get('right'), field.name, blank_for_type(expected_type_str))
+        if field.name == "extra_fields":
+            left_value = extra_fields_for_comparison(left_value)
+            right_value = extra_fields_for_comparison(right_value)
         auto_value: Any = finding_pair.get('auto_value')
         auto_side: dict[str, ResolvedWinner] = finding_pair.get('auto_side')
 
@@ -431,6 +465,9 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
                                            blank_for_type(get_type_as_str(field.type)))
             right_value: Any = getattr(finding_pair.get('right'), field.name,
                                             blank_for_type(get_type_as_str(field.type)))
+            if field.name == "extra_fields":
+                left_value = extra_fields_for_comparison(left_value)
+                right_value = extra_fields_for_comparison(right_value)
             auto_value: Any = finding_pair.get('auto_value').get(field.name)
             auto_side: Any = finding_pair.get('auto_side').get(field.name)
 
@@ -442,8 +479,9 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
             should_auto_accept, populated_side, populated_value = get_single_sided_content_choice(left_value,
                                                                                                   right_value)
             if CONFIG.get('auto_accept_single_sided_content', False) and should_auto_accept:
-                finding_pair['left'].set(field.name, populated_value)
-                finding_pair['right'].set(field.name, populated_value)
+                set_record_pair_field_values(
+                    finding_pair['left'], finding_pair['right'], field.name, populated_value, populated_value,
+                )
                 log(
                     'INFO',
                     f"Field '{field.name}' auto-accepted from {populated_side.name.lower()} because the other side was blank.",
@@ -456,8 +494,9 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
                 right_value,
             )
             if field.name == "extra_fields" and should_accept_placeholder:
-                finding_pair['left'].set(field.name, placeholder_value)
-                finding_pair['right'].set(field.name, placeholder_value)
+                set_record_pair_field_values(
+                    finding_pair['left'], finding_pair['right'], field.name, placeholder_value, placeholder_value,
+                )
                 log(
                     'INFO',
                     f"Field '{field.name}' auto-accepted from {placeholder_side.name.lower()} because the other side only had the compliance_reference placeholder.",
@@ -533,29 +572,31 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
 
                 # Commit the chosen value into the merged record.
                 if (analyst_choice == "b" or analyst_choice == key.DOWN) and is_optional:
-                    finding_pair['left'].set(field.name, blank_for_type(expected_type_str))
-                    finding_pair['right'].set(field.name, blank_for_type(expected_type_str))
+                    new_left = new_right = blank_for_type(expected_type_str)
                 elif analyst_choice == "k" or analyst_choice == key.UP:
-                    finding_pair['left'].set(field.name, left_value)
-                    finding_pair['right'].set(field.name, right_value)
+                    new_left, new_right = left_value, right_value
                 elif analyst_choice == "l" or analyst_choice == key.LEFT:
-                    finding_pair['left'].set(field.name, left_value)
-                    finding_pair['right'].set(field.name, left_value)
+                    new_left = new_right = left_value
                 elif analyst_choice == "m":
-                    finding_pair['left'].set(field.name, f"{left_value} {right_value}")
-                    finding_pair['right'].set(field.name, f"{left_value} {right_value}")
+                    new_left = new_right = f"{left_value} {right_value}"
                 elif analyst_choice == "r" or analyst_choice == key.RIGHT:
-                    finding_pair['left'].set(field.name, right_value)
-                    finding_pair['right'].set(field.name, right_value)
+                    new_left = new_right = right_value
                 elif analyst_choice == "o" and auto_value:
-                    finding_pair['left'].set(field.name, auto_value)
-                    finding_pair['right'].set(field.name, auto_value)
+                    new_left = new_right = auto_value
+                else:
+                    # The TUI owns validation and normally returns one of the
+                    # choices above. Preserve both values if it does not.
+                    new_left, new_right = left_value, right_value
+                set_record_pair_field_values(
+                    finding_pair['left'], finding_pair['right'], field.name, new_left, new_right,
+                )
             else:
                 # We are auto-accepting the auto-offered values if we are configured not to use interactive mode and
                 # the auto-value / auto-side variables are populated.  This is perfectly valid, but will result in "best
                 # guess" scenarios that will likely not be as desired.
-                finding_pair['left'].set(field.name, auto_value)
-                finding_pair['right'].set(field.name, auto_value)
+                set_record_pair_field_values(
+                    finding_pair['left'], finding_pair['right'], field.name, auto_value, auto_value,
+                )
 
     log("INFO", "This record's merge is finalised.", prefix="MERGE")
     return finding_pair['left'], finding_pair['right']

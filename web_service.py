@@ -23,6 +23,7 @@ from merge import (
     reject_matched_record,
     reprocess_orphan_matches,
     renumber_records,
+    set_record_pair_field_values,
 )
 from model import Finding, Observation, get_type_as_str, is_optional_field
 from sensitivity import (
@@ -31,7 +32,13 @@ from sensitivity import (
     check_for_sensitivities,
     empty_pre_match_sensitivity_stats,
 )
-from utils import blank_for_type, normalise_finding_record, stringify_field, wrap_string
+from utils import (
+    blank_for_type,
+    extra_fields_for_comparison,
+    normalise_finding_record,
+    stringify_field,
+    wrap_string,
+)
 
 CONFIG = get_config()
 NON_REVIEWABLE_FIELDS = {"id"}
@@ -393,6 +400,10 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
         left_value = getattr(match["left"], field_def.name, blank_for_type(expected_type))
         right_value = getattr(match["right"], field_def.name, blank_for_type(expected_type))
         offered_value = match["auto_value"].get(field_def.name)
+        if field_def.name == "extra_fields":
+            left_value = extra_fields_for_comparison(left_value)
+            right_value = extra_fields_for_comparison(right_value)
+            offered_value = extra_fields_for_comparison(offered_value)
         requires_review = left_value != right_value
         rows.append(
             {
@@ -575,8 +586,9 @@ def accept_offered_for_current_match(job: MergeJob) -> None:
     match = _matches_for_kind(job, kind)[_match_index_for_kind(job, kind)]
     for field_def in _reviewable_field_defs(kind):
         offered_value = match["auto_value"].get(field_def.name)
-        match["left"].set(field_def.name, offered_value)
-        match["right"].set(field_def.name, offered_value)
+        set_record_pair_field_values(
+            match["left"], match["right"], field_def.name, offered_value, offered_value,
+        )
 
     _merged_for_kind(job, kind, "left").append(match["left"])
     _merged_for_kind(job, kind, "right").append(match["right"])
@@ -603,8 +615,9 @@ def accept_offered_fields_for_current_match(job: MergeJob, field_names: list[str
         if field_name not in valid_fields:
             raise WebMergeError(f"Unknown field selected: {field_name}")
         offered_value = match["auto_value"].get(field_name)
-        match["left"].set(field_name, offered_value)
-        match["right"].set(field_name, offered_value)
+        set_record_pair_field_values(
+            match["left"], match["right"], field_name, offered_value, offered_value,
+        )
         applied += 1
 
     job.preview_acknowledged = True
@@ -657,8 +670,9 @@ def apply_preview_field_choices(job: MergeJob, choices: dict[str, str]) -> int:
             value = getattr(match["right"], field_name)
         else:
             value = match["auto_value"].get(field_name)
-        match["left"].set(field_name, value)
-        match["right"].set(field_name, value)
+        if field_name == "extra_fields":
+            value = extra_fields_for_comparison(value)
+        set_record_pair_field_values(match["left"], match["right"], field_name, value, value)
         applied += 1
 
     job.preview_acknowledged = True
@@ -681,6 +695,10 @@ def apply_conflict_decision(job: MergeJob, decision: dict[str, Any]) -> None:
     left_value = getattr(match["left"], field_name)
     right_value = getattr(match["right"], field_name)
     offered_value = match["auto_value"].get(field_name)
+    if field_name == "extra_fields":
+        left_value = extra_fields_for_comparison(left_value)
+        right_value = extra_fields_for_comparison(right_value)
+        offered_value = extra_fields_for_comparison(offered_value)
     expected_type = get_type_as_str(field_def.type)
 
     if action == "keep":
@@ -700,8 +718,7 @@ def apply_conflict_decision(job: MergeJob, decision: dict[str, Any]) -> None:
     else:
         raise WebMergeError("Unsupported conflict decision.")
 
-    match["left"].set(field_name, new_left)
-    match["right"].set(field_name, new_right)
+    set_record_pair_field_values(match["left"], match["right"], field_name, new_left, new_right)
     _advance_field_after_decision(job, kind, field_name)
 
 
@@ -1484,19 +1501,26 @@ def _prepare_conflict_for_field(kind: str, match_index: int, match: dict[str, An
     offered_value = match["auto_value"].get(field_name)
     offered_side = match["auto_side"].get(field_name)
 
+    if field_name == "extra_fields":
+        left_value = extra_fields_for_comparison(left_value)
+        right_value = extra_fields_for_comparison(right_value)
+        offered_value = extra_fields_for_comparison(offered_value)
+
     if left_value == right_value:
         return None
 
     should_auto_accept, _, populated_value = get_single_sided_content_choice(left_value, right_value)
     if CONFIG.get("auto_accept_single_sided_content", False) and should_auto_accept:
-        match["left"].set(field_name, populated_value)
-        match["right"].set(field_name, populated_value)
+        set_record_pair_field_values(
+            match["left"], match["right"], field_name, populated_value, populated_value,
+        )
         return None
 
     should_accept_placeholder, _, placeholder_value = get_compliance_reference_placeholder_choice(left_value, right_value)
     if field_name == "extra_fields" and should_accept_placeholder:
-        match["left"].set(field_name, placeholder_value)
-        match["right"].set(field_name, placeholder_value)
+        set_record_pair_field_values(
+            match["left"], match["right"], field_name, placeholder_value, placeholder_value,
+        )
         return None
 
     return ConflictReviewItem(

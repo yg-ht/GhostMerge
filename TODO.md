@@ -101,6 +101,10 @@ completed output, digest-bound final approval, and source identity throughout th
 
 ## Automatic Merge Engine and supporting functions
 - [x] Refactor such that we use "left" and "right" instead of A and B
+- [x] Exclude `extra_fields.ghostmerge_last_synced_at` from record comparison.
+      Ignore the exact metadata key during Finding similarity scoring, CLI and Web difference
+      detection, previews, conflict review, and automatic suggestions. Preserve each side's own
+      timestamp in merged output while continuing to compare and resolve every other extra field.
 - [x] Handle unique-to-left/right detection
 - [x] Detect and route conflicting records
 - [x] Maintain original IDs in output
