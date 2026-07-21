@@ -758,6 +758,29 @@ class MergeRegressionTests(unittest.TestCase):
         self.assertIn("owner", preview_text)
         self.assertNotIn("ghostmerge_last_synced_at", preview_text)
 
+    def test_cli_field_diff_renders_character_metrics_from_shared_alignment(self):
+        from rich.console import Console
+        from tui import TUI
+
+        rendered = StringIO()
+        terminal = TUI.__new__(TUI)
+        terminal.console = Console(file=rendered, width=120, color_system=None)
+
+        with patch.object(terminal, "update_data") as update_data:
+            terminal.render_diff_single_field(
+                "alpha\nbravo",
+                "alpha\ncravo",
+                auto_value="alpha\ncravo",
+                auto_side=ResolvedWinner.RIGHT,
+            )
+
+        terminal.console.print(update_data.call_args.args[0])
+        preview_text = rendered.getvalue()
+        self.assertIn("1 character removed", preview_text)
+        self.assertIn("1 character added", preview_text)
+        self.assertIn("bravo", preview_text)
+        self.assertIn("cravo", preview_text)
+
     def test_compliance_reference_placeholder_auto_accepts_richer_extra_fields(self):
         left = finding(extra_fields={"compliance_reference": None})
         right = finding(extra_fields={"compliance_reference": "PCI DSS", "owner": "right team"})

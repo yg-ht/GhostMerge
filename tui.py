@@ -1,20 +1,124 @@
 # external module imports
-from imports import (difflib, escape, fields, os, subprocess, tempfile, threading, sleep, Console, RenderableType, readchar,
+from imports import (escape, fields, os, subprocess, tempfile, threading, sleep, Console, RenderableType, readchar,
                      readkey, key, re, Layout, Live, Panel, Text, Table, Columns, Any, List, Optional, MarkupError, Dict)
 # get global state objects (CONFIG and TUI)
+from diffing import DiffLine, FieldDiff, build_semantic_diff
 from globals import get_config, set_tui
 from model import Finding, get_type_as_str
 from merge import ResolvedWinner
 CONFIG = get_config()
 
 # local module imports
-from utils import Aborting, blank_for_type, extra_fields_for_comparison, log, stringify_field, wrap_string
+from utils import Aborting, blank_for_type, extra_fields_for_comparison, log, stringify_field
 
 __all__ = ["tui"]
 
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
+
+
+def build_cli_diff_text(
+    field_diff: FieldDiff,
+    console: Console,
+    *,
+    content_width: int,
+) -> tuple[Text, Text]:
+    """Render aligned semantic segments as literal Rich text columns."""
+    left_output = Text()
+    right_output = Text()
+    line_numbers = [
+        line.source_line
+        for block in field_diff.blocks
+        for line in (*block.left_lines, *block.right_lines)
+        if line.source_line is not None
+    ]
+    number_width = max(3, len(str(max(line_numbers, default=0))))
+    safe_content_width = max(8, content_width)
+
+    for block in field_diff.blocks:
+        if block.kind == "context":
+            context_text = f"… {block.collapsed_line_count} unchanged lines …"
+            _append_cli_output_line(left_output, Text(context_text, style="dim"))
+            _append_cli_output_line(right_output, Text(context_text, style="dim"))
+            continue
+
+        logical_line_count = max(len(block.left_lines), len(block.right_lines))
+        for line_index in range(logical_line_count):
+            left_line = block.left_lines[line_index] if line_index < len(block.left_lines) else None
+            right_line = block.right_lines[line_index] if line_index < len(block.right_lines) else None
+            left_wrapped = _wrap_cli_diff_line(
+                left_line, console, safe_content_width, number_width,
+            )
+            right_wrapped = _wrap_cli_diff_line(
+                right_line, console, safe_content_width, number_width,
+            )
+            display_line_count = max(len(left_wrapped), len(right_wrapped))
+            blank = Text(" " * (number_width + 3))
+            for display_index in range(display_line_count):
+                _append_cli_output_line(
+                    left_output,
+                    left_wrapped[display_index] if display_index < len(left_wrapped) else blank,
+                )
+                _append_cli_output_line(
+                    right_output,
+                    right_wrapped[display_index] if display_index < len(right_wrapped) else blank,
+                )
+
+    left_summary = f"{_quantity_label(field_diff.removed_characters, 'character')} removed"
+    right_summary = f"{_quantity_label(field_diff.added_characters, 'character')} added"
+    if field_diff.removed_line_breaks:
+        left_summary += f" · {_quantity_label(field_diff.removed_line_breaks, 'line break')} removed"
+    if field_diff.added_line_breaks:
+        right_summary += f" · {_quantity_label(field_diff.added_line_breaks, 'line break')} added"
+    _append_cli_output_line(left_output, Text(left_summary, style="bold"))
+    _append_cli_output_line(right_output, Text(right_summary, style="bold"))
+    if field_diff.approximate:
+        notice = Text("Simplified highlighting used for this unusually large field.", style="dim")
+        _append_cli_output_line(left_output, notice)
+        _append_cli_output_line(right_output, notice)
+
+    return left_output, right_output
+
+
+def _wrap_cli_diff_line(
+    line: Optional[DiffLine],
+    console: Console,
+    content_width: int,
+    number_width: int,
+) -> list[Text]:
+    """Wrap styled content after diffing and retain its logical line number."""
+    if line is None:
+        return [Text(" " * (number_width + 3))]
+
+    content = Text()
+    for segment in line.segments:
+        style = (
+            CONFIG.get("field_level_diff_highlight_style", "bold blue")
+            if segment.change != "equal"
+            else CONFIG.get("field_level_diff_nolight_style", "white")
+        )
+        content.append(segment.text, style=style)
+
+    wrapped = list(content.wrap(console, content_width, overflow="fold")) or [Text()]
+    rendered: list[Text] = []
+    for index, wrapped_line in enumerate(wrapped):
+        source_number = str(line.source_line) if index == 0 and line.source_line is not None else ""
+        prefixed = Text(f"{source_number:>{number_width}} │ ", style="dim")
+        prefixed.append_text(wrapped_line)
+        rendered.append(prefixed)
+    return rendered
+
+
+def _append_cli_output_line(output: Text, line: Text) -> None:
+    output.append_text(line)
+    output.append("\n")
+
+
+def _quantity_label(value: int, singular: str) -> str:
+    suffix = "" if value == 1 else "s"
+    return f"{value} {singular}{suffix}"
+
 
 class TUI:
     def __init__(self, refresh_rate: float = CONFIG['tui_refresh_rate']):
@@ -438,17 +542,11 @@ class TUI:
             prefix="TUI",
         )
 
-        # Serialise non‑scalar data for human‑readable diff output.
-        if CONFIG['field_level_diff_max_width'] > 30:
-            log('DEBUG', f'Maximum width for displaying fields is {str(CONFIG["field_level_diff_max_width"])}', prefix="TUI")
-            stringified_left = wrap_string(stringify_field(value_from_left), CONFIG['field_level_diff_max_width'])
-            stringified_right = wrap_string(stringify_field(value_from_right), CONFIG['field_level_diff_max_width'])
-            stringified_auto = wrap_string(stringify_field(auto_value), CONFIG['field_level_diff_max_width'])
-        else:
-            log('WARN', f'Maximum width for displaying fields is not usable', prefix="TUI")
-            stringified_left = stringify_field(value_from_left)
-            stringified_right = stringify_field(value_from_right)
-            stringified_auto = stringify_field(auto_value)
+        # Serialise without wrapping. Width is applied only after semantic
+        # alignment so presentation cannot create false differences.
+        stringified_left = stringify_field(value_from_left)
+        stringified_right = stringify_field(value_from_right)
+        stringified_auto = stringify_field(auto_value)
 
         if len(stringified_left) > 200:
             log('DEBUG', f'Top and tail of stringified left:\n{stringified_left[:100]}...{stringified_left[-100:]}', prefix="TUI")
@@ -462,44 +560,6 @@ class TUI:
             log('DEBUG', f'Top and tail of stringified auto:\n{stringified_auto[:100]}...{stringified_auto[-100:]}', prefix="TUI")
         else:
             log('DEBUG', f'Stringified auto:\n{stringified_auto}', prefix="TUI")
-
-        # Build Rich Text fragments with colour annotations.
-        diff_for_side_left: Text = Text()
-        diff_for_side_right: Text = Text()
-
-        previous_change_code = None
-        diff_lines = list(difflib.ndiff(stringified_left.splitlines(), stringified_right.splitlines()))
-        length_diff_lines = len(diff_lines)
-        for line in diff_lines:
-            change_code, line_content = line[:2], line[2:]
-            log('DEBUG', f'Current line change_code: {change_code}', prefix="TUI")
-            if change_code == "- ":  # Present only in Left – mark blue in Left panel.
-                log('DEBUG', f'Line is only in left: {line_content[:30]}', prefix="TUI")
-                diff_for_side_left.append(line_content + "\n", style=CONFIG['field_level_diff_highlight_style'])
-            elif change_code == "+ ":  # Present only in Right – mark blue in Right panel.
-                log('DEBUG', f'Line is only in right: {line_content[:30]}', prefix="TUI")
-                diff_for_side_right.append(line_content + "\n", style=CONFIG['field_level_diff_highlight_style'])
-            elif change_code == "? ":
-                log('DEBUG', 'Line is a user hint (aka intra-line)', prefix="TUI")
-                if previous_change_code == "- ":
-                    diff_for_side_left.append(line_content)
-                elif previous_change_code == "+ ":
-                    diff_for_side_right.append(line_content)
-                else:
-                    log('ERROR', f'Unexpected previous change code in render_diff_single_field: "{previous_change_code}"', prefix="TUI")
-            else:  # Unchanged – potentially copy to both panels.
-                log('DEBUG', f'Line is in both: {line_content[:30]}', prefix="TUI")
-                # but only if the content is less than the CONFIGured number of lines
-                if length_diff_lines < CONFIG['field_level_diff_max_data_lines']:
-                    log('DEBUG', f'Including identical line', prefix="TUI")
-                    diff_for_side_left.append(line_content + "\n", style=CONFIG['field_level_diff_nolight_style'])
-                    diff_for_side_right.append(line_content + "\n", style=CONFIG['field_level_diff_nolight_style'])
-                else:
-                    log('DEBUG', f'Too many lines to show them all, dropping identical lines', prefix="TUI")
-
-            previous_change_code = change_code
-
-        log("DEBUG", f"Field construction for render_diff_single_field complete", prefix="TUI")
 
         offered_option = 'None'
         if auto_side is ResolvedWinner.LEFT:
@@ -524,10 +584,39 @@ class TUI:
 
         padding = CONFIG['padding_config_top'], CONFIG['padding_config_right'], CONFIG['padding_config_bottom'], CONFIG['padding_config_left']
 
+        # Choose the real panel width before wrapping semantic spans. Blocks
+        # pad their shorter side so later unchanged content realigns.
+        has_generated_offer = (
+            auto_side is ResolvedWinner.NONE
+            and auto_value is not None
+            and len(str(auto_value)) > 0
+            and not (stringified_auto == stringified_left or stringified_auto == stringified_right)
+        )
+        column_count = 3 if has_generated_offer else 2
+        max_column_width = max(
+            20,
+            round(self.console.width / column_count)
+            - column_count * (CONFIG['padding_config_left'] - CONFIG['padding_config_right'])
+            - (column_count * 2),
+        )
+        configured_width = CONFIG.get('field_level_diff_max_width', 114)
+        content_width = min(configured_width, max(8, max_column_width - 10))
+        context_lines = max(1, min(5, CONFIG.get('field_level_diff_max_data_lines', 30) // 6))
+        semantic_diff = build_semantic_diff(
+            stringified_left,
+            stringified_right,
+            context_lines=context_lines,
+        )
+        diff_for_side_left, diff_for_side_right = build_cli_diff_text(
+            semantic_diff,
+            self.console,
+            content_width=content_width,
+        )
+
+        log("DEBUG", "Semantic field diff construction complete", prefix="TUI")
+
         # No one auto-won, there is an auto_value and it is at least 1 char long and auto_value is not the same as left or the right
-        if (auto_side is ResolvedWinner.NONE and auto_value is not None and len(str(auto_value)) > 0 and not
-                (stringified_auto == stringified_left or stringified_auto == stringified_right)):
-            max_column_width = round(self.console.width / 3) - 3 * (CONFIG['padding_config_left'] - CONFIG['padding_config_right']) - (3 * 2)
+        if has_generated_offer:
             field_diff = Columns(
                 [
                     Panel(diff_for_side_left, title="Left", padding=padding, border_style=auto_style_loser, width=max_column_width),
@@ -539,7 +628,6 @@ class TUI:
             )
         # Someone auto-won and it is either left or right
         elif auto_side is not ResolvedWinner.NONE:
-            max_column_width = round(self.console.width / 2) - 2 * (CONFIG['padding_config_left'] - CONFIG['padding_config_right']) - (2 * 2)
             field_diff = Columns(
                 [
                     Panel(diff_for_side_left, title="Left", border_style=auto_style_left, padding=padding, width=max_column_width),
@@ -550,7 +638,6 @@ class TUI:
             )
         # No one won and there is no auto_value, user has to choose
         else:
-            max_column_width = round(self.console.width / 2) - 2 * (CONFIG['padding_config_left'] - CONFIG['padding_config_right']) - (2 * 2)
             field_diff = Columns(
                 [
                     Panel(diff_for_side_left, title="Left", padding=padding, width=max_column_width),

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_aligned_diff.html" import render_aligned_diff %}
 {% block content %}
 <h1>{{ item.template_type|title }} field review</h1>
 <section class="panel">
@@ -26,12 +27,7 @@
 </section>
 <section class="panel">
   <h2>Highlighted difference</h2>
-  {% for row in item.diff_rows %}
-  <div class="diff-line {{ row.class }}">
-    <strong>{% if row.side == "left" %}{{ source_labels.left }}{% elif row.side == "right" %}{{ source_labels.right }}{% elif row.side == "both" %}Both sources{% else %}Offered value{% endif %}</strong>
-    <span>{{ row.text }}</span>
-  </div>
-  {% endfor %}
+  {{ render_aligned_diff(item.field_diff, source_labels.left, source_labels.right, "Highlighted difference for " ~ item.field_name) }}
 </section>
 <form class="panel" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">

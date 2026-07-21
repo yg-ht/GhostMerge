@@ -362,6 +362,22 @@ class WebServiceTests(unittest.TestCase):
         self.assertIn("added", [row["class"] for row in diff])
         self.assertIn("offered", [row["class"] for row in diff])
 
+    def test_preview_uses_semantic_alignment_and_character_metrics(self):
+        job = create_merge_job(
+            [record(description="alpha\nbravo\ncharlie")],
+            [record(id="2", description="alpha\ninserted\nbravo\ncharlie")],
+            job_id="semanticdiff123",
+        )
+
+        preview = get_current_match_preview(job)
+        description_row = next(row for row in preview.rows if row["field_name"] == "description")
+        field_diff = description_row["field_diff"]
+
+        self.assertEqual([block.kind for block in field_diff.blocks], ["equal", "insert", "equal"])
+        self.assertEqual(field_diff.added_characters, len("inserted"))
+        self.assertEqual(field_diff.added_line_breaks, 1)
+        self.assertFalse(field_diff.approximate)
+
     def test_preview_excludes_id_from_reviewable_differences(self):
         job = create_merge_job(
             [record(id="1", description="Same detail")],
@@ -2064,6 +2080,34 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertLess(first_field, description_field)
+
+    def test_record_preview_escapes_source_while_highlighting_changed_characters(self):
+        left_value = '<img src=x onerror="alert(77)">'
+        right_value = '<img src=x onerror="alert(78)">'
+        left = json.dumps([record(description=left_value)]).encode("utf-8")
+        right = json.dumps([record(id="2", description=right_value)]).encode("utf-8")
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+
+        response = self.client.get(f"/jobs/{job_id}/conflicts")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(left_value.encode("utf-8"), response.data)
+        self.assertNotIn(right_value.encode("utf-8"), response.data)
+        self.assertIn(b"&lt;img", response.data)
+        self.assertIn(b"onerror=&#34;alert(7", response.data)
+        self.assertIn(b'<del class="diff-character removed">7</del>', response.data)
+        self.assertIn(b'<ins class="diff-character added">8</ins>', response.data)
+        self.assertIn(b"1 character removed", response.data)
+        self.assertIn(b"1 character added", response.data)
 
     def test_record_preview_does_not_mark_id_only_difference_for_review(self):
         left = json.dumps([record(id="1", description="Same detail")]).encode("utf-8")

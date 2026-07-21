@@ -1,0 +1,53 @@
+{% macro render_segments(segments) -%}
+  {%- for segment in segments -%}
+    {%- if segment.change == "removed" -%}
+      <del class="diff-character removed{% if segment.marker %} whitespace-marker{% endif %}"{% if segment.marker %} title="Changed {{ segment.marker }}"{% endif %}>{{ segment.text }}</del>
+    {%- elif segment.change == "added" -%}
+      <ins class="diff-character added{% if segment.marker %} whitespace-marker{% endif %}"{% if segment.marker %} title="Changed {{ segment.marker }}"{% endif %}>{{ segment.text }}</ins>
+    {%- else -%}
+      <span>{{ segment.text }}</span>
+    {%- endif -%}
+  {%- endfor -%}
+{%- endmacro %}
+
+{% macro render_lines(lines, side_class) %}
+  <div class="diff-line {{ side_class }}">
+    {% for line in lines %}
+    <div class="aligned-diff-line">
+      <span class="diff-line-number" aria-label="Source line {{ line.source_line }}">{{ line.source_line }}</span>
+      <code>{{ render_segments(line.segments) }}</code>
+    </div>
+    {% endfor %}
+  </div>
+{% endmacro %}
+
+{% macro render_aligned_diff(diff, left_label, right_label, aria_label) %}
+<div class="aligned-diff" aria-label="{{ aria_label }}">
+  <div class="aligned-diff-headings">
+    <strong>{{ left_label }}</strong>
+    <strong>{{ right_label }}</strong>
+  </div>
+  {% for block in diff.blocks %}
+    {% if block.kind == "context" %}
+    <div class="diff-context">… {{ block.collapsed_line_count }} unchanged line{{ "s" if block.collapsed_line_count != 1 else "" }} …</div>
+    {% else %}
+    <div class="aligned-diff-block {{ block.kind }}">
+      {{ render_lines(block.left_lines, "removed" if block.kind in ("delete", "replace") else "same") }}
+      {{ render_lines(block.right_lines, "added" if block.kind in ("insert", "replace") else "same") }}
+    </div>
+    {% endif %}
+  {% endfor %}
+  <p class="diff-metrics">
+    {{ diff.removed_characters }} character{{ "s" if diff.removed_characters != 1 else "" }} removed
+    · {{ diff.added_characters }} character{{ "s" if diff.added_characters != 1 else "" }} added
+    {% if diff.removed_line_breaks or diff.added_line_breaks %}
+    · {{ diff.removed_line_breaks }} line break{{ "s" if diff.removed_line_breaks != 1 else "" }} removed
+    · {{ diff.added_line_breaks }} line break{{ "s" if diff.added_line_breaks != 1 else "" }} added
+    {% endif %}
+  </p>
+  <p class="diff-legend"><span aria-hidden="true">↵</span> changed line break · <span aria-hidden="true">→</span> changed tab</p>
+  {% if diff.approximate %}
+  <p class="diff-notice">Simplified highlighting was used because this field is unusually large.</p>
+  {% endif %}
+</div>
+{% endmacro %}
