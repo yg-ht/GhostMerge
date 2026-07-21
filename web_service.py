@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import difflib
+import hashlib
 import json
 import secrets
 import uuid
@@ -111,6 +112,11 @@ class MergeJob:
     observation_conflict_phase_complete: bool = False
     conflict_phase_complete: bool = False
     sensitivity_phase_complete: bool = False
+    output_approved: bool = False
+    output_approved_at: Optional[str] = None
+    output_preview_digest: Optional[str] = None
+    output_preview_token: Optional[str] = None
+    output_preview_generated_at: Optional[str] = None
     output_phase_complete: bool = False
     sensitivity_template_type: str = "finding"
     sensitivity_side: str = "left"
@@ -828,8 +834,10 @@ def acknowledge_sensitivity_review(job: MergeJob) -> None:
     job.sensitivity_decision_token = None
 
 
-def finalise_job(job: MergeJob) -> MergeResult:
-    """Renumber and serialise final left/right output records."""
+def _renumbered_final_records(
+    job: MergeJob,
+) -> tuple[list[Finding], list[Finding], list[Observation], list[Observation]]:
+    """Copy and renumber all reviewed collections without mutating the job."""
     if not job.conflict_phase_complete:
         raise WebMergeError("Conflict review must be complete before finalising output.")
 
@@ -839,6 +847,23 @@ def finalise_job(job: MergeJob) -> MergeResult:
     observations_right = [copy.deepcopy(item) for item in job.merged_observations_right]
     left, right = renumber_records(left, right, start_id=1)
     observations_left, observations_right = renumber_records(observations_left, observations_right, start_id=1)
+    return left, right, observations_left, observations_right
+
+
+def build_final_output(job: MergeJob) -> MergeResult:
+    """Build the deterministic final payload without mutating or persisting the job."""
+    left, right, observations_left, observations_right = _renumbered_final_records(job)
+    return MergeResult(
+        left_records=[item.to_dict() for item in left],
+        right_records=[item.to_dict() for item in right],
+        left_observations=[item.to_dict() for item in observations_left],
+        right_observations=[item.to_dict() for item in observations_right],
+    )
+
+
+def finalise_job(job: MergeJob) -> MergeResult:
+    """Renumber final records and attach them to the job for durable output."""
+    left, right, observations_left, observations_right = _renumbered_final_records(job)
     job.final_left = left
     job.final_right = right
     job.final_observations_left = observations_left
@@ -849,6 +874,74 @@ def finalise_job(job: MergeJob) -> MergeResult:
         left_observations=[item.to_dict() for item in observations_left],
         right_observations=[item.to_dict() for item in observations_right],
     )
+
+
+def _final_output_digest(result: MergeResult) -> str:
+    """Return a stable digest binding approval to all four final collections."""
+    canonical_payload = json.dumps(
+        asdict(result),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_payload).hexdigest()
+
+
+def _attached_final_output(job: MergeJob) -> MergeResult:
+    """Serialise final records already attached to a job."""
+    if job.final_left is None or job.final_right is None:
+        raise WebMergeError("Finalised merge output is incomplete.")
+    observations_left = job.final_observations_left or []
+    observations_right = job.final_observations_right or []
+    return MergeResult(
+        left_records=[item.to_dict() for item in job.final_left],
+        right_records=[item.to_dict() for item in job.final_right],
+        left_observations=[item.to_dict() for item in observations_left],
+        right_observations=[item.to_dict() for item in observations_right],
+    )
+
+
+def prepare_output_preview(job: MergeJob) -> MergeResult:
+    """Prepare an approval-bound preview without creating durable output files."""
+    if not job.conflict_phase_complete or not job.sensitivity_phase_complete:
+        raise WebMergeError("All review stages must be complete before previewing merged output.")
+
+    result = build_final_output(job)
+    digest = _final_output_digest(result)
+
+    # Any change to the proposed payload invalidates an earlier browser form
+    # and any approval recorded for different content.
+    if not secrets.compare_digest(job.output_preview_digest or "", digest):
+        job.output_preview_digest = digest
+        job.output_preview_token = secrets.token_urlsafe(32)
+        job.output_preview_generated_at = _utc_state_timestamp()
+        job.output_approved = False
+        job.output_approved_at = None
+    elif not job.output_preview_token:
+        # A fresh token permits an explicit retry after an interrupted or
+        # failed write while keeping the already-recorded approval auditable.
+        job.output_preview_token = secrets.token_urlsafe(32)
+
+    return result
+
+
+def approve_output_preview(job: MergeJob, submitted_token: str) -> MergeResult:
+    """Approve the current server-derived preview and attach its final records."""
+    result = prepare_output_preview(job)
+    expected_token = job.output_preview_token or ""
+    if not submitted_token or not secrets.compare_digest(str(submitted_token), expected_token):
+        raise WebMergeError("Final output approval is stale or invalid. Reload the preview and try again.")
+
+    # Rebuild through the existing finalisation boundary only after the exact
+    # preview has been approved. The digest check in save_outputs protects
+    # callers from substituting a different MergeResult afterwards.
+    result = finalise_job(job)
+    if not secrets.compare_digest(_final_output_digest(result), job.output_preview_digest or ""):
+        raise WebMergeError("Final output changed during approval. Reload the preview and try again.")
+    job.output_approved = True
+    job.output_approved_at = _utc_state_timestamp()
+    job.output_preview_token = None
+    return result
 
 
 def save_job(job: MergeJob, jobs_dir: Path) -> Path:
@@ -923,8 +1016,16 @@ def save_outputs(job: MergeJob, jobs_dir: Path, result: MergeResult) -> None:
     """Persist both outputs before marking the merge output as ready."""
     if not job.conflict_phase_complete or not job.sensitivity_phase_complete:
         raise WebMergeError("All review stages must be complete before saving merged output.")
-    if job.final_left is None or job.final_right is None:
-        raise WebMergeError("Merge output must be finalised before it can be saved.")
+    if not job.output_approved or not job.output_approved_at:
+        raise WebMergeError("Final output must be explicitly approved before it can be saved.")
+    if not job.output_preview_digest or not secrets.compare_digest(
+        _final_output_digest(result),
+        job.output_preview_digest,
+    ):
+        raise WebMergeError("Approved final output does not match the output being saved.")
+    attached_result = _attached_final_output(job)
+    if not secrets.compare_digest(_final_output_digest(attached_result), job.output_preview_digest):
+        raise WebMergeError("Finalised job records do not match the approved output.")
     job_dir = _job_dir(jobs_dir, job.job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     left_output = _output_payload(result.left_records, result.left_observations)
@@ -945,18 +1046,15 @@ def save_outputs(job: MergeJob, jobs_dir: Path, result: MergeResult) -> None:
 
 def finalised_job_result(job: MergeJob) -> MergeResult:
     """Return already-finalised output for download or outbound synchronisation."""
-    if not job.output_phase_complete:
+    if not job.output_approved or not job.output_phase_complete:
         raise WebMergeError("Merged output must be ready before outbound API synchronisation.")
-    if job.final_left is None or job.final_right is None:
-        raise WebMergeError("Finalised merge output is incomplete.")
-    observations_left = job.final_observations_left or []
-    observations_right = job.final_observations_right or []
-    return MergeResult(
-        left_records=[item.to_dict() for item in job.final_left],
-        right_records=[item.to_dict() for item in job.final_right],
-        left_observations=[item.to_dict() for item in observations_left],
-        right_observations=[item.to_dict() for item in observations_right],
-    )
+    result = _attached_final_output(job)
+    if job.output_preview_digest and not secrets.compare_digest(
+        _final_output_digest(result),
+        job.output_preview_digest,
+    ):
+        raise WebMergeError("Finalised merge output no longer matches its recorded approval.")
+    return result
 
 
 def job_summary(job: MergeJob) -> dict[str, Any]:
@@ -978,6 +1076,8 @@ def job_summary(job: MergeJob) -> dict[str, Any]:
         "sensitivity_review_started_at": job.sensitivity_review_started_at,
         "sensitivity_review_completed_at": job.sensitivity_review_completed_at,
         "sensitivity_review_stats": dict(job.sensitivity_review_stats),
+        "output_approved": job.output_approved,
+        "output_approved_at": job.output_approved_at,
         "output_phase_complete": job.output_phase_complete,
         "sync_results": job.sync_results,
     })
@@ -1017,7 +1117,7 @@ def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
     phase_labels = {
         "conflict_review": "Conflict review",
         "sensitivity_review": "Sensitivity review",
-        "ready_to_finalise": "Ready to finalise",
+        "ready_to_finalise": "Ready for final preview",
         "output_ready": "Merged output ready",
     }
 
@@ -1135,6 +1235,21 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         observation_conflict_phase_complete=data.get("observation_conflict_phase_complete", data.get("conflict_phase_complete", False)),
         conflict_phase_complete=data["conflict_phase_complete"],
         sensitivity_phase_complete=data["sensitivity_phase_complete"],
+        output_approved=bool(data.get("output_approved", False)),
+        output_approved_at=(
+            data.get("output_approved_at") if isinstance(data.get("output_approved_at"), str) else None
+        ),
+        output_preview_digest=(
+            data.get("output_preview_digest") if isinstance(data.get("output_preview_digest"), str) else None
+        ),
+        output_preview_token=(
+            data.get("output_preview_token") if isinstance(data.get("output_preview_token"), str) else None
+        ),
+        output_preview_generated_at=(
+            data.get("output_preview_generated_at")
+            if isinstance(data.get("output_preview_generated_at"), str)
+            else None
+        ),
         output_phase_complete=bool(data.get("output_phase_complete", False)),
         sensitivity_template_type=data.get("sensitivity_template_type", "finding"),
         sensitivity_side=data["sensitivity_side"],
@@ -1191,12 +1306,35 @@ def _reconcile_output_state(job: MergeJob, data: dict[str, Any], job_dir: Path) 
     """Validate persisted completion against final data and both durable output files."""
     has_final_records = job.final_left is not None and job.final_right is not None
     has_output_files = (job_dir / "left.json").is_file() and (job_dir / "right.json").is_file()
+    final_digest_matches = True
+    if has_final_records and job.output_preview_digest:
+        final_digest_matches = secrets.compare_digest(
+            _final_output_digest(_attached_final_output(job)),
+            job.output_preview_digest,
+        )
+
+    if "output_approved" in data:
+        # Current jobs retain approval across a retryable output-write failure,
+        # but cannot be considered ready until both output files also exist.
+        job.output_approved = bool(data.get("output_approved")) and has_final_records and final_digest_matches
+    else:
+        # Legacy jobs pre-date explicit approval. Only already-complete jobs get
+        # compatibility approval; incomplete legacy jobs still enter preview.
+        job.output_approved = has_final_records and has_output_files
+        if job.output_approved and not job.output_approved_at:
+            job.output_approved_at = data.get("sensitivity_review_completed_at")
+
     if "output_phase_complete" in data:
-        job.output_phase_complete = bool(data.get("output_phase_complete")) and has_final_records and has_output_files
+        job.output_phase_complete = (
+            bool(data.get("output_phase_complete"))
+            and job.output_approved
+            and has_final_records
+            and has_output_files
+        )
     else:
         # Jobs written before the explicit marker are complete only when their old
         # final arrays and both files provide equivalent durable evidence.
-        job.output_phase_complete = has_final_records and has_output_files
+        job.output_phase_complete = job.output_approved and has_final_records and has_output_files
 
 
 def _get_next_conflict_for_kind(job: MergeJob, kind: str) -> Optional[ConflictReviewItem]:

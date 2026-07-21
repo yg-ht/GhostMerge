@@ -28,6 +28,7 @@ from sensitivity import load_sensitive_terms, sensitive_terms_digest
 from utils import load_config
 from web_service import (
     WebMergeError,
+    approve_output_preview,
     acknowledge_sensitivity_review,
     accept_offered_fields_for_current_match,
     accept_offered_for_current_match,
@@ -36,7 +37,6 @@ from web_service import (
     apply_conflict_decision,
     apply_sensitivity_decision,
     create_merge_job,
-    finalise_job,
     finalised_job_result,
     get_active_conflict_position,
     get_current_match_preview,
@@ -49,6 +49,7 @@ from web_service import (
     list_previous_jobs,
     load_job,
     load_records_from_json_text,
+    prepare_output_preview,
     reject_current_match,
     reprocess_orphans_for_current_kind,
     reset_match_to_preview,
@@ -372,14 +373,33 @@ def create_app(test_config: dict | None = None) -> Flask:
             job = load_job(jobs_dir, job_id)
             _require_completed_review(job, action="Completion")
             if not job.output_phase_complete:
-                result = finalise_job(job)
-                save_outputs(job, jobs_dir, result)
+                preview = prepare_output_preview(job)
+                save_job(job, jobs_dir)
+                return render_template(
+                    "final_output_preview.html",
+                    job=job,
+                    preview=preview,
+                    preview_source_labels=_preview_source_labels(job),
+                    progress=get_review_progress(job),
+                )
             return render_template(
                 "complete.html",
                 job=job,
                 progress=get_review_progress(job),
                 api_servers=configured_server_summary(CONFIG),
             )
+        except WebMergeError as exc:
+            return render_template("error.html", error=str(exc)), 400
+
+    @app.post("/jobs/<job_id>/complete/approve")
+    def approve_output(job_id: str):
+        try:
+            job = load_job(jobs_dir, job_id)
+            _require_completed_review(job, action="Output approval")
+            if not job.output_phase_complete:
+                result = approve_output_preview(job, request.form.get("approval_token", ""))
+                save_outputs(job, jobs_dir, result)
+            return redirect(url_for("complete", job_id=job.job_id))
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
@@ -1359,8 +1379,8 @@ def _require_completed_review(job, action: str = "Outbound API sync") -> None:
 
 def _require_output_ready(job) -> None:
     _require_completed_review(job, action="Outbound API sync")
-    if not job.output_phase_complete:
-        raise WebMergeError("Outbound API sync is only available after merged output is ready.")
+    if not job.output_approved or not job.output_phase_complete:
+        raise WebMergeError("Outbound API sync is only available after final output approval and creation.")
 
 
 def _require_api_backed_side(job, side: str) -> None:

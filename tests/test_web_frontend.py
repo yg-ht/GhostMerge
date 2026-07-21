@@ -23,6 +23,7 @@ from web_app import (
 )
 from web_service import (
     WebMergeError,
+    approve_output_preview,
     acknowledge_sensitivity_review,
     acknowledge_current_preview,
     accept_offered_fields_for_current_match,
@@ -41,6 +42,7 @@ from web_service import (
     load_records_from_json_text,
     list_previous_jobs,
     parse_findings,
+    prepare_output_preview,
     reject_current_match,
     save_job,
     save_outputs,
@@ -127,6 +129,14 @@ def record(**overrides):
     }
     data.update(overrides)
     return data
+
+
+def approve_and_save_output(job, jobs_dir):
+    """Exercise the real service approval boundary for durable-output fixtures."""
+    preview = prepare_output_preview(job)
+    result = approve_output_preview(job, job.output_preview_token)
+    save_outputs(job, jobs_dir, result)
+    return preview
 
 
 def observation(**overrides):
@@ -508,11 +518,9 @@ class WebServiceTests(unittest.TestCase):
             jobs_dir = Path(tmp_dir)
             job = create_merge_job([record()], [], job_id="oldjob123")
             get_next_conflict(job)
-            result = finalise_job(job)
             job.sensitivity_phase_complete = True
             job.sync_results["left"] = {"status": "running", "message": "Creating reviewed findings"}
-            save_job(job, jobs_dir)
-            save_outputs(job, jobs_dir, result)
+            approve_and_save_output(job, jobs_dir)
 
             previous_jobs = list_previous_jobs(jobs_dir)
 
@@ -532,9 +540,12 @@ class WebServiceTests(unittest.TestCase):
             job.sensitivity_phase_complete = True
             self.assertEqual(get_review_progress(job)["phase"], "ready_to_finalise")
 
-            result = finalise_job(job)
+            preview = prepare_output_preview(job)
+            self.assertEqual(len(preview.left_records), 1)
+            self.assertIsNone(job.final_left)
+            self.assertFalse(job.output_approved)
             self.assertFalse(job.output_phase_complete)
-            save_outputs(job, jobs_dir, result)
+            approve_and_save_output(job, jobs_dir)
 
             reloaded = load_job(jobs_dir, "lifecycle123")
             self.assertTrue(reloaded.output_phase_complete)
@@ -545,19 +556,86 @@ class WebServiceTests(unittest.TestCase):
             self.assertFalse(missing_output.output_phase_complete)
             self.assertEqual(get_review_progress(missing_output)["phase"], "ready_to_finalise")
 
+    def test_save_outputs_rejects_unapproved_and_changed_payloads(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            job = create_merge_job([record()], [], job_id="approvalguard123")
+            self.assertIsNone(get_next_conflict(job))
+            job.sensitivity_phase_complete = True
+            unapproved_result = finalise_job(job)
+
+            with self.assertRaisesRegex(WebMergeError, "explicitly approved"):
+                save_outputs(job, jobs_dir, unapproved_result)
+
+            prepare_output_preview(job)
+            approved_result = approve_output_preview(job, job.output_preview_token)
+            changed_result = web_service.MergeResult(
+                left_records=[dict(approved_result.left_records[0], title="Changed after approval")],
+                right_records=approved_result.right_records,
+            )
+            with self.assertRaisesRegex(WebMergeError, "does not match"):
+                save_outputs(job, jobs_dir, changed_result)
+
+            job.final_left[0].title = "Changed attached final record"
+            with self.assertRaisesRegex(WebMergeError, "Finalised job records"):
+                save_outputs(job, jobs_dir, approved_result)
+
+            self.assertFalse((jobs_dir / "approvalguard123" / "left.json").exists())
+
+    def test_persisted_final_record_change_revokes_output_readiness(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            job = create_merge_job([record()], [], job_id="tamperedfinal123")
+            self.assertIsNone(get_next_conflict(job))
+            job.sensitivity_phase_complete = True
+            approve_and_save_output(job, jobs_dir)
+
+            job.final_left[0].title = "Changed after durable approval"
+            save_job(job, jobs_dir)
+            reloaded = load_job(jobs_dir, "tamperedfinal123")
+
+            self.assertFalse(reloaded.output_approved)
+            self.assertFalse(reloaded.output_phase_complete)
+
+    def test_changed_preview_invalidates_stale_approval_token(self):
+        job = create_merge_job([record()], [], job_id="staleapproval123")
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        prepare_output_preview(job)
+        stale_token = job.output_preview_token
+        stale_digest = job.output_preview_digest
+
+        job.merged_left[0].title = "Changed after preview"
+        with self.assertRaisesRegex(WebMergeError, "stale or invalid"):
+            approve_output_preview(job, stale_token)
+
+        self.assertNotEqual(job.output_preview_digest, stale_digest)
+        self.assertFalse(job.output_approved)
+        self.assertIsNone(job.final_left)
+
     def test_legacy_finalised_job_is_ready_only_when_both_outputs_exist(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             jobs_dir = Path(tmp_dir)
             job = create_merge_job([record()], [], job_id="legacyoutput123")
             self.assertIsNone(get_next_conflict(job))
             job.sensitivity_phase_complete = True
-            save_outputs(job, jobs_dir, finalise_job(job))
+            approve_and_save_output(job, jobs_dir)
             job_path = jobs_dir / "legacyoutput123" / "job.json"
             legacy_data = json.loads(job_path.read_text(encoding="utf-8"))
             legacy_data.pop("output_phase_complete")
+            for key in (
+                "output_approved",
+                "output_approved_at",
+                "output_preview_digest",
+                "output_preview_token",
+                "output_preview_generated_at",
+            ):
+                legacy_data.pop(key)
             job_path.write_text(json.dumps(legacy_data), encoding="utf-8")
 
-            self.assertTrue(load_job(jobs_dir, "legacyoutput123").output_phase_complete)
+            legacy_job = load_job(jobs_dir, "legacyoutput123")
+            self.assertTrue(legacy_job.output_approved)
+            self.assertTrue(legacy_job.output_phase_complete)
 
             (jobs_dir / "legacyoutput123" / "left.json").unlink()
             self.assertFalse(load_job(jobs_dir, "legacyoutput123").output_phase_complete)
@@ -568,7 +646,8 @@ class WebServiceTests(unittest.TestCase):
             job = create_merge_job([record()], [], job_id="outputfailure123")
             self.assertIsNone(get_next_conflict(job))
             job.sensitivity_phase_complete = True
-            result = finalise_job(job)
+            prepare_output_preview(job)
+            result = approve_output_preview(job, job.output_preview_token)
             real_atomic_write = web_service._write_json_atomic
 
             def fail_right_output(path, data):
@@ -581,6 +660,7 @@ class WebServiceTests(unittest.TestCase):
                     save_outputs(job, jobs_dir, result)
 
             reloaded = load_job(jobs_dir, "outputfailure123")
+            self.assertTrue(reloaded.output_approved)
             self.assertFalse(reloaded.output_phase_complete)
             self.assertTrue((jobs_dir / "outputfailure123" / "left.json").exists())
             self.assertFalse((jobs_dir / "outputfailure123" / "right.json").exists())
@@ -866,6 +946,16 @@ class FlaskRouteTests(unittest.TestCase):
             follow_redirects=True,
         )
 
+    def approve_output_for_job(self, job_id: str):
+        preview = self.client.get(f"/jobs/{job_id}/complete")
+        self.assertEqual(preview.status_code, 200)
+        job = load_job(Path(self.tmp_dir.name), job_id)
+        return self.client.post(
+            f"/jobs/{job_id}/complete/approve",
+            data=self.with_csrf({"approval_token": job.output_preview_token}),
+            follow_redirects=True,
+        )
+
     def test_upload_rejects_invalid_json(self):
         response = self.client.post(
             "/jobs",
@@ -1136,7 +1226,13 @@ class FlaskRouteTests(unittest.TestCase):
 
         completed = self.acknowledge_sensitivity_for_job(job_id)
         self.assertEqual(completed.status_code, 200)
-        self.assertIn(b"Merged output ready", completed.data)
+        self.assertIn(b"Final output preview", completed.data)
+        self.assertIn(b"Right detail", completed.data)
+        self.assertFalse((Path(self.tmp_dir.name) / job_id / "left.json").exists())
+
+        approved = self.approve_output_for_job(job_id)
+        self.assertEqual(approved.status_code, 200)
+        self.assertIn(b"Merged output ready", approved.data)
 
         left_download = self.client.get(f"/jobs/{job_id}/download/left")
         right_download = self.client.get(f"/jobs/{job_id}/download/right")
@@ -1145,6 +1241,59 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(right_download.status_code, 200)
         self.assertEqual(left_download.get_json()[0]["description"], "Right detail")
         self.assertEqual(right_download.get_json()[0]["description"], "Right detail")
+
+    def test_final_preview_rejects_invalid_approval_without_writing_outputs(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record(title="Reviewed final title")], [], job_id="invalidapproval123")
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+
+        preview = self.client.get("/jobs/invalidapproval123/complete")
+        reloaded_preview = load_job(jobs_dir, "invalidapproval123")
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn(b"Final output preview", preview.data)
+        self.assertIn(b"Reviewed final title", preview.data)
+        self.assertIn(b"Approve and create output files", preview.data)
+        self.assertIsNone(reloaded_preview.final_left)
+        self.assertFalse(reloaded_preview.output_approved)
+        self.assertFalse((jobs_dir / "invalidapproval123" / "left.json").exists())
+
+        missing_csrf = self.client.post(
+            "/jobs/invalidapproval123/complete/approve",
+            data={"approval_token": reloaded_preview.output_preview_token},
+        )
+        self.assertEqual(missing_csrf.status_code, 400)
+        self.assertIn(b"Invalid or missing form token", missing_csrf.data)
+
+        rejected = self.client.post(
+            "/jobs/invalidapproval123/complete/approve",
+            data=self.with_csrf({"approval_token": "stale-browser-token"}),
+        )
+
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn(b"stale or invalid", rejected.data)
+        self.assertFalse((jobs_dir / "invalidapproval123" / "left.json").exists())
+        self.assertFalse((jobs_dir / "invalidapproval123" / "right.json").exists())
+
+    def test_final_preview_includes_observation_templates(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            {"findings": [], "observations": [observation(title="Reviewed observation output")]},
+            {"findings": [], "observations": []},
+            job_id="observationpreview123",
+        )
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+
+        preview = self.client.get("/jobs/observationpreview123/complete")
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn(b"Observation Templates (1)", preview.data)
+        self.assertIn(b"Reviewed observation output", preview.data)
+        self.assertFalse((jobs_dir / "observationpreview123" / "left.json").exists())
 
     def test_file_upload_snapshots_terms_and_applies_pre_match_replacements(self):
         config = get_config()
@@ -1233,7 +1382,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         completed = self.acknowledge_sensitivity_for_job(job_id)
         final_job = load_job(Path(self.tmp_dir.name), job_id)
-        self.assertIn(b"Merged output ready", completed.data)
+        self.assertIn(b"Final output preview", completed.data)
         self.assertTrue(final_job.sensitivity_phase_complete)
         self.assertIsNotNone(final_job.sensitivity_review_completed_at)
 
@@ -1412,6 +1561,8 @@ class FlaskRouteTests(unittest.TestCase):
 
         completed = self.acknowledge_sensitivity_for_job(job_id)
         self.assertEqual(completed.status_code, 200)
+        self.assertIn(b"Final output preview", completed.data)
+        completed = self.approve_output_for_job(job_id)
         self.assertIn(b"Merged output ready", completed.data)
 
         left_records = self.client.get(f"/jobs/{job_id}/download/left").get_json()
@@ -1558,6 +1709,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertNotIn(b"diff-line added", preview.data)
 
         completed = self.acknowledge_sensitivity_for_job(job_id)
+        self.assertIn(b"Final output preview", completed.data)
+        completed = self.approve_output_for_job(job_id)
         self.assertIn(b"Merged output ready", completed.data)
 
     def test_id_only_match_does_not_skip_next_record_preview(self):
@@ -1652,6 +1805,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Sensitivity review ready to complete", response.data)
         completed = self.acknowledge_sensitivity_for_job(job_id)
+        self.assertIn(b"Final output preview", completed.data)
+        completed = self.approve_output_for_job(job_id)
         self.assertIn(b"Merged output ready", completed.data)
 
     def test_preview_can_apply_explicit_left_right_field_choices(self):
@@ -1681,6 +1836,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Sensitivity review ready to complete", response.data)
         completed = self.acknowledge_sensitivity_for_job(job_id)
+        self.assertIn(b"Final output preview", completed.data)
+        completed = self.approve_output_for_job(job_id)
         self.assertIn(b"Merged output ready", completed.data)
         left_result = self.client.get(f"/jobs/{job_id}/download/left").get_json()[0]
         right_result = self.client.get(f"/jobs/{job_id}/download/right").get_json()[0]
@@ -1693,10 +1850,8 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="filebacked123")
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         response = self.client.get("/jobs/filebacked123/sync/left")
 
@@ -1755,7 +1910,7 @@ class FlaskRouteTests(unittest.TestCase):
         response = self.client.get("/jobs/notready123/sync/left")
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn(b"merged output is ready", response.data)
+        self.assertIn(b"final output approval", response.data)
 
     def test_live_sync_rejects_duplicate_running_or_completed_sync_for_both_sides(self):
         jobs_dir = Path(self.tmp_dir.name)
@@ -1771,11 +1926,9 @@ class FlaskRouteTests(unittest.TestCase):
                         input_sources={side: "api", "right" if side == "left" else "left": "file"},
                     )
                     self.assertIsNone(get_next_conflict(job))
-                    result = finalise_job(job)
                     job.sensitivity_phase_complete = True
                     job.sync_results[side] = {"status": status}
-                    save_job(job, jobs_dir)
-                    save_outputs(job, jobs_dir, result)
+                    approve_and_save_output(job, jobs_dir)
                     config["ghostwriter_api"]["servers"][side].update(
                         {
                             "enabled": True,
@@ -1793,10 +1946,8 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="findingonlysync123", input_sources={"left": "api", "right": "file"})
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(
@@ -1832,10 +1983,8 @@ class FlaskRouteTests(unittest.TestCase):
             input_sources={"left": "api", "right": "file"},
         )
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(
@@ -1877,10 +2026,8 @@ class FlaskRouteTests(unittest.TestCase):
         job.merged_left[0].extra_fields = {"owner": "left-team"}
         job.merged_right[0].title = "Reviewed right output"
         job.merged_right[0].extra_fields = {"owner": "right-team"}
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         # Outbound sync must consume the durable final arrays, not mutable review state.
         job.merged_left[0].title = "Unsaved later left edit"
@@ -1949,10 +2096,8 @@ class FlaskRouteTests(unittest.TestCase):
         job.merged_observations_right[0].title = "Reviewed right observation"
         job.merged_observations_right[0].tags = "right, reviewed"
         job.merged_observations_right[0].extra_fields = {"owner": "right-team"}
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         left_original = ghostwriter_observation_record(
             10,
@@ -2039,10 +2184,8 @@ class FlaskRouteTests(unittest.TestCase):
                     input_sources={side: "api", "right" if side == "left" else "left": "file"},
                 )
                 self.assertIsNone(get_next_conflict(job))
-                result = finalise_job(job)
                 job.sensitivity_phase_complete = True
-                save_job(job, jobs_dir)
-                save_outputs(job, jobs_dir, result)
+                approve_and_save_output(job, jobs_dir)
 
                 config = get_config()
                 config["ghostwriter_api"]["backup_dir"] = str(jobs_dir / "failure-backups")
@@ -2077,7 +2220,6 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="rejoin123", input_sources={"left": "api", "right": "file"})
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
         job.sync_results["left"] = {
             "status": "running",
@@ -2086,8 +2228,7 @@ class FlaskRouteTests(unittest.TestCase):
             "complete": 1,
             "total": 2,
         }
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(
@@ -2113,10 +2254,8 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="locked123", input_sources={"left": "api", "right": "file"})
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
         (jobs_dir / "locked123" / "sync-left.lock").write_text("running\n", encoding="utf-8")
 
         config = get_config()
@@ -2150,10 +2289,8 @@ class FlaskRouteTests(unittest.TestCase):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job([record()], [], job_id="csrf123", input_sources={"left": "api", "right": "file"})
         self.assertIsNone(get_next_conflict(job))
-        result = finalise_job(job)
         job.sensitivity_phase_complete = True
-        save_job(job, jobs_dir)
-        save_outputs(job, jobs_dir, result)
+        approve_and_save_output(job, jobs_dir)
 
         response = self.client.post("/jobs/csrf123/sync/left")
 

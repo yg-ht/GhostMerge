@@ -13,7 +13,7 @@ rather than being constrained to the CLI feature set.
 - [x] Resolve remaining shared-workflow differences in invalid-input handling and interactive mode.
       Include canonical handling of equal blank optional fields: the CLI currently resolves empty
       strings through its offered-value path while the Web service preserves them unchanged.
-- [ ] Add final output preview and explicit approval before durable output or outbound API sync.
+- [x] Add final output preview and explicit approval before durable output or outbound API sync.
 - [ ] Complete end-to-end parity, failure-mode, security, and backwards-compatibility regression tests.
 - [ ] Update operator documentation after the implemented workflow passes final review.
 
@@ -22,7 +22,7 @@ rather than being constrained to the CLI feature set.
 1. **Protect completed merge output from abandonment.** Remove or disable the destructive
    “Abandon merge” action once output is ready, and reject direct abandonment requests for
    completed jobs. This closes the clearest remaining local data-loss path.
-2. **Preview and approve final merged output before writing or outbound sync.** Give operators a
+2. **Preview and approve final merged output before writing or outbound sync. (Completed.)** Give operators a
    last verification point after all review and sensitivity decisions, before durable output can
    become the source of a destructive API replacement.
 3. **Show unambiguous source identity throughout left/right review.** Use configured API names and

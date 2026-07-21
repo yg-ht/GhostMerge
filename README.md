@@ -222,6 +222,15 @@ On the whole-record preview page, select any changed fields whose offered values
 you want to accept, then apply them in one action. Remaining changed fields stay
 in the normal field-by-field review queue.
 
+After conflict and sensitivity review, GhostMerge shows both complete proposed
+outputs, including Finding and Observation Template records. Opening this final
+preview does not create output files. The operator must explicitly approve the
+displayed content before both files are written, downloads become available, or
+outbound API synchronisation can start. Approval is bound to a server-derived
+digest of all four output collections; changed or stale preview submissions fail
+closed. Existing completed jobs created before this approval stage remain
+available when their final records and both durable output files are present.
+
 Decision buttons can be clicked directly, and common CLI-style keyboard
 shortcuts are available during review:
 
