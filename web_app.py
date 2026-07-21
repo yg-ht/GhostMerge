@@ -36,12 +36,14 @@ from web_service import (
     apply_preview_field_choices,
     apply_conflict_decision,
     apply_sensitivity_decision,
+    create_manual_match,
     create_merge_job,
     finalised_job_result,
     get_active_conflict_position,
     get_current_match_preview,
     get_next_conflict,
     get_orphan_reprocessing_prompt,
+    get_manual_matching_prompt,
     get_next_sensitivity_item,
     get_review_progress,
     initialise_sensitivity_review,
@@ -57,6 +59,7 @@ from web_service import (
     save_outputs,
     sensitivity_audit_summary,
     stop_orphan_reprocessing_for_current_kind,
+    stop_manual_matching_for_current_kind,
 )
 
 CONFIG = get_config()
@@ -251,6 +254,16 @@ def create_app(test_config: dict | None = None) -> Flask:
                         source_labels=_source_identity_labels(job),
                         progress=_review_progress(job),
                     )
+                manual_prompt = get_manual_matching_prompt(job)
+                if manual_prompt is not None:
+                    save_job(job, jobs_dir)
+                    return render_template(
+                        "manual_matching.html",
+                        job=job,
+                        manual_prompt=manual_prompt,
+                        source_labels=_source_identity_labels(job),
+                        progress=_review_progress(job),
+                    )
                 return redirect(url_for("sensitivity", job_id=job.job_id))
             if not job.preview_acknowledged and (
                 item.template_type != initial_conflict_kind or item.match_index != initial_match_index
@@ -295,6 +308,18 @@ def create_app(test_config: dict | None = None) -> Flask:
                 reprocess_orphans_for_current_kind(job)
             elif request.form.get("preview_action") == "stop_orphan_reprocessing":
                 stop_orphan_reprocessing_for_current_kind(job)
+            elif request.form.get("preview_action") == "create_manual_match":
+                create_manual_match(
+                    job,
+                    request.form.get("manual_matching_token", ""),
+                    request.form.get("left_index"),
+                    request.form.get("right_index"),
+                )
+            elif request.form.get("preview_action") == "stop_manual_matching":
+                stop_manual_matching_for_current_kind(
+                    job,
+                    request.form.get("manual_matching_token", ""),
+                )
             else:
                 apply_conflict_decision(job, request.form.to_dict())
             save_job(job, jobs_dir)

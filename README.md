@@ -203,8 +203,11 @@ Ghostwriter API sources are Web-only extensions. For each CLI run:
    replacements are applied before matching; flag-only terms are deferred.
 4. Review each proposed match, reject incorrect pairs, and resolve differing
    fields. If orphan reprocessing is enabled and unmatched records remain on
-   both sides, choose whether to run another matching pass.
-5. Records still unmatched are copied into both merged collections. IDs are
+   both sides, choose whether to run another matching pass. After automatic
+   matching finishes, interactive runs can manually pair remaining Findings;
+   each selected pair returns to the same whole-record and field review flow.
+5. Finish manual matching when the remaining records should stay independent.
+   Records still unmatched are copied into both merged collections. IDs are
    resequenced and the post-merge sensitive-term decisions are completed.
 6. The CLI writes both output files immediately after successful processing.
    It has no separate final-output approval page, so inspect the files before
@@ -260,8 +263,10 @@ The complete Web operator path is:
    when the job includes observations.
 4. Resolve every remaining field conflict. If enabled and both sides still
    have unmatched records, explicitly reprocess or stop orphan matching for
-   each applicable template type. Records left unmatched are then copied into
-   both proposed outputs.
+   each applicable template type. Then manually pair any remaining Findings or
+   Observations that refer to the same issue. Manual pairs receive the normal
+   match preview and field review; records left unmatched when that stage is
+   finished are copied into both proposed outputs.
 5. Complete the visible post-merge sensitivity stage across both sides and
    both template types. Apply, edit, or decline every detected replacement,
    review the audit summary, and acknowledge its recorded outcome. Disabled,

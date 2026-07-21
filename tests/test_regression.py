@@ -17,6 +17,7 @@ from matching import fuzzy_match_findings, fuzzy_match_records, score_finding_si
 from merge import (
     ResolvedWinner,
     append_unmatched_records,
+    build_manual_match,
     get_compliance_reference_placeholder_choice,
     get_auto_suggest_values,
     get_single_sided_content_choice,
@@ -1027,6 +1028,82 @@ class CliRegressionTests(unittest.TestCase):
 
         self.assertEqual(unmatched_left, [left_record])
         self.assertEqual(unmatched_right, [right_record])
+
+    def test_manual_match_builds_a_normal_review_candidate_for_both_record_types(self):
+        original_left = finding(title="  Manual left  ")
+        finding_match = build_manual_match(
+            original_left,
+            finding(id=2, title="Manual right"),
+            set(),
+        )
+        observation_match = build_manual_match(
+            Observation(id=1, title="Manual observation left", description="Left", tags=[]),
+            Observation(id=2, title="Manual observation right", description="Right", tags=[]),
+            set(),
+        )
+
+        self.assertEqual(finding_match["origin"], "manual")
+        self.assertEqual(original_left.title, "  Manual left  ")
+        self.assertEqual(finding_match["left"].title, "Manual left")
+        self.assertIn("auto_value", finding_match)
+        self.assertIn("auto_side", finding_match)
+        self.assertEqual(observation_match["origin"], "manual")
+        self.assertIsInstance(observation_match["score"], float)
+
+    def test_manual_match_rejects_mixed_types_and_previously_rejected_pair(self):
+        left_record = finding(title="Rejected left")
+        right_record = finding(id=2, title="Rejected right")
+        rejected_key = reject_matched_record(
+            {"left": left_record, "right": right_record, "score": 10.0},
+            [],
+            [],
+        )
+
+        with self.assertRaisesRegex(ValueError, "previously rejected"):
+            build_manual_match(left_record, right_record, {rejected_key})
+        with self.assertRaisesRegex(ValueError, "same template type"):
+            build_manual_match(
+                left_record,
+                Observation(id=2, title="Observation", description="Detail", tags=[]),
+                set(),
+            )
+
+    def test_cli_manual_matching_selects_one_based_candidates_without_mutating_others(self):
+        configure_for_tests(interactive_mode=True)
+        import ghostmerge
+
+        left_records = [finding(id=1, title="Left one"), finding(id=2, title="Left two")]
+        right_records = [finding(id=3, title="Right one"), finding(id=4, title="Right two")]
+        with (
+            patch.object(ghostmerge.tui, "render_user_choice", side_effect=["c", "2", "1", "k"]),
+            patch.object(ghostmerge.tui, "render_manual_match_candidates") as render_candidates,
+            patch.object(ghostmerge.tui, "render_left_and_right_whole_finding_record") as render_preview,
+        ):
+            matches, remaining_left, remaining_right = ghostmerge._maybe_create_cli_manual_match(
+                [], left_records, right_records, []
+            )
+
+        self.assertEqual(matches[0]["left"].title, "Left two")
+        self.assertEqual(matches[0]["right"].title, "Right one")
+        self.assertEqual(matches[0]["origin"], "manual")
+        self.assertEqual([item.title for item in remaining_left], ["Left one"])
+        self.assertEqual([item.title for item in remaining_right], ["Right two"])
+        render_candidates.assert_called_once()
+        render_preview.assert_called_once()
+
+    def test_cli_manual_matching_is_skipped_in_non_interactive_mode(self):
+        configure_for_tests(interactive_mode=False)
+        import ghostmerge
+
+        left_records = [finding(title="Left")]
+        right_records = [finding(id=2, title="Right")]
+        matches, remaining_left, remaining_right = ghostmerge._maybe_create_cli_manual_match(
+            [], left_records, right_records, []
+        )
+
+        self.assertEqual(matches, [])
+        self.assertIs(remaining_left, left_records)
+        self.assertIs(remaining_right, right_records)
 
     def test_orphan_reprocessing_creates_new_matches(self):
         left_record = finding(title="SQL injection")

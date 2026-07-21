@@ -8,6 +8,7 @@
     <dt>Match</dt><dd>{{ preview.match_index + 1 }}</dd>
     <dt>Template type</dt><dd>{{ preview.template_type|title }}</dd>
     <dt>Score</dt><dd>{{ "%.2f"|format(preview.score) }}%</dd>
+    <dt>Origin</dt><dd>{{ "Manually selected" if preview.origin == "manual" else "Automatic candidate" }}</dd>
   </dl>
   <div class="record-preview-scroll">
     <table class="record-table record-preview-table">

@@ -15,6 +15,7 @@ from globals import get_config
 from matching import fuzzy_match_records
 from merge import (
     ResolvedWinner,
+    build_manual_match,
     get_compliance_reference_placeholder_choice,
     get_auto_suggest_values,
     get_single_sided_content_choice,
@@ -135,6 +136,9 @@ class MergeJob:
     rejected_match_keys: list[str] = field(default_factory=list)
     finding_orphan_reprocessing_stopped: bool = False
     observation_orphan_reprocessing_stopped: bool = False
+    finding_manual_matching_stopped: bool = False
+    observation_manual_matching_stopped: bool = False
+    manual_matching_token: Optional[str] = None
     sensitivity_snapshot_version: int = 0
     sensitivity_enabled: bool = False
     sensitivity_pre_match_enabled: bool = False
@@ -157,6 +161,7 @@ class MatchPreviewItem:
     template_type: str
     match_index: int
     score: float
+    origin: str
     rows: list[dict[str, Any]]
 
 
@@ -363,12 +368,12 @@ def get_next_conflict(job: MergeJob) -> Optional[ConflictReviewItem]:
     item = _get_next_conflict_for_kind(job, "finding")
     if item is not None:
         return item
-    if _should_offer_orphan_reprocessing(job, "finding"):
+    if _has_pending_unmatched_review(job, "finding"):
         return None
     item = _get_next_conflict_for_kind(job, "observation")
     if item is not None:
         return item
-    if _should_offer_orphan_reprocessing(job, "observation"):
+    if _has_pending_unmatched_review(job, "observation"):
         return None
 
     job.conflict_phase_complete = True
@@ -412,6 +417,7 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
         template_type=kind,
         match_index=_match_index_for_kind(job, kind),
         score=float(match["score"]),
+        origin=str(match.get("origin", "automatic")),
         rows=rows,
     )
 
@@ -458,7 +464,8 @@ def reprocess_orphans_for_current_kind(job: MergeJob) -> bool:
         set(job.rejected_match_keys),
     )
     if not new_matches:
-        _finish_orphan_reprocessing_for_kind(job, kind)
+        _set_orphan_reprocessing_stopped_for_kind(job, kind, True)
+        job.manual_matching_token = None
         return False
 
     for match in new_matches:
@@ -472,16 +479,85 @@ def reprocess_orphans_for_current_kind(job: MergeJob) -> bool:
     _replace_unmatched_for_kind(job, kind, "right", unmatched_right)
     _matches_for_kind(job, kind).extend(new_matches)
     job.preview_acknowledged = False
+    job.manual_matching_token = None
     return True
 
 
 def stop_orphan_reprocessing_for_current_kind(job: MergeJob) -> None:
-    """Finish the current template type without another orphan matching pass."""
+    """Stop fuzzy orphan passes and advance to optional manual matching."""
     kind = _pending_orphan_reprocessing_kind(job)
     if kind is None:
         raise WebMergeError("There are no orphan records waiting for reprocessing.")
     _set_orphan_reprocessing_stopped_for_kind(job, kind, True)
-    _finish_orphan_reprocessing_for_kind(job, kind)
+    job.manual_matching_token = None
+
+
+def get_manual_matching_prompt(job: MergeJob) -> Optional[dict[str, Any]]:
+    """Return the current server-derived manual-selection pools."""
+    kind = _pending_manual_matching_kind(job)
+    if kind is None:
+        job.manual_matching_token = None
+        return None
+    if not job.manual_matching_token:
+        job.manual_matching_token = secrets.token_urlsafe(32)
+    return {
+        "template_type": kind,
+        "token": job.manual_matching_token,
+        "left_records": _manual_matching_summaries(_unmatched_for_kind(job, kind, "left")),
+        "right_records": _manual_matching_summaries(_unmatched_for_kind(job, kind, "right")),
+    }
+
+
+def create_manual_match(
+    job: MergeJob,
+    submitted_token: str,
+    left_index: Any,
+    right_index: Any,
+) -> None:
+    """Create one token-bound pair from the current protected unmatched pools."""
+    # Authenticate the submitted selection before revealing or acting on the
+    # current pool state. Consumed and stale forms therefore fail consistently.
+    _validate_manual_matching_token(job, submitted_token)
+    kind = _pending_manual_matching_kind(job)
+    if kind is None:
+        raise WebMergeError("There are no unmatched records available for manual matching.")
+    try:
+        selected_left_index = int(str(left_index))
+        selected_right_index = int(str(right_index))
+    except (TypeError, ValueError) as exc:
+        raise WebMergeError("Select one record from each source.") from exc
+
+    unmatched_left = _unmatched_for_kind(job, kind, "left")
+    unmatched_right = _unmatched_for_kind(job, kind, "right")
+    if not 0 <= selected_left_index < len(unmatched_left) or not 0 <= selected_right_index < len(unmatched_right):
+        raise WebMergeError("Manual matching selection is no longer available. Reload the page and try again.")
+    try:
+        match = build_manual_match(
+            unmatched_left[selected_left_index],
+            unmatched_right[selected_right_index],
+            set(job.rejected_match_keys),
+        )
+    except ValueError as exc:
+        raise WebMergeError(str(exc)) from exc
+
+    unmatched_left.pop(selected_left_index)
+    unmatched_right.pop(selected_right_index)
+    _matches_for_kind(job, kind).append(match)
+    job.manual_matching_token = None
+    job.preview_acknowledged = False
+
+
+def stop_manual_matching_for_current_kind(job: MergeJob, submitted_token: str) -> None:
+    """Finish one template type and copy any records the operator leaves unmatched."""
+    _validate_manual_matching_token(job, submitted_token)
+    kind = _pending_manual_matching_kind(job)
+    if kind is None:
+        raise WebMergeError("There are no unmatched records waiting for manual matching.")
+    _set_manual_matching_stopped_for_kind(job, kind, True)
+    job.manual_matching_token = None
+    _append_unmatched_records(job, kind)
+    _set_conflict_complete_for_kind(job, kind, True)
+    job.preview_acknowledged = False
 
 
 def acknowledge_current_preview(job: MergeJob) -> None:
@@ -1174,6 +1250,7 @@ def job_to_dict(job: MergeJob) -> dict[str, Any]:
             "score": match["score"],
             "auto_value": _finding_to_state(match["auto_value"]),
             "auto_side": _winners_to_state(match["auto_side"]),
+            "origin": match.get("origin", "automatic"),
         }
         for match in job.matches
     ]
@@ -1184,6 +1261,7 @@ def job_to_dict(job: MergeJob) -> dict[str, Any]:
             "score": match["score"],
             "auto_value": _record_to_state(match["auto_value"]),
             "auto_side": _winners_to_state(match["auto_side"]),
+            "origin": match.get("origin", "automatic"),
         }
         for match in job.observation_matches
     ]
@@ -1213,6 +1291,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
                 "score": match["score"],
                 "auto_value": _finding_from_state(match["auto_value"]),
                 "auto_side": _winners_from_state(match["auto_side"]),
+                "origin": match.get("origin", "automatic"),
             }
             for match in data["matches"]
         ],
@@ -1223,6 +1302,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
                 "score": match["score"],
                 "auto_value": _observation_from_state(match["auto_value"]),
                 "auto_side": _winners_from_state(match["auto_side"]),
+                "origin": match.get("origin", "automatic"),
             }
             for match in data.get("observation_matches", [])
         ],
@@ -1280,6 +1360,11 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         observation_orphan_reprocessing_stopped=data.get(
             "observation_orphan_reprocessing_stopped",
             data.get("observation_orphan_reprocess_complete", False),
+        ),
+        finding_manual_matching_stopped=bool(data.get("finding_manual_matching_stopped", False)),
+        observation_manual_matching_stopped=bool(data.get("observation_manual_matching_stopped", False)),
+        manual_matching_token=(
+            data.get("manual_matching_token") if isinstance(data.get("manual_matching_token"), str) else None
         ),
         sensitivity_snapshot_version=int(data.get("sensitivity_snapshot_version", 0)),
         sensitivity_enabled=bool(data.get("sensitivity_enabled", False)),
@@ -1373,7 +1458,7 @@ def _get_next_conflict_for_kind(job: MergeJob, kind: str) -> Optional[ConflictRe
         _set_field_index_for_kind(job, kind, 0)
         job.preview_acknowledged = False
 
-    if _should_offer_orphan_reprocessing(job, kind):
+    if _has_pending_unmatched_review(job, kind):
         return None
 
     _append_unmatched_records(job, kind)
@@ -1453,6 +1538,17 @@ def _pending_orphan_reprocessing_kind(job: MergeJob) -> Optional[str]:
     return None
 
 
+def _pending_manual_matching_kind(job: MergeJob) -> Optional[str]:
+    for kind in TEMPLATE_KINDS:
+        if _should_offer_manual_matching(job, kind):
+            return kind
+    return None
+
+
+def _has_pending_unmatched_review(job: MergeJob, kind: str) -> bool:
+    return _should_offer_orphan_reprocessing(job, kind) or _should_offer_manual_matching(job, kind)
+
+
 def _should_offer_orphan_reprocessing(job: MergeJob, kind: str) -> bool:
     if not CONFIG.get("orphan_reprocessing_enabled", True):
         return False
@@ -1465,10 +1561,39 @@ def _should_offer_orphan_reprocessing(job: MergeJob, kind: str) -> bool:
     return bool(_unmatched_for_kind(job, kind, "left") and _unmatched_for_kind(job, kind, "right"))
 
 
-def _finish_orphan_reprocessing_for_kind(job: MergeJob, kind: str) -> None:
-    _append_unmatched_records(job, kind)
-    _set_conflict_complete_for_kind(job, kind, True)
-    job.preview_acknowledged = False
+def _should_offer_manual_matching(job: MergeJob, kind: str) -> bool:
+    if _conflict_complete_for_kind(job, kind):
+        return False
+    if _manual_matching_stopped_for_kind(job, kind):
+        return False
+    if _match_index_for_kind(job, kind) < len(_matches_for_kind(job, kind)):
+        return False
+    if _should_offer_orphan_reprocessing(job, kind):
+        return False
+    return bool(_unmatched_for_kind(job, kind, "left") and _unmatched_for_kind(job, kind, "right"))
+
+
+def _manual_matching_summaries(records: list[Finding] | list[Observation]) -> list[dict[str, Any]]:
+    summaries = []
+    for index, record in enumerate(records):
+        summaries.append(
+            {
+                "index": index,
+                "id": record.id,
+                "title": record.title,
+                "finding_type": getattr(record, "finding_type", ""),
+                "severity": getattr(record, "severity", ""),
+                "description": wrap_string(stringify_field(record.description), 160),
+            }
+        )
+    return summaries
+
+
+def _validate_manual_matching_token(job: MergeJob, submitted_token: str) -> None:
+    """Reject stale manual-stage actions before consulting mutable pool state."""
+    expected_token = job.manual_matching_token or ""
+    if not submitted_token or not secrets.compare_digest(str(submitted_token), expected_token):
+        raise WebMergeError("Manual matching selection is stale or invalid. Reload the page and try again.")
 
 
 def _active_conflict_kind(job: MergeJob) -> Optional[str]:
@@ -1548,6 +1673,17 @@ def _set_orphan_reprocessing_stopped_for_kind(job: MergeJob, kind: str, value: b
         job.finding_orphan_reprocessing_stopped = value
     else:
         job.observation_orphan_reprocessing_stopped = value
+
+
+def _manual_matching_stopped_for_kind(job: MergeJob, kind: str) -> bool:
+    return job.finding_manual_matching_stopped if kind == "finding" else job.observation_manual_matching_stopped
+
+
+def _set_manual_matching_stopped_for_kind(job: MergeJob, kind: str, value: bool) -> None:
+    if kind == "finding":
+        job.finding_manual_matching_stopped = value
+    else:
+        job.observation_manual_matching_stopped = value
 
 
 def _reviewable_field_defs(kind: str) -> list[Any]:
