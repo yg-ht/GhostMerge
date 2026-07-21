@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import difflib
 import hashlib
 import json
 import secrets
@@ -11,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from diffing import DiffLine, FieldDiff, build_semantic_diff
 from globals import get_config
 from matching import fuzzy_match_records
 from merge import (
@@ -76,6 +76,7 @@ class ConflictReviewItem:
     is_optional: bool
     allow_merge: bool
     diff_rows: list[dict[str, str]]
+    field_diff: FieldDiff
 
 
 @dataclass
@@ -405,6 +406,7 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
             right_value = extra_fields_for_comparison(right_value)
             offered_value = extra_fields_for_comparison(offered_value)
         requires_review = left_value != right_value
+        field_diff = build_aligned_field_diff(left_value, right_value) if requires_review else None
         rows.append(
             {
                 "field_name": field_def.name,
@@ -413,10 +415,11 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
                 "offered_value": stringify_field(offered_value),
                 "different": requires_review,
                 "diff_rows": (
-                    build_field_diff(left_value, right_value, offered_value)
+                    build_field_diff(left_value, right_value, offered_value, field_diff=field_diff)
                     if requires_review
                     else []
                 ),
+                "field_diff": field_diff,
             }
         )
     if not any(row["different"] for row in rows):
@@ -1237,25 +1240,53 @@ def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
     }
 
 
-def build_field_diff(left_value: Any, right_value: Any, offered_value: Any = None) -> list[dict[str, str]]:
-    """Build template-friendly diff rows for left, right, and offered field values."""
-    left_text = _wrap_for_web_diff(left_value)
-    right_text = _wrap_for_web_diff(right_value)
+def build_aligned_field_diff(left_value: Any, right_value: Any) -> FieldDiff:
+    """Build the shared semantic diff without presentation-induced wrapping."""
+    return build_semantic_diff(stringify_field(left_value), stringify_field(right_value))
+
+
+def build_field_diff(
+    left_value: Any,
+    right_value: Any,
+    offered_value: Any = None,
+    *,
+    field_diff: Optional[FieldDiff] = None,
+) -> list[dict[str, str]]:
+    """Build legacy flat rows from the shared aligned difference result.
+
+    Templates use ``FieldDiff`` directly for character highlighting. Keeping
+    this facade preserves existing internal callers while ensuring wrapping no
+    longer affects which source content is considered changed.
+    """
+    semantic_diff = field_diff or build_aligned_field_diff(left_value, right_value)
     rows = []
-    for line in difflib.ndiff(left_text.splitlines(), right_text.splitlines()):
-        code = line[:2]
-        value = line[2:]
-        if code == "- ":
-            rows.append({"side": "left", "class": "removed", "text": value})
-        elif code == "+ ":
-            rows.append({"side": "right", "class": "added", "text": value})
-        elif code == "  ":
-            rows.append({"side": "both", "class": "same", "text": value})
+    for block in semantic_diff.blocks:
+        if block.kind == "context":
+            rows.append({
+                "side": "both",
+                "class": "same",
+                "text": f"… {block.collapsed_line_count} unchanged lines …",
+            })
+            continue
+
+        if block.kind == "equal":
+            for line in block.left_lines:
+                rows.append({"side": "both", "class": "same", "text": _diff_line_text(line)})
+            continue
+
+        for line in block.left_lines:
+            rows.append({"side": "left", "class": "removed", "text": _diff_line_text(line)})
+        for line in block.right_lines:
+            rows.append({"side": "right", "class": "added", "text": _diff_line_text(line)})
 
     if offered_value not in (None, ""):
-        rows.append({"side": "offered", "class": "offered", "text": _wrap_for_web_diff(offered_value)})
+        rows.append({"side": "offered", "class": "offered", "text": stringify_field(offered_value)})
 
     return rows
+
+
+def _diff_line_text(line: DiffLine) -> str:
+    return "".join(segment.text for segment in line.segments)
 
 
 def job_to_dict(job: MergeJob) -> dict[str, Any]:
@@ -1523,6 +1554,7 @@ def _prepare_conflict_for_field(kind: str, match_index: int, match: dict[str, An
         )
         return None
 
+    field_diff = build_aligned_field_diff(left_value, right_value)
     return ConflictReviewItem(
         template_type=kind,
         match_index=match_index,
@@ -1534,7 +1566,8 @@ def _prepare_conflict_for_field(kind: str, match_index: int, match: dict[str, An
         field_type=expected_type,
         is_optional=is_optional_field(expected_type),
         allow_merge="str" in expected_type,
-        diff_rows=build_field_diff(left_value, right_value, offered_value),
+        diff_rows=build_field_diff(left_value, right_value, offered_value, field_diff=field_diff),
+        field_diff=field_diff,
     )
 
 
@@ -1801,11 +1834,6 @@ def _write_json_atomic(path: Path, data: Any) -> None:
     tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp_path.replace(path)
-
-
-def _wrap_for_web_diff(value: Any) -> str:
-    width = CONFIG.get("field_level_diff_max_width", 114)
-    return wrap_string(stringify_field(value), width)
 
 
 def _highlight_term_parts(value: Any, term: str) -> list[dict[str, Any]]:

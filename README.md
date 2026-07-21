@@ -281,6 +281,32 @@ The complete Web operator path is:
 8. Download and inspect both files. For an API-backed side, outbound sync is an
    optional, separate operation available only after output approval.
 
+### Difference display
+
+Field differences are calculated from the original logical lines before any
+browser or terminal wrapping is applied. This prevents a short edit near the
+start of a field from shifting presentation-only line breaks and making the
+remaining content appear changed. Inserted and removed lines are aligned first;
+local replacement blocks are then compared character by character. A line that
+is split or joined therefore remains a local change, and later matching lines
+realign normally.
+
+The Web and CLI displays use the same semantic result. They show source line
+numbers, collapse distant unchanged context, highlight only added or removed
+characters, and report display-only added/removed character and line-break
+counts. Changed line breaks use `↵` and changed tabs use `→`; these markers are
+not part of the merged value. Width-based wrapping happens afterwards and
+cannot affect matching, merge decisions, or output data.
+
+Detailed comparison is bounded to avoid excessive processing on unusually
+large or repetitive values. Replace blocks over 50,000 combined characters or
+25,000,000 possible character pairs use a deterministic common-prefix and
+common-suffix fallback. Fields over 200,000 combined characters, 5,000 logical
+lines, or 1,000,000 possible line pairs use the same fallback for the whole
+value. The review explicitly labels simplified highlighting when this occurs.
+Web templates auto-escape all source segments, and the CLI appends them as
+literal Rich text rather than interpreting record content as markup.
+
 Job state is saved between requests. Resume an in-progress job from the merge
 jobs list; refresh the current page after a stale or replayed decision is
 rejected. After an interrupted output write, reopening the job returns to final

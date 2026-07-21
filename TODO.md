@@ -144,9 +144,9 @@ completed output, digest-bound final approval, and source identity throughout th
       requiring manual review. Start with `extra_fields.ghostpiper_mapping`, make the field names
       configurable, define a conservative length/difference threshold, and retain manual review for
       ambiguous, blank, malformed, or similarly sized values.
-- [ ] Define per-field difference metrics using percentage difference and/or changed-character count.
-      Determine whether the metrics are display-only or may drive configurable auto-accept rules,
-      with safe defaults for short strings, structured fields, and HTML.
+- [x] Define display-only per-field difference metrics using changed-character counts.
+      Field review reports added and removed character and line-break counts from the same bounded
+      semantic diff used for highlighting. Metrics do not affect matching or auto-accept behaviour.
 
 ## Web Frontend
 - [x] Verify that every required merge stage is complete before presenting a job as completed.
@@ -202,11 +202,15 @@ completed output, digest-bound final approval, and source identity throughout th
 - [ ] Provide a safely sanitised rendered HTML view alongside the existing line-by-line diff.
       Make the raw/source view readily available and prevent active content or unsafe links from
       executing in the rendered preview.
-- [ ] Add intra-line character highlighting so individual character changes are visible rather than
-      marking only complete lines as changed.
-- [ ] Improve diff alignment when one side splits or joins lines.
-      Avoid treating every following line as changed by using content-aware line alignment before
-      applying intra-line character highlighting.
+- [x] Add intra-line character highlighting so individual character changes are visible rather than
+      marking only complete lines as changed. Web output uses auto-escaped semantic `ins`/`del`
+      elements, while the CLI builds literal Rich `Text` spans from the same shared result.
+- [x] Improve diff alignment when one side splits or joins lines.
+      Content-aware logical-line alignment localises inserted, deleted, split, and joined lines before
+      character comparison, so a change does not mark every following line as different.
+- [x] Keep display wrapping out of difference calculation.
+      Compare original logical lines first, then wrap aligned semantic spans for the browser or
+      terminal. Prefer natural wrapping boundaries and hard-wrap only long unbroken display tokens.
 - [ ] Review the left/right colour scheme because the current colours imply misleading semantics.
       Define colours for source identity separately from added/removed/selected state and maintain
       sufficient contrast in dark and light modes.
