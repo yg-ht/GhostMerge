@@ -481,54 +481,114 @@ class GhostwriterApi:
         created_findings: list[int] = []
         created_observations: list[int] = []
         prepared_observations = prepared_observations or []
+        total = len(prepared_records) + len(prepared_observations)
 
         try:
-            total = len(prepared_records) + len(prepared_observations)
             complete = 0
             for prepared in prepared_records:
-                complete += 1
-                self.progress(
-                    SyncEvent(
-                        "validate_create",
-                        f"Validating reviewed findings on {self.server.name}",
-                        complete,
-                        total,
-                    )
-                )
                 created_id = self.create_prepared_finding(prepared["api_record"])
                 created_findings.append(created_id)
                 self.set_tags(created_id, prepared["tags"], model="finding")
-
-            for prepared in prepared_observations:
+                # Report completed work only after both creation and tagging
+                # have succeeded.  This avoids showing 100% while the final
+                # validation request is still in flight.
                 complete += 1
                 self.progress(
                     SyncEvent(
                         "validate_create",
-                        f"Validating reviewed observations on {self.server.name}",
+                        f"Validated reviewed findings on {self.server.name}",
                         complete,
                         total,
                     )
                 )
+
+            for prepared in prepared_observations:
                 created_id = self.create_prepared_observation(prepared["api_record"])
                 created_observations.append(created_id)
                 self.set_tags(created_id, prepared["tags"], model="observation")
+                complete += 1
+                self.progress(
+                    SyncEvent(
+                        "validate_create",
+                        f"Validated reviewed observations on {self.server.name}",
+                        complete,
+                        total,
+                    )
+                )
         finally:
             cleanup_errors = []
+            cleanup_total = len(created_findings) + len(created_observations)
+            cleanup_complete = 0
+            if cleanup_total:
+                try:
+                    self.progress(
+                        SyncEvent(
+                            "validate_cleanup",
+                            f"Removing temporary validation records from {self.server.name}",
+                            0,
+                            cleanup_total,
+                        )
+                    )
+                except Exception as exc:
+                    # Continue with every deletion even when the status store
+                    # cannot persist the transition into the cleanup stage.
+                    cleanup_errors.append(f"progress before validation cleanup: {exc}")
             for finding_id in reversed(created_findings):
                 try:
                     self.delete_finding(finding_id)
                 except Exception as exc:
                     cleanup_errors.append(f"finding {finding_id}: {exc}")
+                else:
+                    cleanup_complete += 1
+                    try:
+                        self.progress(
+                            SyncEvent(
+                                "validate_cleanup",
+                                f"Removing temporary validation findings from {self.server.name}",
+                                cleanup_complete,
+                                cleanup_total,
+                            )
+                        )
+                    except Exception as exc:
+                        # A status persistence error must not stop the remaining
+                        # temporary records from being removed.
+                        cleanup_errors.append(f"progress after finding {finding_id}: {exc}")
             for observation_id in reversed(created_observations):
                 try:
                     self.delete_observation(observation_id)
                 except Exception as exc:
                     cleanup_errors.append(f"observation {observation_id}: {exc}")
+                else:
+                    cleanup_complete += 1
+                    try:
+                        self.progress(
+                            SyncEvent(
+                                "validate_cleanup",
+                                f"Removing temporary validation observations from {self.server.name}",
+                                cleanup_complete,
+                                cleanup_total,
+                            )
+                        )
+                    except Exception as exc:
+                        cleanup_errors.append(f"progress after observation {observation_id}: {exc}")
             if cleanup_errors:
                 raise GhostwriterApiError(
                     "Creation validation cleanup failed; existing library was not replaced. "
                     + "; ".join(cleanup_errors)
                 )
+
+        # This event makes the transition out of temporary validation explicit;
+        # the Web worker keeps the overall sync running until the later, final
+        # replacement completion event.
+        self.progress(
+            SyncEvent(
+                "validate_complete",
+                f"Validation complete for {self.server.name}",
+                total,
+                total,
+                "done",
+            )
+        )
 
     def prepare_records_for_reload(
         self,

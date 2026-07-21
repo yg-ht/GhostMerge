@@ -6,7 +6,7 @@
   <dl>
     <dt>Direction</dt><dd>Outbound</dd>
     <dt>Sync status</dt><dd>{{ state.status|default("queued") }}</dd>
-    <dt>Sync stage</dt><dd>{{ state.stage|default("queued") }}</dd>
+    <dt>Sync stage</dt><dd>{{ state.stage|default("queued")|replace("_", " ")|title }}</dd>
     <dt>Progress</dt><dd>{{ state.complete|default(0) }} / {{ state.total|default(0) }}</dd>
     <dt>Message</dt><dd>{{ state.message|default("Queued") }}</dd>
     {% if state.backup_path %}

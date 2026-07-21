@@ -227,6 +227,12 @@ service, routes, persistence, matching, review, output approval, and outbound-sy
       accurately describes the next stage, and use the chosen term consistently in help text.
 
 ## Ghostwriter API Sync
+- [x] Keep outbound-sync progress moving through validation cleanup.
+      Report validation only after each temporary record and its tags have succeeded, then expose a
+      separate cleanup stage while those temporary Findings and Observations are removed. Preserve
+      the existing cleanup-on-failure guarantee and do not begin replacement if cleanup fails. The
+      status page now shows readable stage names and enters cleanup at zero before the first
+      rate-limited deletion, so operators can see that the worker is still active.
 - [x] Verify that outbound synchronisation behaves consistently for both configured sides.
       Regression coverage proves each side uses only its configured destination and reviewed output,
       preserves existing extra fields while adding `ghostmerge_last_synced_at`, retains verified

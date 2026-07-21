@@ -434,9 +434,16 @@ Outbound sync is destructive. For the selected API-backed side, GhostMerge:
 1. Runs a non-destructive GraphQL preflight.
 2. Validates the reviewed records can be converted to Ghostwriter API inputs.
 3. Writes a local backup of existing target Finding Templates, Observation Templates, and tags.
-4. Deletes existing target Finding and Observation Templates.
-5. Recreates the reviewed output for both template types.
-6. Reapplies tags.
+4. Temporarily creates the reviewed records and tags, then removes those temporary records, to
+   prove the destination accepts every prepared payload before replacing the live library.
+5. Deletes existing target Finding and Observation Templates.
+6. Recreates the reviewed output for both template types.
+7. Reapplies tags.
+
+The outbound-sync status page reports temporary creation and cleanup as separate validation stages.
+The cleanup counter starts at zero and advances as the temporary records are removed. Both stages
+use the configured API rate limit, so cleanup can take a similar amount of time to creation for a
+large library even though no live records are being replaced during that phase.
 
 Before confirming an outbound sync:
 
