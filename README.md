@@ -307,6 +307,18 @@ continuations; this never inserts a line break into source or output data.
 Source identity uses neutral left/right tints, while red and green are reserved
 for the exact removed and added character spans.
 
+To validate the interactive selection behaviour in a browser, open a match
+preview containing a changed field and perform this short check:
+
+1. Click the left value or one of its highlighted lines and confirm the left
+   radio and blue selection outline activate.
+2. Click the right value and confirm selection moves to the right source.
+3. Click **Clear selection** and confirm all three radios are cleared, the blue
+   outline is removed, and the containing offered-value cell is not selected.
+4. Use Tab and the arrow keys to confirm the underlying radio controls remain
+   keyboard-operable, then use Tab to reach **Clear selection** and activate it
+   with Enter or Space.
+
 Detailed comparison is bounded to avoid excessive processing on unusually
 large or repetitive values. Replace blocks over 50,000 combined characters or
 25,000,000 possible character pairs use a deterministic common-prefix and

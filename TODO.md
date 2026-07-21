@@ -207,6 +207,8 @@ service, routes, persistence, matching, review, output approval, and outbound-sy
 - [x] Add an unselect-field control to the record preview so an accidental field choice can be
       cleared before submitting the selected decisions. The accessible clear button is enabled only
       after a choice is made and does not accidentally select its containing offered-value cell.
+      Repeatable mouse and keyboard validation steps are documented because the project does not
+      currently include a JavaScript-capable browser test harness.
 - [x] Make record-preview value cells clickable when choosing left, right, or offered values.
       The underlying radio controls and keyboard workflow remain intact, and the selected cell is
       visibly highlighted before the choices are submitted.

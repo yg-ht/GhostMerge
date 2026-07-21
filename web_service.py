@@ -1241,7 +1241,7 @@ def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
 
 
 def build_aligned_field_diff(left_value: Any, right_value: Any) -> FieldDiff:
-    """Build the shared semantic diff without presentation-induced wrapping."""
+    """Build a semantic diff, then split its existing segments for Web display."""
     semantic_diff = build_semantic_diff(stringify_field(left_value), stringify_field(right_value))
     return split_field_diff_for_display(semantic_diff)
 
