@@ -117,7 +117,13 @@ completed output, digest-bound final approval, and source identity throughout th
 - [x] When a match is rejected, return both findings to unmatched pool
 - [x] Add logic to optionally re-process orphans after all initial matches are reviewed
 - [x] Process unmatched findings after main merge effort completed
-- [ ] Allow manual matching of unmatched findings
+- [x] Allow manual matching of unmatched records.
+  - [x] Define the shared validation and match-construction contract for Findings and Observations.
+  - [x] Add a persisted, token-bound Web selection stage before unmatched records are copied.
+  - [x] Route manually selected pairs through the normal preview and field-review workflow.
+  - [x] Add interactive CLI selection for unmatched Findings without changing non-interactive behaviour.
+  - [x] Add service, route, CLI, persistence, rejection, and edge-case regression coverage.
+  - [x] Document the operator workflow and mark the feature complete after validation.
 - [x] Implement config file `threshold` override to adjust sensitivity of fuzzy matching
 - [x] Preview matched records before field-level web review
 - [x] Preview final merged output before final write and prompt for acceptance

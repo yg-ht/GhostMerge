@@ -31,9 +31,11 @@ from web_service import (
     apply_preview_field_choices,
     apply_sensitivity_decision,
     build_field_diff,
+    create_manual_match,
     create_merge_job,
     finalise_job,
     get_current_match_preview,
+    get_manual_matching_prompt,
     get_next_conflict,
     get_next_sensitivity_item,
     get_review_progress,
@@ -47,6 +49,7 @@ from web_service import (
     save_job,
     save_outputs,
     stop_orphan_reprocessing_for_current_kind,
+    stop_manual_matching_for_current_kind,
 )
 
 
@@ -258,6 +261,8 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(len(job.unmatched_right), 1)
         self.assertIsNone(get_next_conflict(job))
         stop_orphan_reprocessing_for_current_kind(job)
+        manual_prompt = get_manual_matching_prompt(job)
+        stop_manual_matching_for_current_kind(job, manual_prompt["token"])
         self.assertIsNone(get_next_conflict(job))
 
         result = finalise_job(job)
@@ -288,6 +293,8 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(len(job.unmatched_observations_right), 1)
         self.assertIsNone(get_next_conflict(job))
         stop_orphan_reprocessing_for_current_kind(job)
+        manual_prompt = get_manual_matching_prompt(job)
+        stop_manual_matching_for_current_kind(job, manual_prompt["token"])
         self.assertIsNone(get_next_conflict(job))
 
         result = finalise_job(job)
@@ -433,6 +440,131 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(loaded.job_id, "persist123")
         self.assertEqual(loaded.match_index, job.match_index)
         self.assertEqual(loaded.field_index, job.field_index)
+
+    def test_manual_finding_match_enters_normal_preview_and_review(self):
+        configure_for_web_tests(orphan_reprocessing_enabled=False, fuzzy_match_threshold=[101])
+        job = create_merge_job(
+            [record(title="Unrelated left title", description="Left detail")],
+            [record(id="2", title="Different right title", description="Right detail")],
+            job_id="manualfinding123",
+        )
+
+        self.assertIsNone(get_next_conflict(job))
+        prompt = get_manual_matching_prompt(job)
+        create_manual_match(job, prompt["token"], 0, 0)
+        preview = get_current_match_preview(job)
+
+        self.assertEqual(preview.origin, "manual")
+        self.assertGreaterEqual(preview.score, 0.0)
+        self.assertEqual(len(job.unmatched_left), 0)
+        self.assertEqual(len(job.unmatched_right), 0)
+        self.assertEqual(job.matches[0]["origin"], "manual")
+        accept_offered_for_current_match = web_service.accept_offered_for_current_match
+        accept_offered_for_current_match(job)
+        self.assertIsNone(get_next_conflict(job))
+        result = finalise_job(job)
+        self.assertEqual(len(result.left_records), 1)
+        self.assertEqual(len(result.right_records), 1)
+
+    def test_manual_observation_match_uses_the_same_review_stage(self):
+        configure_for_web_tests(orphan_reprocessing_enabled=False, fuzzy_match_threshold=[101])
+        job = create_merge_job(
+            {"findings": [], "observations": [observation(title="Left process")]},
+            {"findings": [], "observations": [observation(id="2", title="Right network event")]},
+            job_id="manualobservation123",
+        )
+
+        self.assertIsNone(get_next_conflict(job))
+        prompt = get_manual_matching_prompt(job)
+        self.assertEqual(prompt["template_type"], "observation")
+        create_manual_match(job, prompt["token"], "0", "0")
+        preview = get_current_match_preview(job)
+
+        self.assertEqual(preview.template_type, "observation")
+        self.assertEqual(preview.origin, "manual")
+
+    def test_manual_match_rejects_stale_and_out_of_range_selections_without_mutation(self):
+        configure_for_web_tests(orphan_reprocessing_enabled=False, fuzzy_match_threshold=[101])
+        job = create_merge_job(
+            [record(title="Left-only title")],
+            [record(id="2", title="Right-only title")],
+            job_id="manualinvalid123",
+        )
+        self.assertIsNone(get_next_conflict(job))
+        prompt = get_manual_matching_prompt(job)
+
+        with self.assertRaisesRegex(WebMergeError, "stale or invalid"):
+            create_manual_match(job, "altered-token", 0, 0)
+        with self.assertRaisesRegex(WebMergeError, "no longer available"):
+            create_manual_match(job, prompt["token"], 0, 99)
+
+        self.assertEqual(len(job.matches), 0)
+        self.assertEqual(len(job.unmatched_left), 1)
+        self.assertEqual(len(job.unmatched_right), 1)
+        self.assertEqual(job.manual_matching_token, prompt["token"])
+
+    def test_rejected_manual_pair_cannot_be_recreated(self):
+        configure_for_web_tests(orphan_reprocessing_enabled=False, fuzzy_match_threshold=[101])
+        job = create_merge_job(
+            [record(title="Manual left")],
+            [record(id="2", title="Manual right")],
+            job_id="manualrejected123",
+        )
+        self.assertIsNone(get_next_conflict(job))
+        prompt = get_manual_matching_prompt(job)
+        create_manual_match(job, prompt["token"], 0, 0)
+        reject_current_match(job)
+        retry_prompt = get_manual_matching_prompt(job)
+
+        with self.assertRaisesRegex(WebMergeError, "previously rejected"):
+            create_manual_match(job, retry_prompt["token"], 0, 0)
+
+        self.assertEqual(len(job.unmatched_left), 1)
+        self.assertEqual(len(job.unmatched_right), 1)
+
+    def test_finishing_manual_matching_copies_unequal_remaining_pools(self):
+        configure_for_web_tests(orphan_reprocessing_enabled=False, fuzzy_match_threshold=[101])
+        job = create_merge_job(
+            [record(id="1", title="Left one"), record(id="2", title="Left two")],
+            [record(id="3", title="Right one")],
+            job_id="manualfinish123",
+        )
+        self.assertIsNone(get_next_conflict(job))
+        prompt = get_manual_matching_prompt(job)
+
+        with self.assertRaisesRegex(WebMergeError, "stale or invalid"):
+            stop_manual_matching_for_current_kind(job, "altered-token")
+        self.assertFalse(job.finding_conflict_phase_complete)
+        self.assertEqual(len(job.unmatched_left), 2)
+        self.assertEqual(len(job.unmatched_right), 1)
+
+        stop_manual_matching_for_current_kind(job, prompt["token"])
+        self.assertTrue(job.finding_manual_matching_stopped)
+        self.assertTrue(job.finding_conflict_phase_complete)
+        self.assertEqual(len(job.merged_left), 3)
+        self.assertEqual(len(job.merged_right), 3)
+        self.assertIsNone(job.manual_matching_token)
+        self.assertIsNotNone(prompt["token"])
+
+    def test_manual_matching_token_and_origin_round_trip_in_persisted_job(self):
+        configure_for_web_tests(orphan_reprocessing_enabled=False, fuzzy_match_threshold=[101])
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            job = create_merge_job(
+                [record(title="Persist left")],
+                [record(id="2", title="Persist right")],
+                job_id="manualpersist123",
+            )
+            self.assertIsNone(get_next_conflict(job))
+            prompt = get_manual_matching_prompt(job)
+            save_job(job, jobs_dir)
+            resumed = load_job(jobs_dir, job.job_id)
+            create_manual_match(resumed, prompt["token"], 0, 0)
+            save_job(resumed, jobs_dir)
+            reloaded = load_job(jobs_dir, job.job_id)
+
+        self.assertEqual(reloaded.matches[0]["origin"], "manual")
+        self.assertIsNone(reloaded.manual_matching_token)
 
     def test_pre_match_sensitivity_snapshot_applies_to_findings_and_observations(self):
         configure_for_web_tests(
@@ -1584,9 +1716,20 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(prompt.status_code, 200)
         self.assertIn(b"Reprocess unmatched finding records", prompt.data)
 
-        sensitivity_summary = self.client.post(
+        manual_matching = self.client.post(
             f"/jobs/{job_id}/conflicts",
             data=self.with_csrf({"preview_action": "stop_orphan_reprocessing"}),
+            follow_redirects=True,
+        )
+        self.assertIn(b"Manually match unmatched finding records", manual_matching.data)
+        pending_job = load_job(Path(self.tmp_dir.name), job_id)
+
+        sensitivity_summary = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data=self.with_csrf({
+                "preview_action": "stop_manual_matching",
+                "manual_matching_token": pending_job.manual_matching_token,
+            }),
             follow_redirects=True,
         )
         self.assertIn(b"Sensitivity review ready to complete", sensitivity_summary.data)
@@ -1602,6 +1745,83 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual([item["description"] for item in left_records], ["Left detail", "Right detail"])
         self.assertEqual([item["description"] for item in right_records], ["Left detail", "Right detail"])
+
+    def test_manual_matching_route_resumes_and_rejects_replayed_token(self):
+        get_config()["orphan_reprocessing_enabled"] = False
+        get_config()["fuzzy_match_threshold"] = [101]
+        left = json.dumps([record(title="Manual route left", description="Left route detail")]).encode("utf-8")
+        right = json.dumps(
+            [record(id="2", title="Manual route right", description="Right route detail")]
+        ).encode("utf-8")
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+
+        first_page = self.client.get(f"/jobs/{job_id}/conflicts")
+        first_job = load_job(Path(self.tmp_dir.name), job_id)
+        resumed_page = self.client.get(f"/jobs/{job_id}/conflicts")
+        resumed_job = load_job(Path(self.tmp_dir.name), job_id)
+
+        self.assertEqual(first_page.status_code, 200)
+        self.assertIn(b"Manually match unmatched finding records", first_page.data)
+        self.assertIn(b"Manual route left", first_page.data)
+        self.assertIn(b"Manual route right", first_page.data)
+        self.assertEqual(first_job.manual_matching_token, resumed_job.manual_matching_token)
+        self.assertIn(first_job.manual_matching_token.encode("utf-8"), resumed_page.data)
+
+        selected = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data=self.with_csrf({
+                "preview_action": "create_manual_match",
+                "manual_matching_token": first_job.manual_matching_token,
+                "left_index": "0",
+                "right_index": "0",
+            }),
+            follow_redirects=True,
+        )
+        after_selection = load_job(Path(self.tmp_dir.name), job_id)
+        replayed = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data=self.with_csrf({
+                "preview_action": "create_manual_match",
+                "manual_matching_token": first_job.manual_matching_token,
+                "left_index": "0",
+                "right_index": "0",
+            }),
+        )
+        after_replay = load_job(Path(self.tmp_dir.name), job_id)
+
+        self.assertEqual(selected.status_code, 200)
+        self.assertIn(b"Finding match preview", selected.data)
+        self.assertIn(b"Manually selected", selected.data)
+        self.assertEqual(after_selection.matches[0]["origin"], "manual")
+        self.assertEqual(replayed.status_code, 400)
+        self.assertIn(b"stale or invalid", replayed.data)
+        self.assertEqual(len(after_replay.matches), 1)
+
+    def test_manual_matching_route_supports_observation_records(self):
+        get_config()["orphan_reprocessing_enabled"] = False
+        get_config()["fuzzy_match_threshold"] = [101]
+        job = create_merge_job(
+            {"findings": [], "observations": [observation(title="Left observation route")]},
+            {"findings": [], "observations": [observation(id="2", title="Right observation route")]},
+            job_id="manualobservationroute123",
+        )
+        save_job(job, Path(self.tmp_dir.name))
+
+        response = self.client.get(f"/jobs/{job.job_id}/conflicts")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Manually match unmatched observation records", response.data)
+        self.assertIn(b"Left observation route", response.data)
+        self.assertIn(b"Right observation route", response.data)
 
     def test_rejected_match_can_reprocess_with_other_orphans_when_enabled(self):
         get_config()["orphan_reprocessing_enabled"] = True
@@ -1907,6 +2127,9 @@ class FlaskRouteTests(unittest.TestCase):
             "rejected_match_keys",
             "finding_orphan_reprocessing_stopped",
             "observation_orphan_reprocessing_stopped",
+            "finding_manual_matching_stopped",
+            "observation_manual_matching_stopped",
+            "manual_matching_token",
             "preview_acknowledged",
             "sensitivity_snapshot_version",
             "sensitivity_enabled",

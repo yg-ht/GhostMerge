@@ -366,6 +366,27 @@ class TUI:
                                      left_value,right_value)
         self.update_data(left_right_table, title='Preview')
 
+    def render_manual_match_candidates(self, left_records: List[Finding], right_records: List[Finding]) -> None:
+        """Show numbered unmatched Finding candidates without interpreting record markup."""
+        candidate_tables = []
+        for side, records in (("Left", left_records), ("Right", right_records)):
+            table = Table(title=f"{side} unmatched findings", box=None, show_lines=True)
+            table.add_column("No.", style="bold white", justify="right")
+            table.add_column("ID", overflow="fold")
+            table.add_column("Title", overflow="fold")
+            table.add_column("Type", overflow="fold")
+            table.add_column("Severity", overflow="fold")
+            for record_number, record in enumerate(records, start=1):
+                table.add_row(
+                    str(record_number),
+                    Text(stringify_field(record.id)),
+                    Text(stringify_field(record.title)),
+                    Text(stringify_field(record.finding_type)),
+                    Text(stringify_field(record.severity)),
+                )
+            candidate_tables.append(table)
+        self.update_data(Columns(candidate_tables, expand=True), title="Manual matching candidates")
+
     def render_single_partial_dict_record(self, finding_record: Dict):
         record_table: Table = Table(
             title="Raw finding from Dict", box=None, show_lines=False
@@ -536,4 +557,3 @@ class TUI:
 
         log('DEBUG', f'Ready to render single field diff output!', prefix="TUI")
         self.update_data(field_diff, title=title)
-

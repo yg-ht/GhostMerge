@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block main_class %}wide-main{% endblock %}
+{% block content %}
+<h1>Manually match unmatched {{ manual_prompt.template_type }} records</h1>
+<p>Select one record from each source. The selected pair will enter the normal match preview before any values are merged.</p>
+<form class="panel" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="manual_matching_token" value="{{ manual_prompt.token }}">
+  <div class="grid">
+    <section class="manual-candidate-list">
+      <h2>{{ source_labels.left }}</h2>
+      {% for record in manual_prompt.left_records %}
+      <label class="choice-control">
+        <input type="radio" name="left_index" value="{{ record.index }}" required>
+        <span><strong>{{ record.title }}</strong> — ID {{ record.id }}{% if record.finding_type %} — {{ record.finding_type }}{% endif %}{% if record.severity %} — {{ record.severity }}{% endif %}<br>{{ record.description }}</span>
+      </label>
+      {% endfor %}
+    </section>
+    <section class="manual-candidate-list">
+      <h2>{{ source_labels.right }}</h2>
+      {% for record in manual_prompt.right_records %}
+      <label class="choice-control">
+        <input type="radio" name="right_index" value="{{ record.index }}" required>
+        <span><strong>{{ record.title }}</strong> — ID {{ record.id }}{% if record.finding_type %} — {{ record.finding_type }}{% endif %}{% if record.severity %} — {{ record.severity }}{% endif %}<br>{{ record.description }}</span>
+      </label>
+      {% endfor %}
+    </section>
+  </div>
+  <div class="actions">
+    <button type="submit" name="preview_action" value="create_manual_match">Review selected pair</button>
+    <button class="secondary" type="submit" name="preview_action" value="stop_manual_matching" formnovalidate>Finish manual matching</button>
+  </div>
+</form>
+{% with job_id=job.job_id %}
+{% include "_abandon_merge_form.html" %}
+{% endwith %}
+{% endblock %}

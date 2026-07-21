@@ -1,7 +1,7 @@
 # import via the common imports route
 from operator import indexOf
 
-from imports import (Path, Optional, List, Dict, typer)
+from imports import (Any, Path, Optional, List, Dict, typer)
 # initialise global objects
 from globals import get_config, get_tui
 CONFIG = get_config()
@@ -11,7 +11,14 @@ tui = TUI()
 from utils import load_config, log, load_json, write_json, return_ASCII_art, Aborting
 from model import Finding
 from matching import fuzzy_match_findings
-from merge import append_unmatched_records, merge_main, reject_matched_record, renumber_findings, reprocess_orphan_matches
+from merge import (
+    append_unmatched_records,
+    build_manual_match,
+    merge_main,
+    reject_matched_record,
+    renumber_findings,
+    reprocess_orphan_matches,
+)
 from sensitivity import (
     apply_pre_match_sensitivity_replacements,
     sensitivities_checker_single_record,
@@ -140,7 +147,7 @@ def ghostmerge(
                 prefix="CLI",
             )
 
-    matches: List[Dict[str,Finding|float]] = []
+    matches: List[Dict[str, Any]] = []
     unmatched_left = findings_left
     unmatched_right = findings_right
     for fuzzy_threshold in CONFIG['fuzzy_match_threshold']:
@@ -158,6 +165,25 @@ def ghostmerge(
     merged_left, merged_right = [], []
     rejected_match_keys = []
     match_review_index = 0
+
+    # A completely unmatched input still needs to reach the interactive orphan
+    # and manual-selection stages. Previously those stages were only reached
+    # from inside the matched-record loop.
+    if not matches:
+        matches, unmatched_left, unmatched_right = _maybe_reprocess_cli_orphans(
+            matches,
+            unmatched_left,
+            unmatched_right,
+            rejected_match_keys,
+        )
+        if not matches:
+            matches, unmatched_left, unmatched_right = _maybe_create_cli_manual_match(
+                matches,
+                unmatched_left,
+                unmatched_right,
+                rejected_match_keys,
+            )
+
     while match_review_index < len(matches):
         match = matches[match_review_index]
         match_review_index += 1
@@ -175,11 +201,12 @@ def ghostmerge(
                 rejected_match_keys.append(reject_matched_record(match, unmatched_left, unmatched_right))
                 log("INFO", "Rejected matched pair and returned both findings to unmatched pools", prefix="CLI")
                 if match_review_index == len(matches):
-                    matches, unmatched_left, unmatched_right = _maybe_reprocess_cli_orphans(
+                    matches, unmatched_left, unmatched_right = _maybe_extend_cli_review_queue(
                         matches,
                         unmatched_left,
                         unmatched_right,
                         rejected_match_keys,
+                        match.get("origin", "automatic"),
                     )
                 continue
 
@@ -190,11 +217,12 @@ def ghostmerge(
         merged_right.append(result_right)
 
         if match_review_index == len(matches):
-            matches, unmatched_left, unmatched_right = _maybe_reprocess_cli_orphans(
+            matches, unmatched_left, unmatched_right = _maybe_extend_cli_review_queue(
                 matches,
                 unmatched_left,
                 unmatched_right,
                 rejected_match_keys,
+                match.get("origin", "automatic"),
             )
 
     append_unmatched_records(merged_left, merged_right, unmatched_left, unmatched_right)
@@ -227,7 +255,12 @@ def ghostmerge(
     get_tui().stop()
 
 
-def _maybe_reprocess_cli_orphans(matches, unmatched_left, unmatched_right, rejected_match_keys):
+def _maybe_reprocess_cli_orphans(
+    matches: list[dict[str, Any]],
+    unmatched_left: list[Finding],
+    unmatched_right: list[Finding],
+    rejected_match_keys: list[str],
+) -> tuple[list[dict[str, Any]], list[Finding], list[Finding]]:
     if not CONFIG.get("orphan_reprocessing_enabled", True):
         return matches, unmatched_left, unmatched_right
     if not unmatched_left or not unmatched_right:
@@ -251,6 +284,111 @@ def _maybe_reprocess_cli_orphans(matches, unmatched_left, unmatched_right, rejec
     )
     matches.extend(new_matches)
     return matches, unmatched_left, unmatched_right
+
+
+def _maybe_extend_cli_review_queue(
+    matches: list[dict[str, Any]],
+    unmatched_left: list[Finding],
+    unmatched_right: list[Finding],
+    rejected_match_keys: list[str],
+    completed_match_origin: str,
+) -> tuple[list[dict[str, Any]], list[Finding], list[Finding]]:
+    """Offer the next matching stage after the current review queue is empty."""
+    match_count_before_reprocessing = len(matches)
+
+    # Manual pairs have already passed the fuzzy-orphan stage. Returning to
+    # that stage after every analyst-selected pair would make the workflow
+    # repetitive and could unexpectedly recreate automatic candidates.
+    if completed_match_origin != "manual":
+        matches, unmatched_left, unmatched_right = _maybe_reprocess_cli_orphans(
+            matches,
+            unmatched_left,
+            unmatched_right,
+            rejected_match_keys,
+        )
+
+    # New fuzzy candidates must receive the normal whole-record review before
+    # manual selection is offered.
+    if len(matches) == match_count_before_reprocessing:
+        matches, unmatched_left, unmatched_right = _maybe_create_cli_manual_match(
+            matches,
+            unmatched_left,
+            unmatched_right,
+            rejected_match_keys,
+        )
+    return matches, unmatched_left, unmatched_right
+
+
+def _maybe_create_cli_manual_match(
+    matches: list[dict[str, Any]],
+    unmatched_left: list[Finding],
+    unmatched_right: list[Finding],
+    rejected_match_keys: list[str],
+) -> tuple[list[dict[str, Any]], list[Finding], list[Finding]]:
+    """Let an interactive CLI operator select one unmatched Finding pair."""
+    if not CONFIG.get("interactive_mode", False):
+        return matches, unmatched_left, unmatched_right
+    if not unmatched_left or not unmatched_right:
+        return matches, unmatched_left, unmatched_right
+
+    while True:
+        choice = tui.render_user_choice(
+            "Would you like to manually pair unmatched findings?",
+            ["Create a manual match", "Finish manual matching"],
+            "c",
+            "Manual matching",
+        )
+        if choice == "f":
+            return matches, unmatched_left, unmatched_right
+
+        tui.render_manual_match_candidates(unmatched_left, unmatched_right)
+        left_index = _prompt_cli_record_index("Left record number", len(unmatched_left))
+        right_index = _prompt_cli_record_index("Right record number", len(unmatched_right))
+
+        try:
+            match = build_manual_match(
+                unmatched_left[left_index],
+                unmatched_right[right_index],
+                set(rejected_match_keys),
+            )
+        except ValueError as exc:
+            # Rejected pairs and future validation failures are recoverable
+            # choices, so keep both protected pools intact.
+            log("WARN", str(exc), prefix="CLI")
+            continue
+
+        tui.render_left_and_right_whole_finding_record(match, "all fields")
+        confirmation = tui.render_user_choice(
+            "Add this pair to the normal match review queue?",
+            ["Keep selected pair", "Choose different records"],
+            "k",
+            "Confirm manual match",
+        )
+        if confirmation == "c":
+            continue
+
+        # Mutate only after validation and final analyst confirmation succeed.
+        unmatched_left.pop(left_index)
+        unmatched_right.pop(right_index)
+        matches.append(match)
+        return matches, unmatched_left, unmatched_right
+
+
+def _prompt_cli_record_index(prompt: str, record_count: int) -> int:
+    """Read and validate a one-based record choice from the terminal UI."""
+    while True:
+        selected = tui.render_user_choice(
+            f"{prompt} (1-{record_count})",
+            multi_char=True,
+            title="Manual matching",
+        )
+        try:
+            selected_index = int(str(selected)) - 1
+        except (TypeError, ValueError):
+            selected_index = -1
+        if 0 <= selected_index < record_count:
+            return selected_index
+        log("WARN", f"Enter a number from 1 to {record_count}.", prefix="CLI")
 
 
 if __name__ == "__main__":

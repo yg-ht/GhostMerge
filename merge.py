@@ -240,6 +240,42 @@ def match_rejection_key(left_record: MergeRecord, right_record: MergeRecord) -> 
     return f"{_record_identity(left_record)}::{_record_identity(right_record)}"
 
 
+def build_manual_match(
+    left_record: MergeRecord,
+    right_record: MergeRecord,
+    rejected_match_keys: set[str],
+) -> dict[str, Any]:
+    """Build one normalised analyst-selected pair for the normal review flow.
+
+    The caller owns removal from unmatched pools.  Keeping that mutation at the
+    service or CLI boundary lets this helper validate the complete pair before
+    any persisted collection changes.
+    """
+    if type(left_record) is not type(right_record):
+        raise ValueError("Manual matches must use the same template type on both sides.")
+    if not isinstance(left_record, (Finding, Observation)):
+        raise ValueError("Manual matching received an unsupported record type.")
+    if match_rejection_key(left_record, right_record) in rejected_match_keys:
+        raise ValueError("This pair was previously rejected and cannot be recreated.")
+
+    # Construct and normalise a candidate copy so merely previewing a CLI pair
+    # cannot mutate records that remain in the protected unmatched pools.
+    selected_left = deepcopy(left_record)
+    selected_right = deepcopy(right_record)
+    match: dict[str, Any] = {
+        "left": selected_left,
+        "right": selected_right,
+        "score": score_record_similarity(selected_left, selected_right),
+        "origin": "manual",
+    }
+    normalise_merge_pair(match)
+    auto_value, auto_side = get_auto_suggest_values(selected_left, selected_right)
+    match["auto_value"] = auto_value
+    match["auto_side"] = auto_side
+    normalise_merge_pair(match)
+    return match
+
+
 def reprocess_orphan_matches(
     unmatched_left: list[MergeRecord],
     unmatched_right: list[MergeRecord],
