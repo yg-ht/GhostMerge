@@ -2,7 +2,7 @@
 {% block content %}
 <h1>Outbound API sync status</h1>
 <section class="panel">
-  <h2>{{ side|title }} destination server</h2>
+  <h2>{{ source_labels[side] }} destination</h2>
   <dl>
     <dt>Direction</dt><dd>Outbound</dd>
     <dt>Sync status</dt><dd>{{ state.status|default("queued") }}</dd>

@@ -31,8 +31,8 @@
 <section class="panel">
   <p>Review every final record below. No output files have been created and outbound API synchronisation remains locked.</p>
   <dl>
-    <dt>Left destination</dt><dd>{{ preview_source_labels.left }}</dd>
-    <dt>Right destination</dt><dd>{{ preview_source_labels.right }}</dd>
+    <dt>Output source</dt><dd>{{ source_labels.left }}</dd>
+    <dt>Output source</dt><dd>{{ source_labels.right }}</dd>
     <dt>Preview digest</dt><dd><code>{{ job.output_preview_digest }}</code></dd>
     {% if job.output_preview_generated_at %}<dt>Prepared</dt><dd>{{ job.output_preview_generated_at }}</dd>{% endif %}
   </dl>
@@ -40,14 +40,14 @@
 
 <div class="final-output-grid">
   <div>
-    <h2>{{ preview_source_labels.left }} output</h2>
+    <h2>{{ source_labels.left }} output</h2>
     {{ render_records(preview.left_records, "Findings", "No Findings will be written.") }}
     {% if job.includes_observations or preview.left_observations %}
     {{ render_records(preview.left_observations, "Observation Templates", "No Observation Templates will be written.") }}
     {% endif %}
   </div>
   <div>
-    <h2>{{ preview_source_labels.right }} output</h2>
+    <h2>{{ source_labels.right }} output</h2>
     {{ render_records(preview.right_records, "Findings", "No Findings will be written.") }}
     {% if job.includes_observations or preview.right_observations %}
     {{ render_records(preview.right_observations, "Observation Templates", "No Observation Templates will be written.") }}

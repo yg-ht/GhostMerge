@@ -147,12 +147,14 @@ def create_app(test_config: dict | None = None) -> Flask:
             if "api" in input_sources.values():
                 import_id = _start_import_thread(app, jobs_dir, input_sources, request.files)
                 return redirect(url_for("import_status", import_id=import_id))
+            input_source_names = _input_source_names(input_sources, request.files)
             left_records = _load_records_for_side("left", request.files.get("left_file"), input_sources["left"])
             right_records = _load_records_for_side("right", request.files.get("right_file"), input_sources["right"])
             job = create_merge_job(
                 left_records,
                 right_records,
                 input_sources=input_sources,
+                input_source_names=input_source_names,
                 sensitivity_snapshot=_build_sensitivity_snapshot(),
             )
             save_job(job, jobs_dir)
@@ -211,7 +213,13 @@ def create_app(test_config: dict | None = None) -> Flask:
     def summary(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
-            return render_template("summary.html", summary=job_summary(job), progress=get_review_progress(job))
+            return render_template(
+                "summary.html",
+                summary=job_summary(job),
+                job=job,
+                source_labels=_source_identity_labels(job),
+                progress=_review_progress(job),
+            )
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 404
 
@@ -228,8 +236,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                         "match_preview.html",
                         job=job,
                         preview=preview,
-                        preview_source_labels=_preview_source_labels(job),
-                        progress=get_review_progress(job),
+                        source_labels=_source_identity_labels(job),
+                        progress=_review_progress(job),
                     )
             item = get_next_conflict(job)
             save_job(job, jobs_dir)
@@ -240,7 +248,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                         "orphan_reprocessing.html",
                         job=job,
                         orphan_prompt=orphan_prompt,
-                        progress=get_review_progress(job),
+                        source_labels=_source_identity_labels(job),
+                        progress=_review_progress(job),
                     )
                 return redirect(url_for("sensitivity", job_id=job.job_id))
             if not job.preview_acknowledged and (
@@ -254,15 +263,16 @@ def create_app(test_config: dict | None = None) -> Flask:
                         "match_preview.html",
                         job=job,
                         preview=preview,
-                        preview_source_labels=_preview_source_labels(job),
-                        progress=get_review_progress(job),
+                        source_labels=_source_identity_labels(job),
+                        progress=_review_progress(job),
                     )
                 return redirect(url_for("conflicts", job_id=job.job_id))
             return render_template(
                 "conflict.html",
                 job=job,
                 item=item,
-                progress=get_review_progress(job),
+                source_labels=_source_identity_labels(job),
+                progress=_review_progress(job),
             )
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
@@ -323,7 +333,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                     "sensitivity_summary.html",
                     job=job,
                     audit=sensitivity_audit_summary(job),
-                    progress=get_review_progress(job),
+                    source_labels=_source_identity_labels(job),
+                    progress=_review_progress(job),
                 )
 
             item = get_next_sensitivity_item(job, terms)
@@ -333,13 +344,15 @@ def create_app(test_config: dict | None = None) -> Flask:
                     "sensitivity_summary.html",
                     job=job,
                     audit=sensitivity_audit_summary(job),
-                    progress=get_review_progress(job),
+                    source_labels=_source_identity_labels(job),
+                    progress=_review_progress(job),
                 )
             return render_template(
                 "sensitivity.html",
                 job=job,
                 item=item,
-                progress=get_review_progress(job),
+                source_labels=_source_identity_labels(job),
+                progress=_review_progress(job),
             )
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
@@ -380,13 +393,14 @@ def create_app(test_config: dict | None = None) -> Flask:
                     "final_output_preview.html",
                     job=job,
                     preview=preview,
-                    preview_source_labels=_preview_source_labels(job),
-                    progress=get_review_progress(job),
+                    source_labels=_source_identity_labels(job),
+                    progress=_review_progress(job),
                 )
             return render_template(
                 "complete.html",
                 job=job,
-                progress=get_review_progress(job),
+                source_labels=_source_identity_labels(job),
+                progress=_review_progress(job),
                 api_servers=configured_server_summary(CONFIG),
             )
         except WebMergeError as exc:
@@ -419,7 +433,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                     job=job,
                     side=side,
                     server=_server_for_side(side),
-                    progress=get_review_progress(job),
+                    source_labels=_source_identity_labels(job),
+                    progress=_review_progress(job),
                 )
             _start_sync_thread(app, jobs_dir, job_id, side)
             return redirect(url_for("sync_status", job_id=job_id, side=side))
@@ -435,7 +450,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                 job=job,
                 side=side,
                 state=job.sync_results.get(side, {}),
-                progress=get_review_progress(job),
+                source_labels=_source_identity_labels(job),
+                progress=_review_progress(job),
             )
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 404
@@ -807,18 +823,58 @@ def _preview_field_choices_from_form(form) -> dict[str, str]:
     }
 
 
-def _preview_source_labels(job) -> dict[str, str]:
-    """Return Record Preview side labels while preserving file-backed names."""
-    labels = {"left": "Left", "right": "Right"}
+def _safe_display_name(value: Any, fallback: str, *, filename: bool = False) -> str:
+    """Return bounded printable text suitable for an escaped UI label."""
+    raw_value = str(value or "")
+    if filename:
+        # Browsers may submit either POSIX or Windows-style client paths.
+        raw_value = raw_value.replace("\\", "/").rsplit("/", 1)[-1]
+    printable = "".join(character if character.isprintable() else " " for character in raw_value)
+    normalised = " ".join(printable.split()).strip()
+    return (normalised or fallback)[:160]
+
+
+def _input_source_names(input_sources: dict[str, str], files) -> dict[str, str]:
+    """Snapshot stable human-readable source names at the request boundary."""
+    names: dict[str, str] = {}
+    for side in ("left", "right"):
+        if input_sources.get(side) == "api":
+            server = _server_for_side(side)
+            names[side] = _safe_display_name(server.name, f"{side.title()} Ghostwriter")
+        else:
+            uploaded_file = files.get(f"{side}_file")
+            names[side] = _safe_display_name(
+                getattr(uploaded_file, "filename", ""),
+                f"{side.title()} uploaded JSON",
+                filename=True,
+            )
+    return names
+
+
+def _source_identity_labels(job) -> dict[str, str]:
+    """Return stable name-and-type labels, including safe legacy fallbacks."""
+    labels: dict[str, str] = {}
     api_servers = configured_server_summary(CONFIG)
 
     for side in ("left", "right"):
-        if job.input_sources.get(side) == "api":
+        source_type = job.input_sources.get(side, "file")
+        source_name = job.input_source_names.get(side)
+        if not source_name and source_type == "api":
             server = api_servers.get(side)
             if server and server.get("configured"):
-                labels[side] = server.get("name") or labels[side]
+                source_name = server.get("name")
+        fallback = f"{side.title()} Ghostwriter" if source_type == "api" else f"{side.title()} uploaded JSON"
+        source_name = _safe_display_name(source_name, fallback)
+        labels[side] = f"{source_name} ({'API' if source_type == 'api' else 'JSON file'})"
 
     return labels
+
+
+def _review_progress(job) -> dict[str, Any]:
+    """Attach source identity to the existing workflow progress metrics."""
+    progress = get_review_progress(job)
+    progress["source_labels"] = _source_identity_labels(job)
+    return progress
 
 
 def _start_api_source_check_thread(app: Flask, jobs_dir: Path, side: str) -> str:
@@ -914,6 +970,7 @@ def _check_api_source(app: Flask, jobs_dir: Path, check_id: str) -> None:
 
 def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, str], files) -> str:
     import_id = uuid.uuid4().hex
+    input_source_names = _input_source_names(input_sources, files)
     file_records: dict[str, list[dict]] = {}
     for side in ("left", "right"):
         if input_sources[side] == "file":
@@ -939,6 +996,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
             "total": len(api_sides),
             "api_estimated_totals": api_estimated_totals,
             "input_sources": input_sources,
+            "input_source_names": input_source_names,
             "file_records": file_records,
             "sensitivity_snapshot": sensitivity_snapshot,
             "job_id": None,
@@ -1025,6 +1083,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                 records["left"],
                 records["right"],
                 input_sources=input_sources,
+                input_source_names=state.get("input_source_names"),
                 sensitivity_snapshot=state.get("sensitivity_snapshot"),
             )
             save_job(job, jobs_dir)

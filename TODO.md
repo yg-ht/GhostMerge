@@ -28,12 +28,12 @@ rather than being constrained to the CLI feature set.
 2. **Preview and approve final merged output before writing or outbound sync. (Completed.)** Give operators a
    last verification point after all review and sensitivity decisions, before durable output can
    become the source of a destructive API replacement.
-3. **Show unambiguous source identity throughout left/right review.** Use configured API names and
+3. **Show unambiguous source identity throughout left/right review. (Completed.)** Use configured API names and
    uploaded filenames consistently so an operator cannot mistake which source or destination a
    decision affects.
 
-These are the next selected implementation items. The first is a contained safety fix; the second
-and third reduce the risk of approving or synchronising the wrong reviewed content.
+These selected safety and review-clarity items are complete. Their regression coverage protects
+completed output, digest-bound final approval, and source identity throughout the workflow.
 
 ## Project Setup & Infrastructure
 - [x] Created CLI entry point using Typer
@@ -145,15 +145,18 @@ and third reduce the risk of approving or synchronising the wrong reviewed conte
       invalidated through an abandonment action that is no longer applicable.
 - [x] Remove user-facing references to “AzSure”.
       A repository-wide audit found no remaining references outside this historical TODO entry.
-- [ ] Review and rename page and section titles so they describe the current workflow consistently.
+- [x] Review and rename page and section titles so they describe the current workflow consistently.
       Identify every affected title before changing shared terminology, and retain stable routes,
       API fields, and other compatibility-facing identifiers.
-- [ ] Rename “Previous merge jobs” to “Merge jobs”.
+- [x] Rename “Previous merge jobs” to “Merge jobs”.
       Apply the wording consistently to the relevant heading, navigation, and accessible labels
       without changing job filtering or historical-job behaviour.
 - [x] Limit the number of rows shown in home-page history tables.
       Configurable recent-row limits and links to dedicated full-history pages are implemented for
       API source checks and merge jobs.
+- [x] Prioritise frequently used home-page sections.
+      Merge-job status now appears first, followed by job creation, inbound imports, API source
+      checks, and API backups; existing history limits, sorting, and routes are unchanged.
 - [ ] Add pagination to the dedicated history pages.
       Define a sensible page size, stable ordering, empty and out-of-range behaviour, and accessible
       previous/next controls while preserving filters and other table state.
@@ -163,12 +166,12 @@ and third reduce the risk of approving or synchronising the wrong reviewed conte
 - [x] Block web finalisation until conflict review is fully complete.
       Completion routes and output persistence now reject incomplete conflict or sensitivity review,
       and durable output readiness additionally requires both output files.
-- [ ] Correct the left/right column titles when API sources are used.
+- [x] Correct the left/right column titles when API sources are used.
       Display the configured source names and source types consistently so users can tell which API
       or uploaded file each value came from throughout preview, conflict review, and completion.
 - [ ] Add an unselect-field control to the record preview so an accidental field choice can be
       cleared before submitting the selected decisions.
-- [ ] In “Conflict review - Finding”, allow the user to click the chosen option itself.
+- [ ] In “Finding field review”, allow the user to click the chosen option itself.
       Keep keyboard controls and accessible form semantics, visibly indicate the active choice, and
       ensure clicking an already selected option has predictable behaviour.
 - [ ] Provide a safely sanitised rendered HTML view alongside the existing line-by-line diff.
@@ -185,7 +188,7 @@ and third reduce the risk of approving or synchronising the wrong reviewed conte
 - [ ] Audit table usage across the web interface and define a consistent approach.
       Decide which data should use semantic tables versus cards or definition lists, then standardise
       headings, responsive behaviour, accessibility, spacing, and actions without a broad rewrite.
-- [ ] Rename “Review remaining fields” to “Individual field review” or similarly clear wording that
+- [x] Rename “Review remaining fields” to “Individual field review” or similarly clear wording that
       accurately describes the next stage, and use the chosen term consistently in help text.
 
 ## Ghostwriter API Sync

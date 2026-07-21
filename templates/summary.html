@@ -1,14 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Merge summary</h1>
+<h1>Merge job summary</h1>
 <section class="panel">
   <dl>
     <dt>Job</dt><dd>{{ summary.job_id }}</dd>
     <dt>Matched pairs</dt><dd>{{ summary.matches }}</dd>
-    <dt>Unmatched left</dt><dd>{{ summary.unmatched_left }}</dd>
-    <dt>Unmatched right</dt><dd>{{ summary.unmatched_right }}</dd>
-    <dt>Merge/output phase</dt><dd>{{ summary.phase_label }}</dd>
-    <dt>Completed matches</dt><dd>{{ summary.completed_matches }}</dd>
+    <dt>Left source</dt><dd>{{ source_labels.left }}</dd>
+    <dt>Right source</dt><dd>{{ source_labels.right }}</dd>
+    <dt>Unmatched from {{ source_labels.left }}</dt><dd>{{ summary.unmatched_left }}</dd>
+    <dt>Unmatched from {{ source_labels.right }}</dt><dd>{{ summary.unmatched_right }}</dd>
+    <dt>Workflow stage</dt><dd>{{ summary.phase_label }}</dd>
+    <dt>Reviewed matches</dt><dd>{{ summary.completed_matches }}</dd>
     <dt>Sensitivity status</dt><dd>{{ summary.sensitivity_review_status|replace("_", " ")|title }}</dd>
     <dt>Sensitivity outcome</dt><dd>{{ summary.sensitivity_review_outcome|replace("_", " ")|title }}</dd>
   </dl>
@@ -31,7 +33,7 @@
   {% if summary.sync_results %}
   <div class="actions">
     {% for sync_side, sync_state in summary.sync_results.items() %}
-    <a class="button secondary" href="{{ url_for('sync_status', job_id=summary.job_id, side=sync_side) }}">{{ sync_side|title }} outbound sync status</a>
+    <a class="button secondary" href="{{ url_for('sync_status', job_id=summary.job_id, side=sync_side) }}">{{ source_labels[sync_side] }} outbound sync status</a>
     {% endfor %}
   </div>
   {% endif %}

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block main_class %}wide-main{% endblock %}
 {% block content %}
-<h1>Record preview - {{ preview.template_type|title }}</h1>
+<h1>{{ preview.template_type|title }} match preview</h1>
 <form class="panel" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <dl>
@@ -14,8 +14,8 @@
       <thead>
         <tr>
           <th class="field-cell">Field</th>
-          <th class="value-cell">{{ preview_source_labels.left }}</th>
-          <th class="value-cell">{{ preview_source_labels.right }}</th>
+          <th class="value-cell">{{ source_labels.left }}</th>
+          <th class="value-cell">{{ source_labels.right }}</th>
           <th class="value-cell">Offered</th>
         </tr>
       </thead>
@@ -27,14 +27,14 @@
             {% if row.different %}
             <label class="choice-control">
               <input type="radio" name="field_choice:{{ row.field_name }}" value="left">
-              <span>Use left</span>
+              <span>Use {{ source_labels.left }} value</span>
             </label>
             {% endif %}
             <pre>{{ row.left_value }}</pre>
             {% if row.diff_rows %}
             <div class="preview-diff" aria-label="Highlighted difference for {{ row.field_name }}">
               {% for diff_row in row.diff_rows if diff_row.side in ("left", "both") %}
-              <div class="diff-line {{ diff_row.class }}"><strong>{{ diff_row.side }}</strong><span>{{ diff_row.text }}</span></div>
+              <div class="diff-line {{ diff_row.class }}"><strong>{{ source_labels.left if diff_row.side == "left" else "Both sources" }}</strong><span>{{ diff_row.text }}</span></div>
               {% endfor %}
             </div>
             {% endif %}
@@ -43,14 +43,14 @@
             {% if row.different %}
             <label class="choice-control">
               <input type="radio" name="field_choice:{{ row.field_name }}" value="right">
-              <span>Use right</span>
+              <span>Use {{ source_labels.right }} value</span>
             </label>
             {% endif %}
             <pre>{{ row.right_value }}</pre>
             {% if row.diff_rows %}
             <div class="preview-diff" aria-label="Highlighted difference for {{ row.field_name }}">
               {% for diff_row in row.diff_rows if diff_row.side in ("right", "both") %}
-              <div class="diff-line {{ diff_row.class }}"><strong>{{ diff_row.side }}</strong><span>{{ diff_row.text }}</span></div>
+              <div class="diff-line {{ diff_row.class }}"><strong>{{ source_labels.right if diff_row.side == "right" else "Both sources" }}</strong><span>{{ diff_row.text }}</span></div>
               {% endfor %}
             </div>
             {% endif %}
@@ -67,7 +67,7 @@
             {% if offered_diff_rows %}
             <div class="preview-diff" aria-label="Offered value for {{ row.field_name }}">
               {% for diff_row in offered_diff_rows %}
-              <div class="diff-line {{ diff_row.class }}"><strong>{{ diff_row.side }}</strong><span>{{ diff_row.text }}</span></div>
+              <div class="diff-line {{ diff_row.class }}"><strong>Offered value</strong><span>{{ diff_row.text }}</span></div>
               {% endfor %}
             </div>
             {% endif %}
@@ -79,7 +79,7 @@
   </div>
   <div class="actions">
     <button type="submit" name="preview_action" value="apply_field_choices">Apply selected field choices</button>
-    <button class="secondary" type="submit" name="preview_action" value="continue" data-shortcut="Enter">Review remaining fields</button>
+    <button class="secondary" type="submit" name="preview_action" value="continue" data-shortcut="Enter">Continue to individual field review</button>
     <button class="secondary" type="submit" name="preview_action" value="accept_offered" data-shortcut=" ">Accept all offered for this match</button>
     <button class="secondary danger" type="submit" name="preview_action" value="reject_match">Reject match</button>
   </div>

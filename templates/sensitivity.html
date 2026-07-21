@@ -4,7 +4,7 @@
 <section class="panel">
   <dl>
     <dt>Template type</dt><dd>{{ item.template_type|title }}</dd>
-    <dt>Side</dt><dd>{{ item.side }}</dd>
+    <dt>Source output</dt><dd>{{ source_labels[item.side] }}</dd>
     <dt>Record</dt><dd>{{ item.record_index + 1 }}</dd>
     <dt>Field</dt><dd>{{ item.field_name }}</dd>
     <dt>Term</dt><dd>{{ item.sensitive_term }}</dd>

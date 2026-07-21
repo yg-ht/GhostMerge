@@ -994,8 +994,10 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Last updated", response.data)
         self.assertIn(b"2023-11-14 22:13:20 UTC", response.data)
         self.assertIn(b"Matched pairs reviewed", response.data)
-        self.assertIn(b"Left outbound sync status", response.data)
+        self.assertIn(b"Left source (JSON file) outbound sync status", response.data)
         self.assertIn(b"/jobs/homejob123/sync/left/status", response.data)
+        self.assertLess(response.data.index(b"<h2>Merge jobs</h2>"), response.data.index(b"<h2>Create merge job</h2>"))
+        self.assertLess(response.data.index(b"<h2>Create merge job</h2>"), response.data.index(b"<h2>API backups</h2>"))
 
     def test_home_shows_unreadable_previous_jobs(self):
         jobs_dir = Path(self.tmp_dir.name)
@@ -1026,7 +1028,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"newjob", response.data)
         self.assertIn(b"midjob", response.data)
         self.assertNotIn(b"oldjob", response.data)
-        self.assertIn(b"Showing 2 of 3 previous merge jobs.", response.data)
+        self.assertIn(b"Showing 2 of 3 merge jobs.", response.data)
         self.assertIn(b"/jobs", response.data)
         self.assertEqual(full_response.status_code, 200)
         self.assertIn(b"oldjob", full_response.data)
@@ -1063,6 +1065,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"YGHT Ghostwriter", response.data)
         self.assertIn(b"worker process is no longer active", response.data)
         self.assertIn(b"/api-sources/checks/check123/status", response.data)
+        self.assertLess(response.data.index(b"<h2>Create merge job</h2>"), response.data.index(b"<h2>API source checks</h2>"))
+        self.assertLess(response.data.index(b"<h2>API source checks</h2>"), response.data.index(b"<h2>API backups</h2>"))
 
     def test_home_limits_api_source_checks_and_links_to_full_history(self):
         get_config()["web_ui"]["home_api_source_checks_limit"] = 2
@@ -1158,6 +1162,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"2023-11-14 22:16:40 UTC", response.data)
         self.assertIn(b"worker process is no longer active", response.data)
         self.assertIn(b"/imports/import123/status", response.data)
+        self.assertLess(response.data.index(b"<h2>Create merge job</h2>"), response.data.index(b"<h2>Inbound API imports</h2>"))
+        self.assertLess(response.data.index(b"<h2>Inbound API imports</h2>"), response.data.index(b"<h2>API backups</h2>"))
 
     def test_upload_review_complete_and_download_outputs(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")
@@ -1175,6 +1181,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(upload.status_code, 302)
         summary_path = upload.headers["Location"]
         job_id = summary_path.rstrip("/").split("/")[-2]
+        persisted_job = load_job(Path(self.tmp_dir.name), job_id)
+        self.assertEqual(persisted_job.input_source_names, {"left": "left.json", "right": "right.json"})
 
         summary = self.client.get(summary_path)
         self.assertEqual(summary.status_code, 200)
@@ -1182,23 +1190,23 @@ class FlaskRouteTests(unittest.TestCase):
 
         conflict = self.client.get(f"/jobs/{job_id}/conflicts")
         self.assertEqual(conflict.status_code, 200)
-        self.assertIn(b"Record preview", conflict.data)
+        self.assertIn(b"Finding match preview", conflict.data)
         self.assertIn(b"changed", conflict.data)
         self.assertIn(b"Highlighted difference for description", conflict.data)
         self.assertIn(b"class=\"diff-line removed\"", conflict.data)
         self.assertIn(b"class=\"diff-line added\"", conflict.data)
         self.assertIn(b'value="left"', conflict.data)
-        self.assertIn(b"Use left", conflict.data)
+        self.assertIn(b"Use left.json (JSON file) value", conflict.data)
         self.assertIn(b'value="right"', conflict.data)
-        self.assertIn(b"Use right", conflict.data)
+        self.assertIn(b"Use right.json (JSON file) value", conflict.data)
         self.assertIn(b'value="offered"', conflict.data)
         self.assertIn(b"Use offered", conflict.data)
         self.assertIn(b"data-choice-cell", conflict.data)
         self.assertIn(b'data-choice-value="left"', conflict.data)
         self.assertIn(b'data-choice-value="right"', conflict.data)
         self.assertIn(b'data-choice-value="offered"', conflict.data)
-        self.assertIn(b"<th class=\"value-cell\">Left</th>", conflict.data)
-        self.assertIn(b"<th class=\"value-cell\">Right</th>", conflict.data)
+        self.assertIn(b"<th class=\"value-cell\">left.json (JSON file)</th>", conflict.data)
+        self.assertIn(b"<th class=\"value-cell\">right.json (JSON file)</th>", conflict.data)
         self.assertIn(b"Apply selected field choices", conflict.data)
         self.assertIn(b"Reject match", conflict.data)
 
@@ -1208,7 +1216,7 @@ class FlaskRouteTests(unittest.TestCase):
             follow_redirects=True,
         )
         self.assertEqual(conflict.status_code, 200)
-        self.assertIn(b"Conflict review", conflict.data)
+        self.assertIn(b"Finding field review", conflict.data)
         self.assertIn(b"data-shortcut=\"ArrowLeft\"", conflict.data)
         self.assertIn(b"Highlighted difference", conflict.data)
 
@@ -1574,7 +1582,7 @@ class FlaskRouteTests(unittest.TestCase):
             follow_redirects=True,
         )
         self.assertEqual(prompt.status_code, 200)
-        self.assertIn(b"Reprocess orphan finding records", prompt.data)
+        self.assertIn(b"Reprocess unmatched finding records", prompt.data)
 
         sensitivity_summary = self.client.post(
             f"/jobs/{job_id}/conflicts",
@@ -1622,7 +1630,7 @@ class FlaskRouteTests(unittest.TestCase):
             follow_redirects=True,
         )
         self.assertEqual(prompt.status_code, 200)
-        self.assertIn(b"Reprocess orphan finding records", prompt.data)
+        self.assertIn(b"Reprocess unmatched finding records", prompt.data)
 
         response = self.client.post(
             f"/jobs/{job_id}/conflicts",
@@ -1630,7 +1638,7 @@ class FlaskRouteTests(unittest.TestCase):
             follow_redirects=True,
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Record preview - Finding", response.data)
+        self.assertIn(b"Finding match preview", response.data)
         self.assertIn(b"Alternative right detail", response.data)
         self.assertNotIn(b"Rejected right detail", response.data)
 
@@ -1651,9 +1659,9 @@ class FlaskRouteTests(unittest.TestCase):
         response = self.client.get("/jobs/observationpreview123/conflicts", follow_redirects=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Record preview - Observation", response.data)
+        self.assertIn(b"Observation match preview", response.data)
         self.assertIn(b"Reject match", response.data)
-        self.assertNotIn(b"Conflict review - Observation", response.data)
+        self.assertNotIn(b"Observation field review", response.data)
 
     def test_record_preview_uses_api_server_names_for_api_backed_columns(self):
         config = get_config()
@@ -1678,16 +1686,43 @@ class FlaskRouteTests(unittest.TestCase):
             [record(id="2", description="Right detail")],
             job_id="apipreviewlabels123",
             input_sources={"left": "api", "right": "api"},
+            input_source_names={"left": "Left Test Ghostwriter", "right": "Right Test Ghostwriter"},
         )
         save_job(job, Path(self.tmp_dir.name))
+        config["ghostwriter_api"]["servers"]["left"]["name"] = "Renamed Left Server"
+        config["ghostwriter_api"]["servers"]["right"]["name"] = "Renamed Right Server"
 
         response = self.client.get("/jobs/apipreviewlabels123/conflicts")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"<th class=\"value-cell\">Left Test Ghostwriter</th>", response.data)
-        self.assertIn(b"<th class=\"value-cell\">Right Test Ghostwriter</th>", response.data)
+        self.assertIn(b"<th class=\"value-cell\">Left Test Ghostwriter (API)</th>", response.data)
+        self.assertIn(b"<th class=\"value-cell\">Right Test Ghostwriter (API)</th>", response.data)
+        self.assertNotIn(b"Renamed Left Server", response.data)
+        self.assertNotIn(b"Renamed Right Server", response.data)
         self.assertNotIn(b"<th class=\"value-cell\">Left</th>", response.data)
         self.assertNotIn(b"<th class=\"value-cell\">Right</th>", response.data)
+
+    def test_uploaded_source_name_is_bounded_to_safe_escaped_basename(self):
+        left = json.dumps([record(description="Left detail")]).encode("utf-8")
+        right = json.dumps([record(id="2", description="Right detail")]).encode("utf-8")
+        unsafe_name = "C:\\private\\<script>" + ("x" * 200) + ".json"
+        response = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), unsafe_name),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = response.headers["Location"].rstrip("/").split("/")[-2]
+        job = load_job(Path(self.tmp_dir.name), job_id)
+        preview = self.client.get(f"/jobs/{job_id}/conflicts")
+
+        self.assertEqual(len(job.input_source_names["left"]), 160)
+        self.assertTrue(job.input_source_names["left"].startswith("<script>"))
+        self.assertIn(b"&lt;script&gt;", preview.data)
+        self.assertNotIn(b"<script>xxxx", preview.data)
 
     def test_record_preview_displays_title_row_first(self):
         job = create_merge_job(
@@ -1725,7 +1760,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(preview.status_code, 200)
         self.assertIn(b"Sensitivity review ready to complete", preview.data)
-        self.assertNotIn(b"Record preview", preview.data)
+        self.assertNotIn(b"match preview", preview.data)
         self.assertNotIn(b"<th class=\"field-cell\">id</th>", preview.data)
         self.assertNotIn(b"changed selectable", preview.data)
         self.assertNotIn(b"Accept offered id", preview.data)
@@ -1765,10 +1800,10 @@ class FlaskRouteTests(unittest.TestCase):
         response = self.client.get(f"/jobs/{job_id}/conflicts", follow_redirects=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Record preview", response.data)
+        self.assertIn(b"Finding match preview", response.data)
         self.assertIn(b"Second finding", response.data)
         self.assertIn(b"Highlighted difference for description", response.data)
-        self.assertNotIn(b"<h1>Conflict review", response.data)
+        self.assertNotIn(b"<h1>Finding field review", response.data)
 
     def test_abandon_merge_deletes_local_job_and_returns_home(self):
         job = create_merge_job(
@@ -1856,6 +1891,7 @@ class FlaskRouteTests(unittest.TestCase):
         job_path = jobs_dir / "compositelegacy123" / "job.json"
         state = json.loads(job_path.read_text(encoding="utf-8"))
         legacy_only_fields = {
+            "input_source_names",
             "finding_conflict_phase_complete",
             "observation_matches",
             "unmatched_observations_left",
@@ -2379,7 +2415,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         summary_response = self.client.get("/jobs/rejoin123/summary")
         self.assertEqual(summary_response.status_code, 200)
-        self.assertIn(b"Left outbound sync status", summary_response.data)
+        self.assertIn(b"Left Ghostwriter (API) outbound sync status", summary_response.data)
         self.assertIn(b"/jobs/rejoin123/sync/left/status", summary_response.data)
 
     def test_live_sync_rejects_existing_side_lock(self):
@@ -2624,6 +2660,10 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(state["side_name"], "Left Test Ghostwriter")
         self.assertNotIn("sensitivity_snapshot", state)
         imported_job = load_job(jobs_dir, state["job_id"])
+        self.assertEqual(
+            imported_job.input_source_names,
+            {"left": "Left Test Ghostwriter", "right": "right.json"},
+        )
         self.assertEqual(imported_job.sensitivity_snapshot_version, 1)
         self.assertFalse(imported_job.sensitivity_enabled)
 
