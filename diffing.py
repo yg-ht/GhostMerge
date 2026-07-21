@@ -161,9 +161,123 @@ def build_semantic_diff(
     )
 
 
+def split_field_diff_for_display(
+    field_diff: FieldDiff,
+    *,
+    maximum_characters: int = 120,
+) -> FieldDiff:
+    """Split semantic lines for display without recalculating differences.
+
+    Explicit source lines and all semantic segments remain unchanged in
+    content. Continuation rows have no source line number because they are a
+    presentation aid rather than new source data.
+    """
+    if maximum_characters < 1:
+        raise ValueError("maximum_characters must be positive")
+
+    display_blocks = []
+    for block in field_diff.blocks:
+        if block.kind == "context":
+            display_blocks.append(block)
+            continue
+        display_blocks.append(
+            replace(
+                block,
+                left_lines=_split_diff_lines_for_display(block.left_lines, maximum_characters),
+                right_lines=_split_diff_lines_for_display(block.right_lines, maximum_characters),
+            )
+        )
+    return replace(field_diff, blocks=tuple(display_blocks))
+
+
 def _logical_lines(value: str) -> list[str]:
     """Return logical lines while retaining separators for newline changes."""
     return value.splitlines(keepends=True) or [""]
+
+
+def _split_diff_lines_for_display(
+    lines: tuple[DiffLine, ...],
+    maximum_characters: int,
+) -> tuple[DiffLine, ...]:
+    """Return display-sized rows while preserving segment text and styles."""
+    display_lines: list[DiffLine] = []
+    for line in lines:
+        text = "".join(segment.text for segment in line.segments)
+        if len(text) <= maximum_characters:
+            display_lines.append(line)
+            continue
+
+        start = 0
+        first_piece = True
+        while start < len(text):
+            end = _preferred_display_break(text, start, maximum_characters)
+            display_lines.append(
+                DiffLine(
+                    source_line=line.source_line if first_piece else None,
+                    segments=_slice_diff_segments(line.segments, start, end),
+                )
+            )
+            first_piece = False
+            start = end
+    return tuple(display_lines)
+
+
+def _preferred_display_break(text: str, start: int, maximum_characters: int) -> int:
+    """Choose a stable structural, punctuation, or word boundary near the limit."""
+    hard_end = min(len(text), start + maximum_characters)
+    if hard_end == len(text):
+        return hard_end
+
+    window = text[start:hard_end]
+    minimum_useful_length = max(1, maximum_characters // 2)
+
+    # HTML-rich fields are easier to scan when a completed tag remains on the
+    # preceding row. This is display-only and does not attempt to parse HTML.
+    structural = window.rfind(">") + 1
+    if structural >= minimum_useful_length:
+        return start + structural
+
+    punctuation_matches = list(re.finditer(r"[.!?;:](?:\s|$)", window))
+    if punctuation_matches:
+        punctuation = punctuation_matches[-1].start() + 1
+        if punctuation >= minimum_useful_length:
+            return start + punctuation
+
+    whitespace = max(window.rfind(" "), window.rfind("\t")) + 1
+    if whitespace >= minimum_useful_length:
+        return start + whitespace
+    return hard_end
+
+
+def _slice_diff_segments(
+    segments: tuple[DiffSegment, ...],
+    start: int,
+    end: int,
+) -> tuple[DiffSegment, ...]:
+    """Slice a styled semantic line by character offset without losing style."""
+    sliced: list[DiffSegment] = []
+    position = 0
+    for segment in segments:
+        segment_end = position + len(segment.text)
+        overlap_start = max(start, position)
+        overlap_end = min(end, segment_end)
+        if overlap_start < overlap_end:
+            text = segment.text[overlap_start - position : overlap_end - position]
+            marker = segment.marker if text == segment.text else None
+            candidate = DiffSegment(text, segment.change, marker)
+            if (
+                sliced
+                and sliced[-1].change == candidate.change
+                and sliced[-1].marker is None
+                and candidate.marker is None
+            ):
+                sliced[-1] = replace(sliced[-1], text=sliced[-1].text + candidate.text)
+            else:
+                sliced.append(candidate)
+        position = segment_end
+        if position >= end:
+            break
+    return tuple(sliced)
 
 
 def _can_use_detailed_character_diff(

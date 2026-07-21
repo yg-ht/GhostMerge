@@ -1287,6 +1287,31 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"midjob", full_response.data)
         self.assertIn(b"newjob", full_response.data)
 
+    def test_merge_job_history_paginates_newest_first_and_bounds_page_numbers(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        for index, job_id in enumerate(("oldjob", "midjob", "newjob"), start=1):
+            job_dir = jobs_dir / job_id
+            job_dir.mkdir()
+            job_path = job_dir / "job.json"
+            job_path.write_text("{partial", encoding="utf-8")
+            os.utime(job_path, (index, index))
+
+        with patch("web_app.HISTORY_PAGE_SIZE", 2):
+            first = self.client.get("/jobs?page=invalid")
+            last = self.client.get("/jobs?page=999")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertIn(b"newjob", first.data)
+        self.assertIn(b"midjob", first.data)
+        self.assertNotIn(b"oldjob", first.data)
+        self.assertIn(b"Page 1 of 2", first.data)
+        self.assertIn(b'href="/jobs?page=2"', first.data)
+        self.assertIn(b'rel="next"', first.data)
+        self.assertIn(b"oldjob", last.data)
+        self.assertNotIn(b"newjob", last.data)
+        self.assertIn(b"Page 2 of 2", last.data)
+        self.assertIn(b'rel="prev"', last.data)
+
     def test_home_shows_api_source_check_status_links(self):
         checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
         checks_dir.mkdir()
@@ -1356,6 +1381,34 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"oldcheck", full_response.data)
         self.assertIn(b"midcheck", full_response.data)
         self.assertIn(b"newcheck", full_response.data)
+
+    def test_api_source_check_history_has_accessible_pagination(self):
+        checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
+        checks_dir.mkdir()
+        for index, check_id in enumerate(("oldcheck", "midcheck", "newcheck"), start=1):
+            check_path = checks_dir / f"{check_id}.json"
+            check_path.write_text(
+                json.dumps(
+                    {
+                        "check_id": check_id,
+                        "side": "left",
+                        "status": "done",
+                        "message": f"Finished {check_id}",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.utime(check_path, (index, index))
+
+        with patch("web_app.HISTORY_PAGE_SIZE", 2):
+            response = self.client.get("/api-sources/checks?page=2")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"oldcheck", response.data)
+        self.assertNotIn(b"newcheck", response.data)
+        self.assertIn(b'aria-label="API source check history pages"', response.data)
+        self.assertIn(b"Page 2 of 2", response.data)
+        self.assertIn(b'href="/api-sources/checks?page=1"', response.data)
 
     def test_home_marks_api_source_checks_without_live_worker_as_stale(self):
         checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
@@ -2108,6 +2161,68 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b'<ins class="diff-character added">8</ins>', response.data)
         self.assertIn(b"1 character removed", response.data)
         self.assertIn(b"1 character added", response.data)
+
+    def test_record_preview_keeps_highlighted_lines_inside_selectable_source_cells(self):
+        job = create_merge_job(
+            [record(description="Alpha line\nOld wording")],
+            [record(id="2", description="Alpha line\nNew wording")],
+            job_id="inlinepreviewdiff123",
+        )
+        save_job(job, Path(self.tmp_dir.name))
+
+        response = self.client.get("/jobs/inlinepreviewdiff123/conflicts")
+        html = response.data.decode("utf-8")
+        description_start = html.index('<th class="field-cell">description</th>')
+        description_end = html.index("</tr>", description_start)
+        description_row = html[description_start:description_end]
+        left_start = description_row.index('data-choice-value="left"')
+        right_start = description_row.index('data-choice-value="right"')
+        offered_start = description_row.index('data-choice-value="offered"')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('class="preview-diff source-diff source-left"', description_row[left_start:right_start])
+        self.assertIn('class="diff-character removed"', description_row[left_start:right_start])
+        self.assertIn('class="preview-diff source-diff source-right"', description_row[right_start:offered_start])
+        self.assertIn('class="diff-character added"', description_row[right_start:offered_start])
+        self.assertIn("data-clear-choice", description_row)
+        self.assertNotIn("diff-detail-row", html)
+
+    def test_individual_field_diff_separates_source_identity_from_change_colours(self):
+        job = create_merge_job(
+            [record(description="Left wording")],
+            [record(id="2", description="Right wording")],
+            job_id="sourcecolours123",
+        )
+        acknowledge_current_preview(job)
+        save_job(job, Path(self.tmp_dir.name))
+
+        response = self.client.get("/jobs/sourcecolours123/conflicts")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'<div class="diff-line source-left">', response.data)
+        self.assertIn(b'<div class="diff-line source-right">', response.data)
+        self.assertNotIn(b'<div class="diff-line removed">', response.data)
+        self.assertNotIn(b'<div class="diff-line added">', response.data)
+        self.assertIn(b'class="diff-character removed"', response.data)
+        self.assertIn(b'class="diff-character added"', response.data)
+        self.assertIn(b"--source-left:", response.data)
+        self.assertIn(b"--source-right:", response.data)
+
+    def test_individual_field_diff_labels_display_only_continuation_rows(self):
+        common = "Shared introductory wording. " * 6
+        job = create_merge_job(
+            [record(description=common + "Old ending")],
+            [record(id="2", description=common + "New ending")],
+            job_id="continuationrows123",
+        )
+        acknowledge_current_preview(job)
+        save_job(job, Path(self.tmp_dir.name))
+
+        response = self.client.get("/jobs/continuationrows123/conflicts")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'aria-label="Display continuation"', response.data)
+        self.assertNotIn(b"Source line None", response.data)
 
     def test_record_preview_does_not_mark_id_only_difference_for_review(self):
         left = json.dumps([record(id="1", description="Same detail")]).encode("utf-8")
@@ -2983,9 +3098,10 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"YGHT Ghostwriter", response.data)
         self.assertIn(b"Current API stage", response.data)
         self.assertIn(b"Records fetched", response.data)
-        self.assertIn(b"Fetched 42 records of approx unknown", response.data)
+        self.assertIn(b"42 records fetched in the current API step", response.data)
+        self.assertIn(b"No previous template-count estimate is available", response.data)
 
-    def test_api_import_status_uses_previous_api_count_as_approximate_total(self):
+    def test_api_import_status_separates_finding_and_observation_estimates(self):
         checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
         checks_dir.mkdir()
         (checks_dir / "previousleft.json").write_text(
@@ -2997,7 +3113,8 @@ class FlaskRouteTests(unittest.TestCase):
                     "status": "done",
                     "stage": "complete",
                     "message": "Fetched and backed up 150 findings from YGHT Ghostwriter.",
-                    "record_count": 150,
+                    "record_count": 488,
+                    "observation_count": 21,
                     "worker_pid": os.getpid(),
                 }
             ),
@@ -3017,10 +3134,12 @@ class FlaskRouteTests(unittest.TestCase):
                     "side": "left",
                     "side_name": "YGHT Ghostwriter",
                     "api_stage": "fetch",
-                    "api_complete": 42,
+                    "api_complete": 509,
                     "api_total": 0,
-                    "api_estimated_total": 150,
-                    "api_status": "running",
+                    "api_estimated_total": 509,
+                    "api_estimated_findings": 488,
+                    "api_estimated_observations": 21,
+                    "api_status": "done",
                     "worker_pid": os.getpid(),
                 }
             ),
@@ -3030,7 +3149,37 @@ class FlaskRouteTests(unittest.TestCase):
         response = self.client.get("/imports/importestimate123/status")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Fetched 42 records of approx 150", response.data)
+        self.assertIn(b"509 templates fetched in total", response.data)
+        self.assertIn(b"approximately 488 Findings and 21 Observations", response.data)
+        self.assertIn(b"509 templates total", response.data)
+        self.assertNotIn(b"of approx", response.data)
+
+    def test_api_import_status_labels_legacy_finding_only_estimate(self):
+        imports_dir = Path(self.tmp_dir.name) / "api_imports"
+        imports_dir.mkdir()
+        (imports_dir / "legacyestimate123.json").write_text(
+            json.dumps(
+                {
+                    "import_id": "legacyestimate123",
+                    "status": "running",
+                    "stage": "fetch_left",
+                    "api_stage": "fetch",
+                    "api_complete": 509,
+                    "api_total": 0,
+                    "api_estimated_findings": 488,
+                    "api_estimated_observations": None,
+                    "api_status": "running",
+                    "worker_pid": os.getpid(),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.get("/imports/legacyestimate123/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"approximately 488 Findings", response.data)
+        self.assertIn(b"no Observation estimate is available", response.data)
 
     def test_api_import_worker_records_incremental_fetch_progress(self):
         config = get_config()
@@ -3054,6 +3203,7 @@ class FlaskRouteTests(unittest.TestCase):
                     "status": "done",
                     "stage": "complete",
                     "record_count": 12,
+                    "observation_count": 3,
                     "worker_pid": os.getpid(),
                 }
             ),
@@ -3071,7 +3221,7 @@ class FlaskRouteTests(unittest.TestCase):
                 event.message = f"Fetched 7 finding(s) from {self.server.name}"
                 event.complete = 7
                 event.total = 0
-                event.status = "running"
+                event.status = "done"
                 self.progress(event)
                 progress_files = list((jobs_dir / "api_imports").glob("*.json"))
                 captured_progress_state.update(json.loads(progress_files[0].read_text(encoding="utf-8")))
@@ -3096,11 +3246,16 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(captured_progress_state["api_complete"], 7)
         self.assertEqual(captured_progress_state["api_total"], 0)
-        self.assertEqual(captured_progress_state["api_estimated_total"], 12)
+        self.assertEqual(captured_progress_state["api_estimated_total"], 15)
+        self.assertEqual(captured_progress_state["api_estimated_findings"], 12)
+        self.assertEqual(captured_progress_state["api_estimated_observations"], 3)
+        self.assertEqual(captured_progress_state["api_status"], "running")
         state = json.loads((jobs_dir / "api_imports" / f"{import_id}.json").read_text(encoding="utf-8"))
         self.assertEqual(state["api_complete"], 1)
         self.assertEqual(state["api_total"], 1)
-        self.assertEqual(state["api_estimated_total"], 12)
+        self.assertEqual(state["api_estimated_total"], 15)
+        self.assertEqual(state["api_estimated_findings"], 12)
+        self.assertEqual(state["api_estimated_observations"], 3)
         self.assertEqual(state["side_name"], "Left Test Ghostwriter")
         self.assertNotIn("sensitivity_snapshot", state)
         imported_job = load_job(jobs_dir, state["job_id"])

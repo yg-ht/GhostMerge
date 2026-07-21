@@ -4,6 +4,7 @@
 <section class="panel">
   {% if previous_jobs %}
   {% include "_previous_jobs_table.html" %}
+  {% include "_pagination.html" %}
   {% else %}
   <p>No merge jobs found.</p>
   {% endif %}

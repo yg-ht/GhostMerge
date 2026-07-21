@@ -298,6 +298,27 @@ counts. Changed line breaks use `↵` and changed tabs use `→`; these markers 
 not part of the merged value. Width-based wrapping happens afterwards and
 cannot affect matching, merge decisions, or output data.
 
+In the match preview, each source's line-by-line result remains inside its
+selectable value cell, so clicking the value or any highlighted line selects
+that source. An explicit **Clear selection** control reverses an accidental
+choice before submission. Long Web display lines are split at a nearby tag,
+punctuation, or whitespace boundary, with `↳` identifying presentation-only
+continuations; this never inserts a line break into source or output data.
+Source identity uses neutral left/right tints, while red and green are reserved
+for the exact removed and added character spans.
+
+To validate the interactive selection behaviour in a browser, open a match
+preview containing a changed field and perform this short check:
+
+1. Click the left value or one of its highlighted lines and confirm the left
+   radio and blue selection outline activate.
+2. Click the right value and confirm selection moves to the right source.
+3. Click **Clear selection** and confirm all three radios are cleared, the blue
+   outline is removed, and the containing offered-value cell is not selected.
+4. Use Tab and the arrow keys to confirm the underlying radio controls remain
+   keyboard-operable, then use Tab to reach **Clear selection** and activate it
+   with Enter or Space.
+
 Detailed comparison is bounded to avoid excessive processing on unusually
 large or repetitive values. Replace blocks over 50,000 combined characters or
 25,000,000 possible character pairs use a deterministic common-prefix and
@@ -341,7 +362,8 @@ history views.
 
 The API source checks and merge jobs panes on the home page show a
 limited number of recent rows. Use the dedicated `API source checks` and
-`Merge jobs` links shown under those panes when more rows exist.
+`Merge jobs` links shown under those panes when more rows exist. Those dedicated
+history pages use newest-first pages of 25 rows with previous and next controls.
 Configure the home-page limits with `web_ui.home_api_source_checks_limit` and
 `web_ui.home_previous_jobs_limit`; both default to `10`.
 
@@ -407,6 +429,10 @@ the other side.
 GhostMerge tracks three distinct parts of the workflow:
 
 1. **Inbound API import** retrieves source records used to create a merge job.
+   Its status separates records fetched during the current API step from the
+   previous source estimate. When known, historical Finding and Observation
+   counts are shown separately and as a combined template total; legacy counts
+   are labelled rather than compared as if they covered both template types.
 2. **Merge/output** covers conflict review, sensitivity review, and durable
    creation of both reviewed JSON outputs. A job is output-ready only when its
    digest-bound final preview has been approved and both files exist;

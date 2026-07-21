@@ -16,10 +16,24 @@
     {% if state.api_complete is defined %}
     <dt>Records fetched</dt>
     <dd>
-      {% if state.api_estimated_total is defined and state.api_estimated_total is not none %}
-      Fetched {{ state.api_complete|default(0) }} records of approx {{ state.api_estimated_total }}
+      {% if state.api_status == "done" %}
+      {{ state.api_complete|default(0) }} templates fetched in total.
       {% else %}
-      Fetched {{ state.api_complete|default(0) }} records of approx unknown
+      {{ state.api_complete|default(0) }} records fetched in the current API step.
+      {% endif %}
+    </dd>
+    <dt>Previous source estimate</dt>
+    <dd>
+      {% if state.api_estimated_findings is defined and state.api_estimated_findings is not none %}
+        {% if state.api_estimated_observations is defined and state.api_estimated_observations is not none %}
+        Previous data contained approximately {{ state.api_estimated_findings }} Findings and {{ state.api_estimated_observations }} Observations ({{ state.api_estimated_total }} templates total).
+        {% else %}
+        Previous data recorded approximately {{ state.api_estimated_findings }} Findings; no Observation estimate is available.
+        {% endif %}
+      {% elif state.api_estimated_total is defined and state.api_estimated_total is not none %}
+      A legacy import recorded approximately {{ state.api_estimated_total }} records without separating template types.
+      {% else %}
+      No previous template-count estimate is available.
       {% endif %}
     </dd>
     {% endif %}

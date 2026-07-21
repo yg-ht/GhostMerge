@@ -14,7 +14,7 @@
   <div class="diff-line {{ side_class }}">
     {% for line in lines %}
     <div class="aligned-diff-line">
-      <span class="diff-line-number" aria-label="Source line {{ line.source_line }}">{{ line.source_line }}</span>
+      <span class="diff-line-number"{% if line.source_line is not none %} aria-label="Source line {{ line.source_line }}"{% else %} aria-label="Display continuation"{% endif %}>{{ line.source_line if line.source_line is not none else "↳" }}</span>
       <code>{{ render_segments(line.segments) }}</code>
     </div>
     {% endfor %}
@@ -32,8 +32,8 @@
     <div class="diff-context">… {{ block.collapsed_line_count }} unchanged line{{ "s" if block.collapsed_line_count != 1 else "" }} …</div>
     {% else %}
     <div class="aligned-diff-block {{ block.kind }}">
-      {{ render_lines(block.left_lines, "removed" if block.kind in ("delete", "replace") else "same") }}
-      {{ render_lines(block.right_lines, "added" if block.kind in ("insert", "replace") else "same") }}
+      {{ render_lines(block.left_lines, "source-left") }}
+      {{ render_lines(block.right_lines, "source-right") }}
     </div>
     {% endif %}
   {% endfor %}
@@ -46,6 +46,36 @@
     {% endif %}
   </p>
   <p class="diff-legend"><span aria-hidden="true">↵</span> changed line break · <span aria-hidden="true">→</span> changed tab</p>
+  {% if diff.approximate %}
+  <p class="diff-notice">Simplified highlighting was used because this field is unusually large.</p>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro render_source_diff(diff, side, aria_label) %}
+<div class="preview-diff source-diff source-{{ side }}" aria-label="{{ aria_label }}">
+  {% for block in diff.blocks %}
+    {% if block.kind == "context" %}
+    <div class="diff-context">… {{ block.collapsed_line_count }} unchanged line{{ "s" if block.collapsed_line_count != 1 else "" }} …</div>
+    {% else %}
+      {% set lines = block.left_lines if side == "left" else block.right_lines %}
+      {% for line in lines %}
+      <div class="diff-line {{ "removed" if side == "left" else "added" }}">
+        <div class="source-diff-line {{ block.kind }}">
+          <span class="diff-line-number"{% if line.source_line is not none %} aria-label="Source line {{ line.source_line }}"{% else %} aria-label="Display continuation"{% endif %}>{{ line.source_line if line.source_line is not none else "↳" }}</span>
+          <code>{{ render_segments(line.segments) }}</code>
+        </div>
+      </div>
+      {% endfor %}
+    {% endif %}
+  {% endfor %}
+  <p class="diff-metrics">
+    {% if side == "left" %}
+    {{ diff.removed_characters }} character{{ "s" if diff.removed_characters != 1 else "" }} removed{% if diff.removed_line_breaks %} · {{ diff.removed_line_breaks }} line break{{ "s" if diff.removed_line_breaks != 1 else "" }} removed{% endif %}
+    {% else %}
+    {{ diff.added_characters }} character{{ "s" if diff.added_characters != 1 else "" }} added{% if diff.added_line_breaks %} · {{ diff.added_line_breaks }} line break{{ "s" if diff.added_line_breaks != 1 else "" }} added{% endif %}
+    {% endif %}
+  </p>
   {% if diff.approximate %}
   <p class="diff-notice">Simplified highlighting was used because this field is unusually large.</p>
   {% endif %}

@@ -4,6 +4,7 @@
 <section class="panel">
   {% if api_source_checks %}
   {% include "_api_source_checks_table.html" %}
+  {% include "_pagination.html" %}
   {% else %}
   <p>No API source checks found.</p>
   {% endif %}

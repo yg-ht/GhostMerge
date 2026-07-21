@@ -50,6 +50,7 @@
   document.querySelectorAll("[data-choice-row]").forEach((row) => {
     const choices = row.querySelectorAll("input[type='radio']");
     const choiceCells = row.querySelectorAll("[data-choice-cell]");
+    const clearButton = row.querySelector("[data-clear-choice]");
     if (!choices.length) {
       return;
     }
@@ -58,6 +59,9 @@
       choiceCells.forEach((cell) => {
         cell.classList.toggle("selected-choice", Boolean(selectedChoice) && cell.dataset.choiceValue === selectedChoice.value);
       });
+      if (clearButton) {
+        clearButton.disabled = !selectedChoice;
+      }
     }
     choices.forEach((choice) => {
       choice.addEventListener("change", syncSelectedClass);
@@ -76,6 +80,15 @@
         choice.dispatchEvent(new Event("change", { bubbles: true }));
       });
     });
+    if (clearButton) {
+      clearButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        choices.forEach((choice) => {
+          choice.checked = false;
+        });
+        syncSelectedClass();
+      });
+    }
     syncSelectedClass();
   });
 })();

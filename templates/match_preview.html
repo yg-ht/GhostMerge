@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_aligned_diff.html" import render_aligned_diff %}
+{% from "_aligned_diff.html" import render_source_diff %}
 {% block main_class %}wide-main{% endblock %}
 {% block content %}
 <h1>{{ preview.template_type|title }} match preview</h1>
@@ -33,6 +33,9 @@
             </label>
             {% endif %}
             <pre>{{ row.left_value }}</pre>
+            {% if row.different and row.field_diff %}
+            {{ render_source_diff(row.field_diff, "left", "Highlighted difference for " ~ row.field_name ~ " from " ~ source_labels.left) }}
+            {% endif %}
           </td>
           <td class="value-cell{% if row.different %} choice-cell{% endif %}"{% if row.different %} data-choice-cell data-choice-value="right"{% endif %}>
             {% if row.different %}
@@ -42,6 +45,9 @@
             </label>
             {% endif %}
             <pre>{{ row.right_value }}</pre>
+            {% if row.different and row.field_diff %}
+            {{ render_source_diff(row.field_diff, "right", "Highlighted difference for " ~ row.field_name ~ " from " ~ source_labels.right) }}
+            {% endif %}
           </td>
           <td class="value-cell{% if row.different %} choice-cell{% endif %}"{% if row.different %} data-choice-cell data-choice-value="offered"{% endif %}>
             {% if row.different %}
@@ -49,6 +55,7 @@
               <input type="radio" name="field_choice:{{ row.field_name }}" value="offered">
               <span>Use offered</span>
             </label>
+            <button class="choice-clear" type="button" data-clear-choice disabled aria-label="Clear selection for {{ row.field_name }}">Clear selection</button>
             {% endif %}
             <pre>{{ row.offered_value }}</pre>
             {% set offered_diff_rows = row.diff_rows | selectattr("side", "equalto", "offered") | list %}
@@ -61,14 +68,6 @@
             {% endif %}
           </td>
         </tr>
-        {% if row.different and row.field_diff %}
-        <tr class="diff-detail-row">
-          <td colspan="4">
-            <h3>Highlighted difference for {{ row.field_name }}</h3>
-            {{ render_aligned_diff(row.field_diff, source_labels.left, source_labels.right, "Highlighted difference for " ~ row.field_name) }}
-          </td>
-        </tr>
-        {% endif %}
         {% endfor %}
       </tbody>
     </table>

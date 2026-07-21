@@ -176,15 +176,19 @@ service, routes, persistence, matching, review, output approval, and outbound-sy
 - [x] Prioritise frequently used home-page sections.
       Merge-job status now appears first, followed by job creation, inbound imports, API source
       checks, and API backups; existing history limits, sorting, and routes are unchanged.
-- [ ] Add pagination to the dedicated history pages.
+- [x] Add pagination to the dedicated history pages.
       Define a sensible page size, stable ordering, empty and out-of-range behaviour, and accessible
-      previous/next controls while preserving filters and other table state.
-- [ ] Clarify the estimated total on the inbound API import status page.
+      previous/next controls while preserving filters and other table state. Merge jobs and API
+      source checks now use fixed 25-row pages, retain newest-first ordering, and bound invalid or
+      out-of-range page requests safely.
+- [x] Clarify the estimated total on the inbound API import status page.
       The fetched count includes Finding and Observation Templates, but the previous-backup estimate
       currently uses only the Finding count. This can produce confusing text such as “Fetched 509
       records of approx 488”. Either display separate Finding and Observation counts, include both in
       the estimate, or label the denominator precisely; retain sensible behaviour for legacy backups
-      and unknown estimates.
+      and unknown estimates. Current-step progress is now separate from historical counts; known
+      Finding and Observation estimates are displayed separately and summed, while legacy
+      Finding-only and unknown estimates are labelled without implying an invalid total.
 - [ ] Investigate reducing per-record API requests during inbound API imports.
       Finding and Observation list queries already fetch pages of up to 100 records, but tags are
       retrieved with a follow-up query for each record. Determine whether Ghostwriter GraphQL can
@@ -200,8 +204,11 @@ service, routes, persistence, matching, review, output approval, and outbound-sy
 - [x] Correct the left/right column titles when API sources are used.
       Display the configured source names and source types consistently so users can tell which API
       or uploaded file each value came from throughout preview, conflict review, and completion.
-- [ ] Add an unselect-field control to the record preview so an accidental field choice can be
-      cleared before submitting the selected decisions.
+- [x] Add an unselect-field control to the record preview so an accidental field choice can be
+      cleared before submitting the selected decisions. The accessible clear button is enabled only
+      after a choice is made and does not accidentally select its containing offered-value cell.
+      Repeatable mouse and keyboard validation steps are documented because the project does not
+      currently include a JavaScript-capable browser test harness.
 - [x] Make record-preview value cells clickable when choosing left, right, or offered values.
       The underlying radio controls and keyboard workflow remain intact, and the selected cell is
       visibly highlighted before the choices are submitted.
@@ -217,9 +224,21 @@ service, routes, persistence, matching, review, output approval, and outbound-sy
 - [x] Keep display wrapping out of difference calculation.
       Compare original logical lines first, then wrap aligned semantic spans for the browser or
       terminal. Prefer natural wrapping boundaries and hard-wrap only long unbroken display tokens.
-- [ ] Review the left/right colour scheme because the current colours imply misleading semantics.
+- [x] Restore and improve the selectable, per-source Web diff layout.
+      The shared semantic diff improved alignment and character highlighting, but moving the Web
+      diff into a separate full-width row regressed the preferred compact layout, removed the
+      per-source line-by-line blocks, and placed the highlighted content outside the clickable
+      source cells. Put semantic lines and character highlights back inside their corresponding
+      left and right cells, make the complete value/diff area select that source, retain an explicit
+      way to clear a choice, and split long display lines at stable presentation-only boundaries
+      without changing source data, matching, metrics, or automatic merge decisions. The Web view
+      now restores inline source diffs and complete-cell selection, while a bounded presentation
+      pass adds readable continuation rows without recalculating the semantic difference.
+- [x] Review the left/right colour scheme because the current colours imply misleading semantics.
       Define colours for source identity separately from added/removed/selected state and maintain
-      sufficient contrast in dark and light modes.
+      sufficient contrast in dark and light modes. Neutral blue and purple source tints now identify
+      left and right; red and green are reserved for removed and added character spans, and selected
+      choices retain a separate blue outline.
 - [ ] Audit table usage across the web interface and define a consistent approach.
       Decide which data should use semantic tables versus cards or definition lists, then standardise
       headings, responsive behaviour, accessibility, spacing, and actions without a broad rewrite.

@@ -67,6 +67,7 @@ SOURCE_IP_MODES = {"direct", "trusted_header", "both"}
 RUNNING_OPERATION_STATUSES = {"running", "cancelling"}
 DEFAULT_HOME_API_SOURCE_CHECKS_LIMIT = 10
 DEFAULT_HOME_PREVIOUS_JOBS_LIMIT = 10
+HISTORY_PAGE_SIZE = 25
 _ACTIVE_API_SOURCE_CHECKS: set[str] = set()
 _ACTIVE_API_IMPORTS: set[str] = set()
 
@@ -133,11 +134,23 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/api-sources/checks")
     def api_source_checks_history():
-        return render_template("api_source_checks.html", api_source_checks=_list_api_source_checks(jobs_dir))
+        checks, pagination = _paginate_history(
+            _list_api_source_checks(jobs_dir),
+            request.args.get("page"),
+            endpoint="api_source_checks_history",
+            label="API source check history pages",
+        )
+        return render_template("api_source_checks.html", api_source_checks=checks, pagination=pagination)
 
     @app.get("/jobs")
     def jobs_history():
-        return render_template("jobs.html", previous_jobs=list_previous_jobs(jobs_dir))
+        jobs, pagination = _paginate_history(
+            list_previous_jobs(jobs_dir),
+            request.args.get("page"),
+            endpoint="jobs_history",
+            label="Merge job history pages",
+        )
+        return render_template("jobs.html", previous_jobs=jobs, pagination=pagination)
 
     @app.post("/jobs")
     def create_job_route():
@@ -662,6 +675,36 @@ def _home_history_limits() -> dict[str, int]:
     }
 
 
+def _paginate_history(
+    items: list[Any],
+    requested_page: Any,
+    *,
+    endpoint: str,
+    label: str,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Return one stable history slice and accessible navigation metadata."""
+    total_items = len(items)
+    total_pages = max(1, (total_items + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE)
+    try:
+        page = int(requested_page)
+    except (TypeError, ValueError):
+        page = 1
+    page = min(max(1, page), total_pages)
+    start = (page - 1) * HISTORY_PAGE_SIZE
+    return (
+        items[start : start + HISTORY_PAGE_SIZE],
+        {
+            "page": page,
+            "total_pages": total_pages,
+            "total_items": total_items,
+            "previous_page": page - 1 if page > 1 else None,
+            "next_page": page + 1 if page < total_pages else None,
+            "endpoint": endpoint,
+            "label": label,
+        },
+    )
+
+
 def _positive_int_config(value: Any, default: int) -> int:
     try:
         parsed = int(value)
@@ -1004,7 +1047,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
         else:
             _server_for_side(side)
     api_sides = [side for side in ("left", "right") if input_sources[side] == "api"]
-    api_estimated_totals = {side: _last_known_api_record_count(jobs_dir, side) for side in api_sides}
+    api_estimated_totals = {side: _last_known_api_template_counts(jobs_dir, side) for side in api_sides}
     sensitivity_snapshot = _build_sensitivity_snapshot()
     _ACTIVE_API_IMPORTS.add(import_id)
     _save_import_state(
@@ -1061,6 +1104,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
 
                 def update(event, current_side=side, current_index=index):
                     current = _load_import_state(jobs_dir, import_id)
+                    estimate_fields = _api_estimate_state_fields(api_estimated_totals.get(current_side))
                     current.update(
                         {
                             "status": event.status if event.status != "done" else "running",
@@ -1075,8 +1119,12 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                             "api_stage": event.stage,
                             "api_complete": event.complete,
                             "api_total": event.total,
-                            "api_estimated_total": api_estimated_totals.get(current_side),
-                            "api_status": event.status,
+                            **estimate_fields,
+                            # A template-library import emits a "done" event for
+                            # Findings before Observations begin. Keep that
+                            # component event visibly in progress until the
+                            # complete library has returned below.
+                            "api_status": event.status if event.status != "done" else "running",
                             "worker_pid": os.getpid(),
                         }
                     )
@@ -1084,6 +1132,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
 
                 records[side] = _fetch_template_library(GhostwriterApi(server, progress=update))
                 state = _load_import_state(jobs_dir, import_id)
+                estimate_fields = _api_estimate_state_fields(api_estimated_totals.get(side))
                 state.update(
                     {
                         "status": "running",
@@ -1098,7 +1147,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                         "api_stage": "fetch",
                         "api_complete": _template_record_count(records[side]),
                         "api_total": _template_record_count(records[side]),
-                        "api_estimated_total": api_estimated_totals.get(side),
+                        **estimate_fields,
                         "api_status": "done",
                         "worker_pid": os.getpid(),
                     }
@@ -1225,20 +1274,47 @@ def _running_api_source_check_for_side(jobs_dir: Path, side: str) -> Optional[di
     return _running_api_source_checks_by_side(jobs_dir).get(side)
 
 
-def _last_known_api_record_count(jobs_dir: Path, side: str) -> Optional[int]:
+def _last_known_api_template_counts(jobs_dir: Path, side: str) -> Optional[dict[str, Optional[int]]]:
+    """Return separated historical counts so unlike template types are not compared."""
     for state in _list_api_source_checks(jobs_dir):
         if state.get("side") == side and state.get("status") == "done":
-            count = _optional_positive_int(state.get("record_count"))
-            if count is not None:
-                return count
+            findings = _optional_positive_int(state.get("record_count"))
+            if findings is not None:
+                return {
+                    "findings": findings,
+                    "observations": _optional_positive_int(state.get("observation_count")),
+                }
 
     for backup in list_backups(backup_root_from_config(CONFIG)):
         if backup.get("side") == side:
-            count = _optional_positive_int(backup.get("record_count"))
-            if count is not None:
-                return count
+            findings = _optional_positive_int(backup.get("record_count"))
+            if findings is not None:
+                return {
+                    "findings": findings,
+                    "observations": _optional_positive_int(backup.get("observation_count")),
+                }
 
     return None
+
+
+def _api_estimate_state_fields(counts: Any) -> dict[str, Optional[int]]:
+    """Flatten separated estimates into backwards-compatible import state fields."""
+    if not isinstance(counts, dict):
+        legacy_total = _optional_positive_int(counts)
+        return {
+            "api_estimated_total": legacy_total,
+            "api_estimated_findings": None,
+            "api_estimated_observations": None,
+        }
+
+    findings = _optional_positive_int(counts.get("findings"))
+    observations = _optional_positive_int(counts.get("observations"))
+    total = findings + observations if findings is not None and observations is not None else None
+    return {
+        "api_estimated_total": total,
+        "api_estimated_findings": findings,
+        "api_estimated_observations": observations,
+    }
 
 
 def _optional_positive_int(value: Any) -> Optional[int]:

@@ -170,6 +170,40 @@ class SemanticDiffTests(unittest.TestCase):
         self.assertEqual(left, "one\ntwo")
         self.assertEqual(right, "one\nthree")
 
+    def test_display_splitting_preserves_semantics_and_prefers_readable_boundaries(self):
+        from diffing import split_field_diff_for_display
+
+        left = "<p>Alpha words remain here.</p><p>Old closing sentence for review.</p>"
+        right = "<p>Alpha words remain here.</p><p>New closing sentence for review.</p>"
+        semantic = build_semantic_diff(left, right, context_lines=None)
+
+        displayed = split_field_diff_for_display(semantic, maximum_characters=32)
+
+        self.assertEqual(segment_text(displayed, "left"), left)
+        self.assertEqual(segment_text(displayed, "right"), right)
+        self.assertEqual(displayed.added_characters, semantic.added_characters)
+        self.assertEqual(displayed.removed_characters, semantic.removed_characters)
+        self.assertEqual(displayed.added_line_breaks, semantic.added_line_breaks)
+        self.assertEqual(displayed.removed_line_breaks, semantic.removed_line_breaks)
+        visible_lines = [
+            line
+            for block in displayed.blocks
+            for line in (*block.left_lines, *block.right_lines)
+        ]
+        self.assertTrue(any(line.source_line is None for line in visible_lines))
+        self.assertTrue(
+            all(
+                len("".join(segment.text for segment in line.segments)) <= 32
+                for line in visible_lines
+            )
+        )
+        self.assertTrue(
+            any(
+                "</p>" in "".join(segment.text for segment in line.segments)
+                for line in visible_lines
+            )
+        )
+
 
 class CliDiffRenderingTests(unittest.TestCase):
     def test_cli_rendering_wraps_after_alignment_and_realigns_following_blocks(self):
