@@ -22,18 +22,24 @@ rather than being constrained to the CLI feature set.
 
 ## Recently completed priorities
 
-1. **Protect completed merge output from abandonment. (Completed.)** Remove or disable the destructive
-   “Abandon merge” action once output is ready, and reject direct abandonment requests for
-   completed jobs. This closes the clearest remaining local data-loss path.
-2. **Preview and approve final merged output before writing or outbound sync. (Completed.)** Give operators a
-   last verification point after all review and sensitivity decisions, before durable output can
-   become the source of a destructive API replacement.
-3. **Show unambiguous source identity throughout left/right review. (Completed.)** Use configured API names and
-   uploaded filenames consistently so an operator cannot mistake which source or destination a
-   decision affects.
+1. **Align and highlight differences consistently. (Completed.)** The Web UI and CLI now share a
+   bounded semantic diff that aligns inserted, removed, split, and joined lines before highlighting
+   the individual changed characters.
+2. **Keep presentation out of difference calculation. (Completed.)** Values are compared before
+   browser or terminal wrapping, preventing display width from creating false changes. Changed
+   characters, line breaks, and tabs are reported using display-only metrics and markers.
+3. **Exclude outbound-sync timestamps from comparisons. (Completed.)**
+   `extra_fields.ghostmerge_last_synced_at` no longer creates false differences during matching,
+   preview, or conflict review, while each output retains its own timestamp.
+4. **Allow manual matching of unmatched records. (Completed.)** Findings and Observations can be
+   paired manually in the Web UI, and unmatched Findings can be paired in the interactive CLI,
+   before using the normal preview and field-review workflow.
+5. **Complete and clarify the Web merge workflow. (Completed.)** The Web UI exposes the same shared
+   processing and sensitivity stages as the CLI, requires final output approval, protects completed
+   output from abandonment, and identifies left and right sources consistently.
 
-These selected safety and review-clarity items are complete. Their regression coverage protects
-completed output, digest-bound final approval, and source identity throughout the workflow.
+These completed priorities have regression coverage across the shared diff engine, CLI, Web
+service, routes, persistence, matching, review, output approval, and outbound-sync boundaries.
 
 ## Project Setup & Infrastructure
 - [x] Created CLI entry point using Typer
