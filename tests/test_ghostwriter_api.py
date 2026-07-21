@@ -383,6 +383,92 @@ class GhostwriterApiTests(unittest.TestCase):
             self.assertEqual(fake_client.deleted_ids, [101])
             self.assertNotIn(99, fake_client.deleted_ids)
 
+    def test_validation_progress_reports_completed_work_and_temporary_cleanup(self):
+        fake_client = FakeGraphQLClient()
+        progress_snapshots = []
+
+        def record_progress(event):
+            progress_snapshots.append(
+                (
+                    event.stage,
+                    event.complete,
+                    event.total,
+                    len(fake_client.created_objects) + len(fake_client.created_observations),
+                    len(fake_client.deleted_ids) + len(fake_client.deleted_observation_ids),
+                )
+            )
+
+        api = GhostwriterApi(server_config(), client=fake_client, progress=record_progress)
+        prepared_findings = [
+            {"api_record": {"title": "First"}, "tags": ["first"]},
+            {"api_record": {"title": "Second"}, "tags": ["second"]},
+        ]
+        prepared_observations = [
+            {"api_record": {"title": "Observation"}, "tags": ["observation"]},
+        ]
+
+        api.validate_prepared_records_can_be_created(prepared_findings, prepared_observations)
+
+        create_snapshots = [snapshot for snapshot in progress_snapshots if snapshot[0] == "validate_create"]
+        cleanup_snapshots = [snapshot for snapshot in progress_snapshots if snapshot[0] == "validate_cleanup"]
+        self.assertEqual(
+            create_snapshots,
+            [
+                ("validate_create", 1, 3, 1, 0),
+                ("validate_create", 2, 3, 2, 0),
+                ("validate_create", 3, 3, 3, 0),
+            ],
+        )
+        self.assertEqual(
+            cleanup_snapshots,
+            [
+                ("validate_cleanup", 0, 3, 3, 0),
+                ("validate_cleanup", 1, 3, 3, 1),
+                ("validate_cleanup", 2, 3, 3, 2),
+                ("validate_cleanup", 3, 3, 3, 3),
+            ],
+        )
+
+    def test_validation_failure_still_reports_cleanup_of_created_temporary_records(self):
+        fake_client = FakeGraphQLClient(fail_on_tag_call=2)
+        events = []
+        api = GhostwriterApi(server_config(), client=fake_client, progress=events.append)
+        prepared_findings = [
+            {"api_record": {"title": "First"}, "tags": ["first"]},
+            {"api_record": {"title": "Second"}, "tags": ["second"]},
+        ]
+
+        with self.assertRaisesRegex(GhostwriterApiError, "tag validation failed"):
+            api.validate_prepared_records_can_be_created(prepared_findings)
+
+        self.assertEqual(
+            [(event.stage, event.complete, event.total) for event in events],
+            [
+                ("validate_create", 1, 2),
+                ("validate_cleanup", 0, 2),
+                ("validate_cleanup", 1, 2),
+                ("validate_cleanup", 2, 2),
+            ],
+        )
+
+    def test_cleanup_progress_failure_does_not_leave_temporary_records_behind(self):
+        fake_client = FakeGraphQLClient()
+
+        def fail_during_cleanup(event):
+            if event.stage == "validate_cleanup" and event.complete == 1:
+                raise RuntimeError("status store unavailable")
+
+        api = GhostwriterApi(server_config(), client=fake_client, progress=fail_during_cleanup)
+        prepared_findings = [
+            {"api_record": {"title": "First"}, "tags": ["first"]},
+            {"api_record": {"title": "Second"}, "tags": ["second"]},
+        ]
+
+        with self.assertRaisesRegex(GhostwriterApiError, "status store unavailable"):
+            api.validate_prepared_records_can_be_created(prepared_findings)
+
+        self.assertEqual(fake_client.deleted_ids, [101, 101])
+
     def test_preflight_rejects_missing_sync_capabilities_before_writes(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             fake_client = FakeGraphQLClient(missing_mutation_fields={"delete_finding_by_pk"})

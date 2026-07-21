@@ -2550,6 +2550,56 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(captured["observations"], [])
 
+    def test_live_sync_worker_persists_validation_cleanup_progress(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            {
+                "findings": [record(title="Reviewed finding")],
+                "observations": [observation(title="Reviewed observation")],
+            },
+            {"findings": [], "observations": []},
+            job_id="syncvalidationprogress123",
+            input_sources={"left": "api", "right": "file"},
+        )
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        approve_and_save_output(job, jobs_dir)
+
+        with running_ghostwriter_stub(bearer_token="left-token") as server:
+            config = get_config()
+            config["ghostwriter_api"]["backup_dir"] = str(jobs_dir / "validation-progress-backups")
+            config["ghostwriter_api"]["servers"]["left"].update(
+                {
+                    "enabled": True,
+                    "graphql_url": server.graphql_url,
+                    "base_url": "",
+                    "bearer_token": "left-token",
+                    "rate_limit_per_second": 1000.0,
+                }
+            )
+            validation_states = []
+
+            def record_persisted_progress(current_job, current_jobs_dir):
+                state = dict(current_job.sync_results.get("left") or {})
+                if str(state.get("stage", "")).startswith("validate_"):
+                    validation_states.append(
+                        (state.get("stage"), state.get("complete"), state.get("total"))
+                    )
+                return save_job(current_job, current_jobs_dir)
+
+            with patch("web_app.save_job", side_effect=record_persisted_progress):
+                _sync_job_side(self.app, jobs_dir, "syncvalidationprogress123", "left")
+
+        self.assertEqual(
+            [state for state in validation_states if state[0] == "validate_cleanup"],
+            [
+                ("validate_cleanup", 0, 2),
+                ("validate_cleanup", 1, 2),
+                ("validate_cleanup", 2, 2),
+            ],
+        )
+        self.assertIn(("validate_complete", 2, 2), validation_states)
+
     def test_live_sync_worker_uses_matching_side_server_output_and_timestamp(self):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job(
@@ -2823,6 +2873,29 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
         self.assertIn(b"Job state could not be read", response.data)
+
+    def test_live_sync_status_formats_machine_stage_for_operator(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record()],
+            [],
+            job_id="cleanupstatus123",
+            input_sources={"left": "api", "right": "file"},
+        )
+        job.sync_results["left"] = {
+            "status": "running",
+            "stage": "validate_cleanup",
+            "message": "Removing temporary validation records",
+            "complete": 1,
+            "total": 2,
+        }
+        save_job(job, jobs_dir)
+
+        response = self.client.get("/jobs/cleanupstatus123/sync/left/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Validate Cleanup", response.data)
+        self.assertNotIn(b"validate_cleanup", response.data)
 
     def test_live_sync_rejects_missing_csrf_token(self):
         jobs_dir = Path(self.tmp_dir.name)
