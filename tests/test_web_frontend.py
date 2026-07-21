@@ -376,6 +376,110 @@ class WebServiceTests(unittest.TestCase):
         self.assertIsNone(item)
         self.assertTrue(job.conflict_phase_complete)
 
+    def test_last_synced_timestamp_only_difference_bypasses_finding_review(self):
+        left_timestamp = "2026-07-20T10:00:00Z"
+        right_timestamp = "2026-07-21T10:00:00Z"
+        job = create_merge_job(
+            [record(extra_fields={GHOSTMERGE_LAST_SYNCED_AT_FIELD: left_timestamp})],
+            [record(id="2", extra_fields={GHOSTMERGE_LAST_SYNCED_AT_FIELD: right_timestamp})],
+            job_id="synctimestamp123",
+        )
+
+        preview = get_current_match_preview(job)
+        item = get_next_conflict(job)
+
+        self.assertIsNone(preview)
+        self.assertIsNone(item)
+        self.assertTrue(job.conflict_phase_complete)
+        self.assertEqual(
+            job.merged_left[0].extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD],
+            left_timestamp,
+        )
+        self.assertEqual(
+            job.merged_right[0].extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD],
+            right_timestamp,
+        )
+
+    def test_extra_field_review_hides_and_preserves_side_specific_last_synced_values(self):
+        left_timestamp = "2026-07-20T10:00:00Z"
+        right_timestamp = "2026-07-21T10:00:00Z"
+        job = create_merge_job(
+            [
+                record(
+                    extra_fields={
+                        "owner": "left-team",
+                        GHOSTMERGE_LAST_SYNCED_AT_FIELD: left_timestamp,
+                    },
+                )
+            ],
+            [
+                record(
+                    id="2",
+                    extra_fields={
+                        "owner": "right-team",
+                        GHOSTMERGE_LAST_SYNCED_AT_FIELD: right_timestamp,
+                    },
+                )
+            ],
+            job_id="syncmixed123",
+        )
+
+        preview = get_current_match_preview(job)
+        extra_fields_row = next(row for row in preview.rows if row["field_name"] == "extra_fields")
+        applied = apply_preview_field_choices(job, {"extra_fields": "left"})
+        item = get_next_conflict(job)
+
+        self.assertTrue(extra_fields_row["different"])
+        self.assertNotIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, extra_fields_row["left_value"])
+        self.assertNotIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, extra_fields_row["right_value"])
+        self.assertNotIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, extra_fields_row["offered_value"])
+        self.assertEqual(applied, 1)
+        self.assertIsNone(item)
+        self.assertEqual(job.merged_left[0].extra_fields["owner"], "left-team")
+        self.assertEqual(job.merged_right[0].extra_fields["owner"], "left-team")
+        self.assertEqual(
+            job.merged_left[0].extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD],
+            left_timestamp,
+        )
+        self.assertEqual(
+            job.merged_right[0].extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD],
+            right_timestamp,
+        )
+
+    def test_last_synced_timestamp_only_difference_bypasses_observation_review(self):
+        left_timestamp = "2026-07-20T10:00:00Z"
+        right_timestamp = "2026-07-21T10:00:00Z"
+        job = create_merge_job(
+            {
+                "findings": [],
+                "observations": [
+                    observation(extra_fields={GHOSTMERGE_LAST_SYNCED_AT_FIELD: left_timestamp})
+                ],
+            },
+            {
+                "findings": [],
+                "observations": [
+                    observation(id="2", extra_fields={GHOSTMERGE_LAST_SYNCED_AT_FIELD: right_timestamp})
+                ],
+            },
+            job_id="syncobservation123",
+        )
+
+        preview = get_current_match_preview(job)
+        item = get_next_conflict(job)
+
+        self.assertIsNone(preview)
+        self.assertIsNone(item)
+        self.assertTrue(job.conflict_phase_complete)
+        self.assertEqual(
+            job.merged_observations_left[0].extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD],
+            left_timestamp,
+        )
+        self.assertEqual(
+            job.merged_observations_right[0].extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD],
+            right_timestamp,
+        )
+
     def test_formatting_only_differences_do_not_require_review(self):
         legacy_markup = '<span class="highlight" style="background-color: yellow">secret</span>'
         normalised_markup = "<mark>secret</mark>"

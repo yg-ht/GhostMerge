@@ -26,6 +26,7 @@ from merge import (
     renumber_findings,
     reprocess_orphan_matches,
     resolve_conflict,
+    set_record_pair_field_values,
 )
 from model import Finding, Observation
 from sensitivity import (
@@ -589,6 +590,23 @@ class MatchingRegressionTests(unittest.TestCase):
         self.assertEqual(left.title, "Cross-site scripting (login)")
         self.assertEqual(right.title, "cross site scripting  ( login )")
 
+    def test_finding_similarity_ignores_only_last_synced_extra_field(self):
+        baseline_score = score_finding_similarity(
+            finding(extra_fields={}),
+            finding(id=2, extra_fields={}),
+        )
+        timestamp_score = score_finding_similarity(
+            finding(extra_fields={"ghostmerge_last_synced_at": "2026-07-20T10:00:00Z"}),
+            finding(id=2, extra_fields={"ghostmerge_last_synced_at": "2026-07-21T10:00:00Z"}),
+        )
+        meaningful_difference_score = score_finding_similarity(
+            finding(extra_fields={"owner": "red-team"}),
+            finding(id=2, extra_fields={"owner": "blue-team"}),
+        )
+
+        self.assertEqual(timestamp_score, baseline_score)
+        self.assertLess(meaningful_difference_score, baseline_score)
+
     def test_finding_records_are_normalised_before_matching(self):
         legacy_markup = '<span class="highlight" style="background-color: yellow">secret</span>'
         normalised_markup = "<mark>secret</mark>"
@@ -668,6 +686,77 @@ class MergeRegressionTests(unittest.TestCase):
         self.assertEqual(winners["extra_fields"]["owner"], ResolvedWinner.RIGHT)
         self.assertEqual(suggested.extra_fields["left_only"], "yes")
         self.assertEqual(suggested.extra_fields["right_only"], "yes")
+
+    def test_auto_suggest_excludes_last_synced_extra_field(self):
+        left = finding(
+            extra_fields={"owner": "left", "ghostmerge_last_synced_at": "2026-07-20T10:00:00Z"},
+        )
+        right = finding(
+            extra_fields={"owner": "right team", "ghostmerge_last_synced_at": "2026-07-21T10:00:00Z"},
+        )
+
+        suggested, winners = get_auto_suggest_values(left, right)
+
+        self.assertEqual(suggested.extra_fields, {"owner": "right team"})
+        self.assertEqual(winners["extra_fields"], {"owner": ResolvedWinner.RIGHT})
+
+    def test_non_interactive_merge_preserves_side_specific_last_synced_values(self):
+        left_timestamp = "2026-07-20T10:00:00Z"
+        right_timestamp = "2026-07-21T10:00:00Z"
+        left = finding(extra_fields={"ghostmerge_last_synced_at": left_timestamp})
+        right = finding(id=2, extra_fields={"ghostmerge_last_synced_at": right_timestamp})
+
+        merged_left, merged_right = merge_main({"left": left, "right": right, "score": 95.0})
+
+        self.assertEqual(merged_left.extra_fields, {"ghostmerge_last_synced_at": left_timestamp})
+        self.assertEqual(merged_right.extra_fields, {"ghostmerge_last_synced_at": right_timestamp})
+
+    def test_resolved_extra_fields_do_not_copy_last_synced_to_a_side_without_one(self):
+        left_timestamp = "2026-07-20T10:00:00Z"
+        left = finding(extra_fields={"owner": "left", "ghostmerge_last_synced_at": left_timestamp})
+        right = finding(id=2, extra_fields={"owner": "right"})
+
+        set_record_pair_field_values(
+            left,
+            right,
+            "extra_fields",
+            left.extra_fields,
+            left.extra_fields,
+        )
+
+        self.assertEqual(
+            left.extra_fields,
+            {"owner": "left", "ghostmerge_last_synced_at": left_timestamp},
+        )
+        self.assertEqual(right.extra_fields, {"owner": "left"})
+
+    def test_cli_record_preview_excludes_last_synced_metadata(self):
+        from rich.console import Console
+        from tui import TUI
+
+        left = finding(
+            extra_fields={"owner": "left", "ghostmerge_last_synced_at": "2026-07-20T10:00:00Z"},
+        )
+        right = finding(
+            id=2,
+            extra_fields={"owner": "right", "ghostmerge_last_synced_at": "2026-07-21T10:00:00Z"},
+        )
+        # Rendering this table does not require TUI runtime state. Avoid the
+        # constructor because it intentionally registers a process-wide TUI
+        # singleton that earlier CLI tests may already have initialised.
+        terminal = TUI.__new__(TUI)
+
+        with patch.object(terminal, "update_data") as update_data:
+            terminal.render_left_and_right_whole_finding_record(
+                {"left": left, "right": right, "score": 95.0},
+                "extra_fields",
+            )
+
+        rendered = StringIO()
+        Console(file=rendered, width=500, color_system=None).print(update_data.call_args.args[0])
+        preview_text = rendered.getvalue()
+        self.assertIn("owner", preview_text)
+        self.assertNotIn("ghostmerge_last_synced_at", preview_text)
 
     def test_compliance_reference_placeholder_auto_accepts_richer_extra_fields(self):
         left = finding(extra_fields={"compliance_reference": None})

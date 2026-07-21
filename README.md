@@ -448,7 +448,10 @@ authoritative for this field. The value is a UTC ISO-8601 timestamp in
 `YYYY-MM-DDTHH:MM:SSZ` format. Existing `extra_fields` values are preserved, and
 file import/export keeps the field as ordinary `extra_fields` data. The
 timestamp is added independently to every template written to either the left
-or right Ghostwriter destination.
+or right Ghostwriter destination. Because it records synchronisation history
+rather than template content, GhostMerge excludes this exact key from matching,
+merge previews, and conflict review. Each output keeps its own side's timestamp;
+all other `extra_fields` values continue to be compared and resolved normally.
 
 ### API backups and restore
 
