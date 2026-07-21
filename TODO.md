@@ -14,7 +14,7 @@ rather than being constrained to the CLI feature set.
       Include canonical handling of equal blank optional fields: the CLI currently resolves empty
       strings through its offered-value path while the Web service preserves them unchanged.
 - [x] Add final output preview and explicit approval before durable output or outbound API sync.
-- [ ] Complete end-to-end parity, failure-mode, security, and backwards-compatibility regression tests.
+- [x] Complete end-to-end parity, failure-mode, security, and backwards-compatibility regression tests.
 - [ ] Update operator documentation after the implemented workflow passes final review.
 
 ## Other current priorities (ranked)

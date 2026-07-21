@@ -803,7 +803,14 @@ be run without pytest when needed:
 The suite covers CLI-critical behaviours, model coercion, normalisation,
 matching, merge helpers, sensitivity helpers, config loading, systemd installer
 behaviour, web access controls, API backup handling, and Ghostwriter API sync
-safety checks.
+safety checks. Its end-to-end workflow matrix also compares sensitivity-enabled
+CLI and Web outputs through pre-match replacement, conflict resolution,
+unmatched-record copying, post-merge sensitivity review, resequencing, and final
+preview approval through durable serialisation. Failure regressions require
+non-zero/no-output behaviour without
+leaking sensitive content, while compatibility coverage resumes and downloads a
+composite job written without the newer Observation, sensitivity-audit,
+output-approval, or output-ready state fields.
 
 ## Deployment
 

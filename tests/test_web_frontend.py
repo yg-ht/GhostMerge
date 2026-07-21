@@ -1842,6 +1842,78 @@ class FlaskRouteTests(unittest.TestCase):
                 self.assertIn(b"completed merge job cannot be abandoned", response.data)
                 self.assertTrue((jobs_dir / job_id).exists())
 
+    def test_composite_legacy_job_resumes_as_completed_and_downloadable(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record(title="Legacy reviewed output")],
+            [],
+            job_id="compositelegacy123",
+        )
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        approve_and_save_output(job, jobs_dir)
+
+        job_path = jobs_dir / "compositelegacy123" / "job.json"
+        state = json.loads(job_path.read_text(encoding="utf-8"))
+        legacy_only_fields = {
+            "finding_conflict_phase_complete",
+            "observation_matches",
+            "unmatched_observations_left",
+            "unmatched_observations_right",
+            "merged_observations_left",
+            "merged_observations_right",
+            "final_observations_left",
+            "final_observations_right",
+            "observation_match_index",
+            "observation_field_index",
+            "observation_conflict_phase_complete",
+            "includes_observations",
+            "rejected_match_keys",
+            "finding_orphan_reprocessing_stopped",
+            "observation_orphan_reprocessing_stopped",
+            "preview_acknowledged",
+            "sensitivity_snapshot_version",
+            "sensitivity_enabled",
+            "sensitivity_pre_match_enabled",
+            "sensitivity_terms",
+            "sensitivity_terms_digest",
+            "sensitivity_terms_source",
+            "sensitivity_configuration_error",
+            "pre_match_sensitivity_stats",
+            "sensitivity_review_initialised",
+            "sensitivity_review_status",
+            "sensitivity_review_outcome",
+            "sensitivity_review_started_at",
+            "sensitivity_review_completed_at",
+            "sensitivity_review_stats",
+            "sensitivity_decision_token",
+            "output_approved",
+            "output_approved_at",
+            "output_preview_digest",
+            "output_preview_token",
+            "output_preview_generated_at",
+            "output_phase_complete",
+        }
+        for key in legacy_only_fields:
+            state.pop(key)
+        job_path.write_text(json.dumps(state), encoding="utf-8")
+
+        completion = self.client.get("/jobs/compositelegacy123/complete")
+        summary = self.client.get("/jobs/compositelegacy123/summary")
+        with self.client.get("/jobs/compositelegacy123/download/left") as download:
+            downloaded_records = download.get_json()
+
+        reloaded = load_job(jobs_dir, "compositelegacy123")
+        self.assertEqual(completion.status_code, 200)
+        self.assertIn(b"Merged output ready", completion.data)
+        self.assertIn(b"compatible legacy job", completion.data)
+        self.assertEqual(summary.status_code, 200)
+        self.assertNotIn(b"Abandon merge", summary.data)
+        self.assertEqual(downloaded_records[0]["title"], "Legacy reviewed output")
+        self.assertTrue(reloaded.output_approved)
+        self.assertTrue(reloaded.output_phase_complete)
+        self.assertEqual(reloaded.sensitivity_review_outcome, "legacy_complete")
+
     def test_preview_can_accept_offered_values_for_current_match(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")
         right = json.dumps([record(id="2", description="Right detail")]).encode("utf-8")
