@@ -15,7 +15,10 @@ rather than being constrained to the CLI feature set.
       strings through its offered-value path while the Web service preserves them unchanged.
 - [x] Add final output preview and explicit approval before durable output or outbound API sync.
 - [x] Complete end-to-end parity, failure-mode, security, and backwards-compatibility regression tests.
-- [ ] Update operator documentation after the implemented workflow passes final review.
+- [x] Update operator documentation after the implemented workflow passes final review.
+      The README now provides separate CLI and Web operator runbooks, enumerates every visible Web
+      review and approval gate, explains resume and failure behaviour, and includes a destructive
+      outbound-sync checklist.
 
 ## Other current priorities (ranked)
 

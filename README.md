@@ -37,9 +37,9 @@ GhostMerge currently supports this workflow:
 5. Present matched records interactively so the analyst can choose the preferred field values.
 6. Append templates that only exist on one side into both outputs.
 7. Check fields for configured sensitive terms and allow replacement, editing, or keeping the original value.
-8. Renumber template IDs so the final output is deterministic and conflict-safe.
+8. Finalise deterministic, conflict-safe template IDs for both output collections.
 9. Write separate left and right output JSON files.
-10. Optionally live-sync reviewed output back to API-backed Ghostwriter sources.
+10. Optionally live-sync approved Web output back to API-backed Ghostwriter sources.
 
 ### Shared CLI and Web workflow contract
 
@@ -189,6 +189,31 @@ value, or a flag-only sensitive term requires analyst judgement, the command
 stops without writing outputs and returns a non-zero exit status. Use interactive
 mode when those decisions need to be corrected or reviewed in the terminal.
 
+### CLI operator workflow
+
+The CLI accepts two file-backed Finding collections. Observation Templates and
+Ghostwriter API sources are Web-only extensions. For each CLI run:
+
+1. Confirm which file is the left input, which is the right input, and where
+   both output files will be written.
+2. GhostMerge strictly validates records in non-interactive mode. Interactive
+   mode may offer correction or skipping for malformed records.
+3. When enabled, GhostMerge loads the sensitive-term file once. A load failure
+   stops the run before matching or output writes. Explicit pre-match
+   replacements are applied before matching; flag-only terms are deferred.
+4. Review each proposed match, reject incorrect pairs, and resolve differing
+   fields. If orphan reprocessing is enabled and unmatched records remain on
+   both sides, choose whether to run another matching pass.
+5. Records still unmatched are copied into both merged collections. IDs are
+   resequenced and the post-merge sensitive-term decisions are completed.
+6. The CLI writes both output files immediately after successful processing.
+   It has no separate final-output approval page, so inspect the files before
+   importing them elsewhere.
+
+In non-interactive mode, treat a non-zero exit status as a failed run. Neither
+output should be used unless the command completed successfully and both files
+exist.
+
 ## Web frontend
 
 ### Start the web app
@@ -205,31 +230,65 @@ From the repository root:
 
 Then open the local URL printed by Flask. Uploaded files and in-progress job
 state are stored under `ghostmerge_web_jobs/` by default. Treat that directory as
-local working data and remove it when old merge jobs are no longer needed.
+local working data. Before applying a filesystem-level retention policy, archive
+any required completed outputs and confirm that no listed job is still in
+review or running an outbound sync.
 
 ### Review workflow
 
-The web review flow starts with a whole-record preview for each matched pair,
-then moves through field-level conflicts. Differing fields and field-level diffs
-are highlighted.
+Before creating a job, confirm the left and right source selectors. Configured
+API sources are labelled with their server names during record and final-output
+preview; file-backed sides currently retain the generic `Left` and `Right`
+labels, so record the selected filenames separately when source identity is
+operationally important.
 
 Web uploads always use strict parsing, regardless of the CLI's
 `interactive_mode` setting. A malformed Finding or Observation is rejected with
 its one-based record number; Web workers never wait on an invisible terminal
 correction prompt.
 
-On the whole-record preview page, select any changed fields whose offered values
-you want to accept, then apply them in one action. Remaining changed fields stay
-in the normal field-by-field review queue.
+The complete Web operator path is:
+
+1. Select a JSON file or configured API source independently for the left and
+   right sides, then create the merge job. API imports run before the job opens.
+2. GhostMerge validates and normalises the inputs, snapshots the job's
+   sensitivity configuration, applies enabled pre-match replacements, and
+   calculates candidate matches.
+3. Open the merge summary and review each matched Finding pair in whole-record
+   preview. Accept selected or all offered values, reject an incorrect match,
+   or continue to individual field review. Observation Template pairs follow
+   when the job includes observations.
+4. Resolve every remaining field conflict. If enabled and both sides still
+   have unmatched records, explicitly reprocess or stop orphan matching for
+   each applicable template type. Records left unmatched are then copied into
+   both proposed outputs.
+5. Complete the visible post-merge sensitivity stage across both sides and
+   both template types. Apply, edit, or decline every detected replacement,
+   review the audit summary, and acknowledge its recorded outcome. Disabled,
+   no-hit, completed-decision, and configuration-error outcomes are shown
+   distinctly; a configuration error blocks the job and requires a new job
+   after the deployment configuration is corrected.
+6. Review the complete, resequenced left and right payloads on the final-output
+   preview. This page has not yet created downloadable files.
+7. Select **Approve and create output files**. Approval is bound to the exact
+   server-derived preview digest; it unlocks downloads only after both durable
+   files have been created.
+8. Download and inspect both files. For an API-backed side, outbound sync is an
+   optional, separate operation available only after output approval.
+
+Job state is saved between requests. Resume an in-progress job from the merge
+jobs list; refresh the current page after a stale or replayed decision is
+rejected. After an interrupted output write, reopening the job returns to final
+preview so the approved content can be retried safely. Completed jobs and
+compatible legacy completed jobs remain downloadable and cannot be abandoned
+through the Web UI.
 
 After conflict and sensitivity review, GhostMerge shows both complete proposed
-outputs, including Finding and Observation Template records. Opening this final
-preview does not create output files. The operator must explicitly approve the
-displayed content before both files are written, downloads become available, or
-outbound API synchronisation can start. Approval is bound to a server-derived
-digest of all four output collections; changed or stale preview submissions fail
-closed. Existing completed jobs created before this approval stage remain
-available when their final records and both durable output files are present.
+outputs, including Finding and Observation Template records. Approval is bound
+to a server-derived digest of all four output collections; changed or stale
+preview submissions fail closed. Existing completed jobs created before this
+approval stage remain available when their final records and both durable
+output files are present.
 
 Decision buttons can be clicked directly, and common CLI-style keyboard
 shortcuts are available during review:
@@ -345,6 +404,21 @@ Outbound sync is destructive. For the selected API-backed side, GhostMerge:
 4. Deletes existing target Finding and Observation Templates.
 5. Recreates the reviewed output for both template types.
 6. Reapplies tags.
+
+Before confirming an outbound sync:
+
+1. Verify the named destination and side on the confirmation page.
+2. Download and inspect both approved output files, including observations and
+   tags when present.
+3. Confirm the destination token and account are intended for that environment.
+4. Ensure the configured backup directory has sufficient writable storage and
+   that its retention arrangements are appropriate.
+5. Run the first sync for a configuration against a non-production Ghostwriter
+   environment and retain the resulting backup.
+
+Do not start left and right sync merely because both buttons are available.
+Each operation replaces the corresponding destination independently and should
+be confirmed against that side's approved output.
 
 Observation replacement is enabled for observation-aware jobs created from an
 API import or the combined `{ "findings": [...], "observations": [...] }` file
