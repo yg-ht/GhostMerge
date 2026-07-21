@@ -1,8 +1,8 @@
 # GhostMerge TODO
 
-## Active development: Web and CLI workflow parity
+## Completed development: Web and CLI workflow parity
 
-The current development goal is to make every shared processing stage explicit, equivalent, and
+This completed development effort made every shared processing stage explicit, equivalent, and
 verifiable in the Web UI. Web-only API and Observation Template features remain supported extensions
 rather than being constrained to the CLI feature set.
 
@@ -20,7 +20,7 @@ rather than being constrained to the CLI feature set.
       review and approval gate, explains resume and failure behaviour, and includes a destructive
       outbound-sync checklist.
 
-## Other current priorities (ranked)
+## Recently completed priorities
 
 1. **Protect completed merge output from abandonment. (Completed.)** Remove or disable the destructive
    “Abandon merge” action once output is ready, and reject direct abandonment requests for
@@ -43,8 +43,11 @@ completed output, digest-bound final approval, and source identity throughout th
 - [x] Integrated `log()` function with verbosity, exception handling, and file output
 - [x] Merged utility modules (`log_utils`, `io_utils`, etc.) into single `utils.py`
 - [x] Implemented graceful shutdown with signal handlers
-- [x] Built I/O handlers for JSON and CSV
-- [x] Added support for tag normalisation and HTML stripping
+- [x] Built JSON I/O handlers
+- [ ] Decide whether CSV import or export is required before adding CSV I/O.
+      Define the supported record shape, quoting and encoding rules, nested-field representation,
+      validation behaviour, and round-trip expectations before implementation.
+- [x] Added support for tag normalisation and configured HTML cleanup
 
 ## Tooling & Environment
 - [x] Generated `requirements.txt`
@@ -83,9 +86,9 @@ completed output, digest-bound final approval, and source identity throughout th
       styling, and preserve spans whose styling or attributes carry other meaning.
 - [ ] Normalise `<span style="background-color: yellow">` markup to the canonical highlight markup,
       including the variant without the currently recognised `highlight` class.
-- [ ] Normalise list items containing a single paragraph from `<li><p>…</p></li>` to `<li>…</li>`.
-      Preserve paragraph wrappers when a list item contains multiple paragraphs or other meaningful
-      sibling content.
+- [x] Normalise list items containing a single paragraph from `<li><p>…</p></li>` to `<li>…</li>`.
+      Single direct paragraph wrappers are removed, while multiple paragraphs and meaningful text
+      siblings retain their structure; regression coverage includes both behaviours.
 - [ ] Normalise line breaks at the ends of HTML tags as well as line breaks between tags.
       Document which whitespace is structural or user-visible so normalisation does not join words
       or alter preformatted/code content.
@@ -166,6 +169,18 @@ completed output, digest-bound final approval, and source identity throughout th
 - [ ] Add pagination to the dedicated history pages.
       Define a sensible page size, stable ordering, empty and out-of-range behaviour, and accessible
       previous/next controls while preserving filters and other table state.
+- [ ] Clarify the estimated total on the inbound API import status page.
+      The fetched count includes Finding and Observation Templates, but the previous-backup estimate
+      currently uses only the Finding count. This can produce confusing text such as “Fetched 509
+      records of approx 488”. Either display separate Finding and Observation counts, include both in
+      the estimate, or label the denominator precisely; retain sensible behaviour for legacy backups
+      and unknown estimates.
+- [ ] Investigate reducing per-record API requests during inbound API imports.
+      Finding and Observation list queries already fetch pages of up to 100 records, but tags are
+      retrieved with a follow-up query for each record. Determine whether Ghostwriter GraphQL can
+      return tags through relationships or a safe batched query, then assess pagination, memory use,
+      rate limiting, progress reporting, cancellation, and backwards compatibility before changing
+      the import strategy.
 - [x] Fix web sensitivity review so multiple sensitive terms in the same field are all reviewed.
       Review now remains on the current field until every sensitive hit has been handled, preventing
       later terms in the same value from reaching downloaded output without a decision.
@@ -177,9 +192,9 @@ completed output, digest-bound final approval, and source identity throughout th
       or uploaded file each value came from throughout preview, conflict review, and completion.
 - [ ] Add an unselect-field control to the record preview so an accidental field choice can be
       cleared before submitting the selected decisions.
-- [ ] In “Finding field review”, allow the user to click the chosen option itself.
-      Keep keyboard controls and accessible form semantics, visibly indicate the active choice, and
-      ensure clicking an already selected option has predictable behaviour.
+- [x] Make record-preview value cells clickable when choosing left, right, or offered values.
+      The underlying radio controls and keyboard workflow remain intact, and the selected cell is
+      visibly highlighted before the choices are submitted.
 - [ ] Provide a safely sanitised rendered HTML view alongside the existing line-by-line diff.
       Make the raw/source view readily available and prevent active content or unsafe links from
       executing in the rendered preview.
