@@ -1,0 +1,13 @@
+{% if pagination.total_items %}
+<nav class="pagination" aria-label="{{ pagination.label }}">
+  <p>Page {{ pagination.page }} of {{ pagination.total_pages }} · {{ pagination.total_items }} total</p>
+  <div class="actions">
+    {% if pagination.previous_page %}
+    <a class="button secondary" rel="prev" href="{{ url_for(pagination.endpoint, page=pagination.previous_page) }}">Previous page</a>
+    {% endif %}
+    {% if pagination.next_page %}
+    <a class="button secondary" rel="next" href="{{ url_for(pagination.endpoint, page=pagination.next_page) }}">Next page</a>
+    {% endif %}
+  </div>
+</nav>
+{% endif %}

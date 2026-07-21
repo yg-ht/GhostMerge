@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from diffing import DiffLine, FieldDiff, build_semantic_diff
+from diffing import DiffLine, FieldDiff, build_semantic_diff, split_field_diff_for_display
 from globals import get_config
 from matching import fuzzy_match_records
 from merge import (
@@ -1242,7 +1242,8 @@ def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
 
 def build_aligned_field_diff(left_value: Any, right_value: Any) -> FieldDiff:
     """Build the shared semantic diff without presentation-induced wrapping."""
-    return build_semantic_diff(stringify_field(left_value), stringify_field(right_value))
+    semantic_diff = build_semantic_diff(stringify_field(left_value), stringify_field(right_value))
+    return split_field_diff_for_display(semantic_diff)
 
 
 def build_field_diff(
