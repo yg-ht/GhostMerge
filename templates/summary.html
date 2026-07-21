@@ -22,9 +22,11 @@
     {% else %}
     <a class="button" href="{{ url_for('conflicts', job_id=summary.job_id) }}">Resume review</a>
     {% endif %}
-    {% with job_id=summary.job_id %}
-    {% include "_abandon_merge_form.html" %}
-    {% endwith %}
+    {% if not summary.output_phase_complete %}
+      {% with job_id=summary.job_id %}
+      {% include "_abandon_merge_form.html" %}
+      {% endwith %}
+    {% endif %}
   </div>
   {% if summary.sync_results %}
   <div class="actions">

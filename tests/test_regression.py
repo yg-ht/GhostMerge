@@ -885,6 +885,58 @@ class CliRegressionTests(unittest.TestCase):
             self.assertFalse(output_left.exists())
             self.assertFalse(output_right.exists())
 
+    def test_cli_fails_closed_when_enabled_sensitivity_rules_are_unavailable(self):
+        python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
+        self.skipTest("project virtualenv is not present") if not python_bin.exists() else None
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            left_path = tmp_path / "left.json"
+            right_path = tmp_path / "right.json"
+            output_left = tmp_path / "left-output.json"
+            output_right = tmp_path / "right-output.json"
+            config_path = tmp_path / "config.json"
+            left_path.write_text(json.dumps([finding().to_dict()]), encoding="utf-8")
+            right_path.write_text("[]", encoding="utf-8")
+
+            with (PROJECT_ROOT / "ghostmerge_config.example.json").open("r", encoding="utf-8") as handle:
+                config = json.load(handle)
+            config.update({
+                "interactive_mode": False,
+                "sensitivity_check_enabled": True,
+                "sensitivity_check_terms_file": "missing-sensitive-rules.txt",
+                "log_file_enabled": False,
+            })
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    str(python_bin),
+                    "ghostmerge.py",
+                    "--file-left",
+                    str(left_path),
+                    "--file-right",
+                    str(right_path),
+                    "--out-left",
+                    str(output_left),
+                    "--out-right",
+                    str(output_right),
+                    "--config",
+                    str(config_path),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                input="\n",
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("configured rules could not be loaded", result.stdout)
+            self.assertFalse(output_left.exists())
+            self.assertFalse(output_right.exists())
+
     def test_cli_entrypoint_applies_shared_pre_match_sensitivity_replacements(self):
         python_bin = PROJECT_ROOT / ".venv" / "bin" / "python"
         self.skipTest("project virtualenv is not present") if not python_bin.exists() else None

@@ -1277,6 +1277,30 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertFalse((jobs_dir / "invalidapproval123" / "left.json").exists())
         self.assertFalse((jobs_dir / "invalidapproval123" / "right.json").exists())
 
+    def test_final_output_approval_token_cannot_be_replayed(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job([record()], [], job_id="approvalreplay123")
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        save_job(job, jobs_dir)
+        self.client.get("/jobs/approvalreplay123/complete")
+        approval_token = load_job(jobs_dir, "approvalreplay123").output_preview_token
+
+        approved = self.client.post(
+            "/jobs/approvalreplay123/complete/approve",
+            data=self.with_csrf({"approval_token": approval_token}),
+        )
+        replayed = self.client.post(
+            "/jobs/approvalreplay123/complete/approve",
+            data=self.with_csrf({"approval_token": approval_token}),
+        )
+
+        self.assertEqual(approved.status_code, 302)
+        self.assertEqual(replayed.status_code, 400)
+        self.assertIn(b"already been approved and created", replayed.data)
+        self.assertTrue((jobs_dir / "approvalreplay123" / "left.json").exists())
+        self.assertTrue((jobs_dir / "approvalreplay123" / "right.json").exists())
+
     def test_final_preview_includes_observation_templates(self):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job(
@@ -1781,6 +1805,42 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"cannot be abandoned while outbound API sync is running", response.data)
         self.assertTrue((Path(self.tmp_dir.name) / "syncabandon123").exists())
+
+    def test_completed_current_and_legacy_jobs_cannot_be_abandoned(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                job_id = "legacycomplete123" if legacy else "currentcomplete123"
+                job = create_merge_job([record()], [], job_id=job_id)
+                self.assertIsNone(get_next_conflict(job))
+                job.sensitivity_phase_complete = True
+                approve_and_save_output(job, jobs_dir)
+
+                if legacy:
+                    job_path = jobs_dir / job_id / "job.json"
+                    state = json.loads(job_path.read_text(encoding="utf-8"))
+                    for key in (
+                        "output_phase_complete",
+                        "output_approved",
+                        "output_approved_at",
+                        "output_preview_digest",
+                        "output_preview_token",
+                        "output_preview_generated_at",
+                    ):
+                        state.pop(key)
+                    job_path.write_text(json.dumps(state), encoding="utf-8")
+
+                summary = self.client.get(f"/jobs/{job_id}/summary")
+                response = self.client.post(
+                    f"/jobs/{job_id}/abandon",
+                    data=self.with_csrf(),
+                )
+
+                self.assertEqual(summary.status_code, 200)
+                self.assertNotIn(b"Abandon merge", summary.data)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(b"completed merge job cannot be abandoned", response.data)
+                self.assertTrue((jobs_dir / job_id).exists())
 
     def test_preview_can_accept_offered_values_for_current_match(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")

@@ -19,7 +19,7 @@ rather than being constrained to the CLI feature set.
 
 ## Other current priorities (ranked)
 
-1. **Protect completed merge output from abandonment.** Remove or disable the destructive
+1. **Protect completed merge output from abandonment. (Completed.)** Remove or disable the destructive
    “Abandon merge” action once output is ready, and reject direct abandonment requests for
    completed jobs. This closes the clearest remaining local data-loss path.
 2. **Preview and approve final merged output before writing or outbound sync. (Completed.)** Give operators a
@@ -117,7 +117,7 @@ and third reduce the risk of approving or synchronising the wrong reviewed conte
 - [ ] Allow manual matching of unmatched findings
 - [x] Implement config file `threshold` override to adjust sensitivity of fuzzy matching
 - [x] Preview matched records before field-level web review
-- [ ] Preview final merged output before final write and prompt for acceptance
+- [x] Preview final merged output before final write and prompt for acceptance
 - [x] Improve UX for interactive handling of extra_fields with auto-suggestion and placeholder handling
 - [x] Improve UX for interactive handling of tags with deterministic combined suggestions
 - [x] Pause / resume web merge jobs by persisting and reopening previous jobs
@@ -137,7 +137,7 @@ and third reduce the risk of approving or synchronising the wrong reviewed conte
       Inbound API import, merge/output, and outbound API sync now have distinct persisted state.
       Output is ready only after conflict and sensitivity review and durable creation of both JSON
       files. Optional left and right outbound sync states do not block local output completion.
-- [ ] Remove or disable the “Abandon merge” button when a merge job is complete.
+- [x] Remove or disable the “Abandon merge” button when a merge job is complete.
       Define the terminal job states consistently and ensure completed output cannot be deleted or
       invalidated through an abandonment action that is no longer applicable.
 - [x] Remove user-facing references to “AzSure”.

@@ -296,6 +296,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     def abandon_job(job_id: str):
         try:
             job = load_job(jobs_dir, job_id)
+            _require_job_abandonable(job)
             _require_no_running_live_sync(jobs_dir, job)
             _delete_job_directory(jobs_dir, job.job_id)
             return redirect(url_for("index", abandoned=job.job_id))
@@ -396,9 +397,10 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             job = load_job(jobs_dir, job_id)
             _require_completed_review(job, action="Output approval")
-            if not job.output_phase_complete:
-                result = approve_output_preview(job, request.form.get("approval_token", ""))
-                save_outputs(job, jobs_dir, result)
+            if job.output_phase_complete:
+                raise WebMergeError("Final output has already been approved and created.")
+            result = approve_output_preview(job, request.form.get("approval_token", ""))
+            save_outputs(job, jobs_dir, result)
             return redirect(url_for("complete", job_id=job.job_id))
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
@@ -1401,6 +1403,12 @@ def _require_no_running_live_sync(jobs_dir: Path, job) -> None:
         status = (job.sync_results.get(side) or {}).get("status")
         if status in RUNNING_OPERATION_STATUSES or _sync_lock_path(jobs_dir, job.job_id, side).exists():
             raise WebMergeError("This merge job cannot be abandoned while outbound API sync is running.")
+
+
+def _require_job_abandonable(job) -> None:
+    """Protect durable completed output from deletion through abandonment."""
+    if job.output_phase_complete:
+        raise WebMergeError("A completed merge job cannot be abandoned because its output is ready.")
 
 
 def _delete_job_directory(jobs_dir: Path, job_id: str) -> None:

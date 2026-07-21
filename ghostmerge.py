@@ -114,6 +114,15 @@ def ghostmerge(
     terms = None
     if CONFIG['sensitivity_check_enabled']:
         terms = load_sensitive_terms(CONFIG["sensitivity_check_terms_file"], CONFIG["script_dir"])
+        if terms is None:
+            # An enabled protection must never degrade silently. Abort before
+            # matching or output writes so automation can detect and correct
+            # the missing or unreadable rule configuration.
+            log(
+                "ERROR",
+                "Sensitivity checking is enabled but its configured rules could not be loaded.",
+                prefix="CLI",
+            )
 
         if CONFIG.get('sensitivity_check_before_matching', False) and terms:
             log(

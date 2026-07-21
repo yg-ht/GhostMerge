@@ -303,7 +303,8 @@ still performs the API retrieval automatically for any side set to API.
 
 When a merge job is API-backed, the completion page offers outbound API
 synchronisation for that side after conflict review and sensitivity review are
-complete and both merged output files have been written successfully.
+complete, the final preview has been explicitly approved, and both merged
+output files have been written successfully.
 Left and right write-back use the same workflow but remain independent: each
 side uses its own configured endpoint, bearer token, reviewed output, backup
 directory, lock, and status. Synchronising one side does not contact or modify
@@ -315,8 +316,9 @@ GhostMerge tracks three distinct parts of the workflow:
 
 1. **Inbound API import** retrieves source records used to create a merge job.
 2. **Merge/output** covers conflict review, sensitivity review, and durable
-   creation of both reviewed JSON outputs. A job is output-ready only when both
-   files exist; interrupted or failed writes do not present the job as complete.
+   creation of both reviewed JSON outputs. A job is output-ready only when its
+   digest-bound final preview has been approved and both files exist;
+   interrupted or failed writes do not present the job as complete.
 3. **Outbound API sync** optionally writes one reviewed output back to its
    corresponding API-backed destination. Left and right outbound states are
    tracked separately, and neither is required for local merged output to be
@@ -327,6 +329,11 @@ remain compatible when their saved final records and both output files are
 present. Persisted API operation status values are retained for compatibility;
 the operation and direction fields distinguish inbound import from outbound
 sync.
+
+In-progress jobs can be abandoned to remove their local review state. Completed
+jobs, including compatible legacy jobs, cannot be abandoned because doing so
+would delete durable reviewed output. Final-output approval is also one-time;
+replayed approval submissions are rejected after output creation.
 
 ### Outbound sync behaviour
 
@@ -656,6 +663,11 @@ acme-corp => [REDACTED COMPANY]
 
 During processing, GhostMerge scans finding fields for these terms and offers
 the analyst a chance to edit, keep, or apply a replacement.
+
+When sensitivity checking is enabled, both CLI and Web workflows fail closed
+if the configured rules cannot be loaded. The CLI exits non-zero before matching
+or writing output files; the Web workflow records a visible configuration error
+and keeps review acknowledgement and output creation locked.
 
 When `sensitivity_check_before_matching` is enabled, both interfaces apply only
 rules with explicit replacements before fuzzy matching. Flag-only terms remain
