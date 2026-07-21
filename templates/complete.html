@@ -4,12 +4,14 @@
 <section class="panel">
   <p>The merged output files are ready.</p>
   <dl>
+    <dt>Output source</dt><dd>{{ source_labels.left }}</dd>
+    <dt>Output source</dt><dd>{{ source_labels.right }}</dd>
     <dt>Approved</dt><dd>{{ job.output_approved_at or "Recorded for a compatible legacy job" }}</dd>
     {% if job.output_preview_digest %}<dt>Approved digest</dt><dd><code>{{ job.output_preview_digest }}</code></dd>{% endif %}
   </dl>
   <div class="actions">
-    <a class="button" href="{{ url_for('download', job_id=job.job_id, side='left') }}">Download left JSON</a>
-    <a class="button secondary" href="{{ url_for('download', job_id=job.job_id, side='right') }}">Download right JSON</a>
+    <a class="button" href="{{ url_for('download', job_id=job.job_id, side='left') }}">Download {{ source_labels.left }} output</a>
+    <a class="button secondary" href="{{ url_for('download', job_id=job.job_id, side='right') }}">Download {{ source_labels.right }} output</a>
   </div>
 </section>
 <section class="panel">
@@ -19,18 +21,18 @@
     {% if job.input_sources.left == "api" and api_servers.left.configured %}
     <a class="button" href="{{ url_for('sync_side', job_id=job.job_id, side='left') }}">Sync {{ api_servers.left.name }}</a>
     {% else %}
-    <button type="button" disabled>Left outbound sync unavailable</button>
+    <button type="button" disabled>{{ source_labels.left }} outbound sync unavailable</button>
     {% endif %}
     {% if job.input_sources.right == "api" and api_servers.right.configured %}
     <a class="button" href="{{ url_for('sync_side', job_id=job.job_id, side='right') }}">Sync {{ api_servers.right.name }}</a>
     {% else %}
-    <button type="button" disabled>Right outbound sync unavailable</button>
+    <button type="button" disabled>{{ source_labels.right }} outbound sync unavailable</button>
     {% endif %}
   </div>
   {% if job.sync_results %}
   <dl>
     {% for side, state in job.sync_results.items() %}
-    <dt>{{ side|title }}</dt>
+    <dt>{{ source_labels[side] }}</dt>
     <dd>
       {{ state.status }} - {{ state.message }}
       <a href="{{ url_for('sync_status', job_id=job.job_id, side=side) }}">View outbound sync status</a>

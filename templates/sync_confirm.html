@@ -3,6 +3,7 @@
 <h1>Confirm outbound API sync</h1>
 <section class="panel">
   <h2>{{ server.name }}</h2>
+  <p>Reviewed output source: <strong>{{ source_labels[side] }}</strong></p>
   <p>This will permanently back up the current server Finding and Observation Templates, delete the current server libraries, and recreate them from the reviewed {{ side }} output.</p>
   <dl>
     <dt>Destination</dt><dd>{{ server.graphql_url }}</dd>

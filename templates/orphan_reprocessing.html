@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Reprocess orphan {{ orphan_prompt.template_type }} records</h1>
+<h1>Reprocess unmatched {{ orphan_prompt.template_type }} records</h1>
 <section class="panel">
   <p>
-    There are {{ orphan_prompt.left_count }} left and {{ orphan_prompt.right_count }} right
+    There are {{ orphan_prompt.left_count }} from {{ source_labels.left }} and {{ orphan_prompt.right_count }} from {{ source_labels.right }}
     unmatched {{ orphan_prompt.template_type }} record(s) that can be checked for additional matches.
   </p>
   <form class="actions" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" name="preview_action" value="reprocess_orphans">Reprocess orphans</button>
+    <button type="submit" name="preview_action" value="reprocess_orphans">Reprocess unmatched records</button>
     <button class="secondary" type="submit" name="preview_action" value="stop_orphan_reprocessing">Finish without reprocessing</button>
   </form>
 </section>

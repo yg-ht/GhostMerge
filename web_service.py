@@ -129,6 +129,7 @@ class MergeJob:
     final_observations_right: Optional[list[Observation]] = None
     preview_acknowledged: bool = False
     input_sources: dict[str, str] = field(default_factory=lambda: {"left": "file", "right": "file"})
+    input_source_names: dict[str, str] = field(default_factory=dict)
     sync_results: dict[str, Any] = field(default_factory=dict)
     includes_observations: bool = False
     rejected_match_keys: list[str] = field(default_factory=list)
@@ -168,6 +169,8 @@ class PreviousJobItem:
     updated_at: str
     has_left_output: bool
     has_right_output: bool
+    input_sources: dict[str, str] = field(default_factory=dict)
+    input_source_names: dict[str, str] = field(default_factory=dict)
     sync_results: dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
 
@@ -243,6 +246,7 @@ def create_merge_job(
     job_id: Optional[str] = None,
     input_sources: Optional[dict[str, str]] = None,
     sensitivity_snapshot: Optional[dict[str, Any]] = None,
+    input_source_names: Optional[dict[str, str]] = None,
 ) -> MergeJob:
     """Create a merge job and run the existing fuzzy matching rounds."""
     includes_observations = _input_includes_observations(left_records) or _input_includes_observations(right_records)
@@ -341,6 +345,7 @@ def create_merge_job(
         merged_observations_left=[],
         merged_observations_right=[],
         input_sources=input_sources or {"left": "file", "right": "file"},
+        input_source_names=dict(input_source_names or {}),
         includes_observations=includes_observations,
         sensitivity_snapshot_version=snapshot_version,
         sensitivity_enabled=sensitivity_enabled,
@@ -1006,6 +1011,8 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
                 updated_at=updated_at,
                 has_left_output=(job_dir / "left.json").exists(),
                 has_right_output=(job_dir / "right.json").exists(),
+                input_sources=job.input_sources,
+                input_source_names=job.input_source_names,
                 sync_results=job.sync_results,
             )
         )
@@ -1115,7 +1122,7 @@ def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
         phase = "output_ready"
 
     phase_labels = {
-        "conflict_review": "Conflict review",
+        "conflict_review": "Match and field review",
         "sensitivity_review": "Sensitivity review",
         "ready_to_finalise": "Ready for final preview",
         "output_ready": "Merged output ready",
@@ -1262,6 +1269,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         final_observations_right=None if data.get("final_observations_right") is None else [_observation_from_state(item) for item in data.get("final_observations_right", [])],
         preview_acknowledged=data.get("preview_acknowledged", False),
         input_sources=data.get("input_sources", {"left": "file", "right": "file"}),
+        input_source_names=dict(data.get("input_source_names") or {}),
         sync_results=data.get("sync_results", {}),
         includes_observations=data.get("includes_observations", _state_includes_observations(data)),
         rejected_match_keys=list(data.get("rejected_match_keys", [])),

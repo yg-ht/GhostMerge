@@ -4,16 +4,22 @@
       <th>Job</th>
       <th>Last updated</th>
       <th>Phase</th>
+      <th>Sources</th>
       <th>Review progress</th>
       <th>Actions</th>
     </tr>
   </thead>
   <tbody>
     {% for previous in previous_jobs %}
+    {% set left_name = previous.input_source_names.get('left') or 'Left source' %}
+    {% set right_name = previous.input_source_names.get('right') or 'Right source' %}
+    {% set left_label = left_name ~ ' (' ~ ('API' if previous.input_sources.get('left') == 'api' else 'JSON file') ~ ')' %}
+    {% set right_label = right_name ~ ' (' ~ ('API' if previous.input_sources.get('right') == 'api' else 'JSON file') ~ ')' %}
     <tr>
       <td>{{ previous.job_id }}</td>
       <td>{{ previous.updated_at }}</td>
       <td>{{ previous.phase }}</td>
+      <td>{{ left_label }}<br>{{ right_label }}</td>
       <td>
         {% if previous.error %}
         {{ previous.error }}
@@ -26,13 +32,13 @@
         <a class="button secondary" href="{{ url_for('summary', job_id=previous.job_id) }}">Open</a>
         {% endif %}
         {% if previous.has_left_output %}
-        <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='left') }}">Left output</a>
+        <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='left') }}">{{ left_label }} output</a>
         {% endif %}
         {% if previous.has_right_output %}
-        <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='right') }}">Right output</a>
+        <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='right') }}">{{ right_label }} output</a>
         {% endif %}
         {% for sync_side, sync_state in previous.sync_results.items() %}
-        <a class="button secondary" href="{{ url_for('sync_status', job_id=previous.job_id, side=sync_side) }}">{{ sync_side|title }} outbound sync status</a>
+        <a class="button secondary" href="{{ url_for('sync_status', job_id=previous.job_id, side=sync_side) }}">{{ left_label if sync_side == 'left' else right_label }} outbound sync status</a>
         {% endfor %}
       </td>
     </tr>

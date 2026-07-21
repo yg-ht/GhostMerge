@@ -1,22 +1,22 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Conflict review - {{ item.template_type|title }}</h1>
+<h1>{{ item.template_type|title }} field review</h1>
 <section class="panel">
   <dl>
     <dt>Template type</dt><dd>{{ item.template_type|title }}</dd>
     <dt>Match</dt><dd>{{ item.match_index + 1 }}</dd>
     <dt>Field</dt><dd>{{ item.field_name }}</dd>
     <dt>Type</dt><dd>{{ item.field_type }}</dd>
-    <dt>Offered side</dt><dd>{{ item.offered_side }}</dd>
+    <dt>Offered source</dt><dd>{% if item.offered_side == "left" %}{{ source_labels.left }}{% elif item.offered_side == "right" %}{{ source_labels.right }}{% else %}Combined or generated offer{% endif %}</dd>
   </dl>
 </section>
 <section class="grid">
   <div class="panel">
-    <h2>Left</h2>
+    <h2>{{ source_labels.left }}</h2>
     <pre>{{ item.left_value }}</pre>
   </div>
   <div class="panel">
-    <h2>Right</h2>
+    <h2>{{ source_labels.right }}</h2>
     <pre>{{ item.right_value }}</pre>
   </div>
   <div class="panel">
@@ -28,7 +28,7 @@
   <h2>Highlighted difference</h2>
   {% for row in item.diff_rows %}
   <div class="diff-line {{ row.class }}">
-    <strong>{{ row.side }}</strong>
+    <strong>{% if row.side == "left" %}{{ source_labels.left }}{% elif row.side == "right" %}{{ source_labels.right }}{% elif row.side == "both" %}Both sources{% else %}Offered value{% endif %}</strong>
     <span>{{ row.text }}</span>
   </div>
   {% endfor %}
@@ -38,9 +38,9 @@
   <input type="hidden" name="field_name" value="{{ item.field_name }}">
   <div class="decision-grid">
     <button class="decision-button default" type="submit" name="action" value="offered" data-shortcut=" "><span class="shortcut">Space</span>Use offered value</button>
-    <button class="decision-button" type="submit" name="action" value="left" data-shortcut="ArrowLeft"><span class="shortcut">←</span>Use left value</button>
-    <button class="decision-button" type="submit" name="action" value="right" data-shortcut="ArrowRight"><span class="shortcut">→</span>Use right value</button>
-    <button class="decision-button" type="submit" name="action" value="keep" data-shortcut="ArrowUp"><span class="shortcut">↑</span>Keep left/right intact</button>
+    <button class="decision-button" type="submit" name="action" value="left" data-shortcut="ArrowLeft"><span class="shortcut">←</span>Use {{ source_labels.left }} value</button>
+    <button class="decision-button" type="submit" name="action" value="right" data-shortcut="ArrowRight"><span class="shortcut">→</span>Use {{ source_labels.right }} value</button>
+    <button class="decision-button" type="submit" name="action" value="keep" data-shortcut="ArrowUp"><span class="shortcut">↑</span>Keep both source values</button>
     {% if item.allow_merge %}
     <button class="decision-button" type="submit" name="action" value="merge" data-shortcut="m"><span class="shortcut">M</span>Merge text</button>
     {% endif %}

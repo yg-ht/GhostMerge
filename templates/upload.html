@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Merge finding libraries</h1>
+<h1>Merge workspace</h1>
 {% if error %}<div class="panel error">{{ error }}</div>{% endif %}
 {% if abandoned_job %}
 <div class="panel">Abandoned merge job {{ abandoned_job }}.</div>
@@ -11,8 +11,21 @@
   <p>Backup file: {{ api_check.backup_filename }}. <a href="{{ url_for('api_backups') }}">Open backup browser</a></p>
 </div>
 {% endif %}
+<section class="panel">
+  <h2>Merge jobs</h2>
+  {% if previous_jobs %}
+  {% include "_previous_jobs_table.html" %}
+  {% if previous_jobs_total > previous_jobs|length %}
+  <p>Showing {{ previous_jobs|length }} of {{ previous_jobs_total }} merge jobs.</p>
+  <p><a class="button secondary" href="{{ url_for('jobs_history') }}">View all merge jobs</a></p>
+  {% endif %}
+  {% else %}
+  <p>No merge jobs found.</p>
+  {% endif %}
+</section>
 <form id="create_merge_form" action="{{ url_for('create_job_route') }}" method="post" enctype="multipart/form-data"></form>
 <section class="panel">
+  <h2>Create merge job</h2>
   <input form="create_merge_form" type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <div class="grid">
     <div>
@@ -42,20 +55,6 @@
   </div>
   <p><button type="submit" form="create_merge_form">Create merge job</button></p>
 </section>
-<section class="panel">
-  <h2>API backups</h2>
-  <p><a class="button secondary" href="{{ url_for('api_backups') }}">Open backup browser</a></p>
-</section>
-{% if api_source_checks %}
-<section class="panel">
-  <h2>API source checks</h2>
-  {% include "_api_source_checks_table.html" %}
-  {% if api_source_checks_total > api_source_checks|length %}
-  <p>Showing {{ api_source_checks|length }} of {{ api_source_checks_total }} API source checks.</p>
-  <p><a class="button secondary" href="{{ url_for('api_source_checks_history') }}">View all API source checks</a></p>
-  {% endif %}
-</section>
-{% endif %}
 {% if api_imports %}
 <section class="panel">
   <h2>Inbound API imports</h2>
@@ -88,16 +87,18 @@
   </table>
 </section>
 {% endif %}
+{% if api_source_checks %}
 <section class="panel">
-  <h2>Previous merge jobs</h2>
-  {% if previous_jobs %}
-  {% include "_previous_jobs_table.html" %}
-  {% if previous_jobs_total > previous_jobs|length %}
-  <p>Showing {{ previous_jobs|length }} of {{ previous_jobs_total }} previous merge jobs.</p>
-  <p><a class="button secondary" href="{{ url_for('jobs_history') }}">View all previous merge jobs</a></p>
+  <h2>API source checks</h2>
+  {% include "_api_source_checks_table.html" %}
+  {% if api_source_checks_total > api_source_checks|length %}
+  <p>Showing {{ api_source_checks|length }} of {{ api_source_checks_total }} API source checks.</p>
+  <p><a class="button secondary" href="{{ url_for('api_source_checks_history') }}">View all API source checks</a></p>
   {% endif %}
-  {% else %}
-  <p>No previous merge jobs found.</p>
-  {% endif %}
+</section>
+{% endif %}
+<section class="panel">
+  <h2>API backups</h2>
+  <p><a class="button secondary" href="{{ url_for('api_backups') }}">Open backup browser</a></p>
 </section>
 {% endblock %}

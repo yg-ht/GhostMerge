@@ -237,10 +237,10 @@ review or running an outbound sync.
 ### Review workflow
 
 Before creating a job, confirm the left and right source selectors. Configured
-API sources are labelled with their server names during record and final-output
-preview; file-backed sides currently retain the generic `Left` and `Right`
-labels, so record the selected filenames separately when source identity is
-operationally important.
+API sources are labelled with their snapshotted server names and `(API)`;
+file-backed sources use the uploaded basename and `(JSON file)`. Those immutable
+labels remain visible through match and field review, sensitivity review,
+progress, final preview, downloads, job history, and outbound synchronisation.
 
 Web uploads always use strict parsing, regardless of the CLI's
 `interactive_mode` setting. A malformed Finding or Observation is rejected with
@@ -303,12 +303,14 @@ M            merge left and right text where available
 E            focus the custom edit field
 ```
 
-The home page can start a new merge, reopen previous local jobs, download
-completed outputs, and open the API backup browser.
+The home page prioritises the Merge jobs status section, followed by creation of
+a new job, active inbound imports, API source checks, and API backups. It can
+resume local jobs and download completed outputs without changing the dedicated
+history views.
 
-The API source checks and previous merge jobs panes on the home page show a
+The API source checks and merge jobs panes on the home page show a
 limited number of recent rows. Use the dedicated `API source checks` and
-`Previous merge jobs` links shown under those panes when more rows exist.
+`Merge jobs` links shown under those panes when more rows exist.
 Configure the home-page limits with `web_ui.home_api_source_checks_limit` and
 `web_ui.home_previous_jobs_limit`; both default to `10`.
 
@@ -616,7 +618,7 @@ Useful configuration areas include:
 | Interaction | Enable terminal review; disabled mode accepts deterministic offers and fails closed when analyst judgement is required. |
 | Normalisation | Strip whitespace, remove empty HTML tags, normalise line endings, deduplicate references, canonicalise CVSS vectors, and reduce matching-only text noise. |
 | Sensitivity checks | Enable term scanning and configure the terms file. |
-| Web UI | Limit how many API source checks and previous merge jobs are shown on the home page. |
+| Web UI | Limit how many API source checks and merge jobs are shown on the home page. |
 | Web access | Restrict browser access by source IP, API key, frame policy, and proxy prefix. |
 | Ghostwriter API | Configure inbound API sources, outbound sync destinations, tokens, rate limits, TLS, and backups. |
 | TUI layout | Tune render width, refresh rate, and display limits. |
