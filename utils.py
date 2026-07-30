@@ -1131,8 +1131,19 @@ def normalise_code_markup(
                 code_tag.append(NavigableString(trailing_whitespace))
         else:
             code_tag = soup.new_tag("code")
-            _move_children(pre_tag, code_tag)
+            for child in list(pre_tag.contents):
+                if not isinstance(child, NavigableString) and getattr(child, "name", None) == "code":
+                    _move_children(child, code_tag)
+                    child.extract()
+                else:
+                    code_tag.append(child.extract())
             pre_tag.append(code_tag)
+
+        # Code elements cannot be nested. Historical or mixed pre contents may
+        # contain deeper code wrappers even after the direct children are
+        # consolidated, so retain their contents while removing the wrappers.
+        for nested_code_tag in list(code_tag.find_all("code")):
+            nested_code_tag.unwrap()
 
         if pre_tag.attrs != {"spellcheck": "false"}:
             pre_tag.attrs = {"spellcheck": "false"}

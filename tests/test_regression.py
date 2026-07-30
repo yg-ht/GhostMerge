@@ -657,6 +657,30 @@ class NormalisationRegressionTests(unittest.TestCase):
             '<pre spellcheck="false"><code>\npayload\n</code></pre>',
         )
 
+    def test_formatting_cleanup_flattens_multiple_code_children_in_pre(self):
+        expected = '<pre spellcheck="false"><code>ab</code></pre>'
+
+        self.assertEqual(
+            apply_formatting_cleanup("<pre><code>a</code><code>b</code></pre>"),
+            expected,
+        )
+        self.assertEqual(apply_formatting_cleanup(expected), expected)
+
+    def test_formatting_cleanup_flattens_mixed_code_children_in_pre(self):
+        expected = '<pre spellcheck="false"><code>prefix a suffix</code></pre>'
+
+        self.assertEqual(
+            apply_formatting_cleanup("<pre>prefix <code>a</code> suffix</pre>"),
+            expected,
+        )
+        self.assertEqual(apply_formatting_cleanup(expected), expected)
+
+    def test_formatting_cleanup_flattens_nested_code_inside_pre(self):
+        self.assertEqual(
+            apply_formatting_cleanup("<pre><code><code>a</code></code></pre>"),
+            '<pre spellcheck="false"><code>a</code></pre>',
+        )
+
     def test_formatting_cleanup_uses_multiline_and_historical_class_block_signals(self):
         self.assertEqual(
             apply_formatting_cleanup("<div><code>line one\nline two</code></div>"),
