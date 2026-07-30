@@ -1,4 +1,5 @@
 /.venv/
+.codex-tmp/
 .idea/
 __pycache__/
 ghostmerge_config.json
