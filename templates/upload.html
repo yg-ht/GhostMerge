@@ -5,12 +5,6 @@
 {% if abandoned_job %}
 <div class="panel">Abandoned merge job {{ abandoned_job }}.</div>
 {% endif %}
-{% if api_check %}
-<div class="panel">
-  <p>Fetched and backed up {{ api_check.record_count }} findings from {{ api_check.server_name }}.</p>
-  <p>Backup file: {{ api_check.backup_filename }}. <a href="{{ url_for('api_backups') }}">Open backup browser</a></p>
-</div>
-{% endif %}
 <section class="panel">
   <h2>Merge jobs</h2>
   {% if previous_jobs %}

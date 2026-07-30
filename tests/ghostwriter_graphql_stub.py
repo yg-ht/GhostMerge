@@ -138,6 +138,19 @@ class GhostwriterGraphQLStub:
 
     def execute(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         """Handle the GraphQL operations used by GhostMerge sync."""
+        if "CountTemplates" in query:
+            return {
+                "finding_aggregate": {"aggregate": {"count": len(self.findings)}},
+                "observation_aggregate": {"aggregate": {"count": len(self.observations)}},
+            }
+        if "CountTemplateIds" in query:
+            return {
+                "finding": self._page(self.findings, {"limit": variables["limit"], "offset": variables["findingOffset"]}),
+                "observation": self._page(
+                    self.observations,
+                    {"limit": variables["limit"], "offset": variables["observationOffset"]},
+                ),
+            }
         if "FetchExtraFieldSpecs" in query:
             return {"extraFieldSpec": copy.deepcopy(self.extra_field_specs)}
         if "SyncPreflight" in query:

@@ -29,7 +29,7 @@
       <button class="secondary" type="submit">Stop</button>
     </form>
     {% endif %}
-    {% if state.status == "done" %}
+    {% if state.status == "done" and state.backup_filename %}
     <a class="button" href="{{ url_for('api_backups') }}">Open backup browser</a>
     {% endif %}
     <a class="button secondary" href="{{ url_for('index') }}">Return to Home</a>

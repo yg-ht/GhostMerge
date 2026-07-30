@@ -3298,7 +3298,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(imported_job.sensitivity_snapshot_version, 1)
         self.assertFalse(imported_job.sensitivity_enabled)
 
-    def test_home_shows_api_fetch_check_for_configured_sources(self):
+    def test_home_shows_api_source_check_for_configured_sources(self):
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(
             {
@@ -3312,8 +3312,7 @@ class FlaskRouteTests(unittest.TestCase):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn(b"Check API source", response.data)
-        self.assertIn(b"Fetch Left Test Ghostwriter", response.data)
+        self.assertIn(b"Check Left Test Ghostwriter", response.data)
         self.assertIn(b'action="/api-sources/left/check"', response.data)
 
     def test_home_defaults_configured_api_sources_in_merge_form(self):
@@ -3380,6 +3379,34 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"API source check status", status.data)
         self.assertIn(b"Queued API source check", status.data)
 
+    def test_historical_source_check_retains_its_backup_link(self):
+        checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
+        checks_dir.mkdir()
+        (checks_dir / "historicalcheck123.json").write_text(
+            json.dumps(
+                {
+                    "check_id": "historicalcheck123",
+                    "side": "left",
+                    "server_name": "Historical Ghostwriter",
+                    "status": "done",
+                    "stage": "complete",
+                    "message": "Fetched and backed up historical templates.",
+                    "complete": 5,
+                    "total": 5,
+                    "record_count": 4,
+                    "observation_count": 1,
+                    "backup_filename": "historical-backup.json",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        status = self.client.get("/api-sources/checks/historicalcheck123/status")
+
+        self.assertEqual(status.status_code, 200)
+        self.assertIn(b"historical-backup.json", status.data)
+        self.assertIn(b"Open backup browser", status.data)
+
     def test_api_fetch_check_reuses_running_source_check(self):
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(
@@ -3400,7 +3427,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(second.status_code, 302)
         self.assertEqual(second.headers["Location"], first.headers["Location"])
 
-    def test_home_fetch_button_links_to_running_source_check(self):
+    def test_home_check_button_links_to_running_source_check(self):
         config = get_config()
         config["ghostwriter_api"]["servers"]["left"].update(
             {
@@ -3417,7 +3444,7 @@ class FlaskRouteTests(unittest.TestCase):
             response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Fetch Left Test Ghostwriter", response.data)
+        self.assertIn(b"Check Left Test Ghostwriter", response.data)
         self.assertIn(check.headers["Location"].encode("utf-8"), response.data)
         self.assertNotIn(b'action="/api-sources/left/check"', response.data)
 
@@ -3448,7 +3475,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"cancelling", stop.data)
         self.assertIn(b"Stop requested", stop.data)
 
-    def test_api_source_check_worker_creates_backup_without_creating_merge_job(self):
+    def test_api_source_check_worker_records_counts_without_fetching_or_backing_up(self):
         config = get_config()
         backup_root = Path(self.tmp_dir.name) / "backups"
         config["ghostwriter_api"]["backup_dir"] = str(backup_root)
@@ -3461,41 +3488,27 @@ class FlaskRouteTests(unittest.TestCase):
             }
         )
 
-        backup_dir = backup_root / "left"
-        backup_dir.mkdir(parents=True)
-        backup_path = backup_dir / "checked-backup.json"
-        backup_data = {
-            "server_side": "left",
-            "server_name": "Left Test Ghostwriter",
-            "graphql_url": "https://left.example/v1/graphql",
-            "created_at": "20260705T000000Z",
-            "record_count": 2,
-            "raw_records": [
-                {"record": {"id": 1, "title": "First"}, "tags": []},
-                {"record": {"id": 2, "title": "Second"}, "tags": []},
-            ],
-            "normalised_records": [record(), record(id="2")],
-        }
-
-        def create_backup(root):
-            backup_path.write_text(json.dumps(backup_data), encoding="utf-8")
-            return backup_path
-
         with patch("web_app.threading.Thread") as thread_class, patch("web_app.GhostwriterApi") as api_class:
             thread_class.return_value.start.return_value = None
-            api_class.return_value.create_backup.side_effect = create_backup
+            api_class.return_value.fetch_template_counts.return_value = {
+                "findings": 2,
+                "observations": 3,
+            }
             response = self.client.post("/api-sources/left/check", data=self.with_csrf(), follow_redirects=False)
             check_id = response.headers["Location"].rsplit("/", 2)[-2]
             _check_api_source(self.app, Path(self.tmp_dir.name), check_id)
 
         status = self.client.get(response.headers["Location"])
         self.assertEqual(status.status_code, 200)
-        self.assertIn(b"Fetched and backed up 2 findings from Left Test Ghostwriter", status.data)
-        self.assertIn(b"Open backup browser", status.data)
+        self.assertIn(
+            b"Connected to Left Test Ghostwriter; found 2 Finding(s) and 3 Observation(s)",
+            status.data,
+        )
+        self.assertIn(b"5 / 5", status.data)
+        self.assertNotIn(b"Open backup browser", status.data)
         self.assertEqual(list_previous_jobs(Path(self.tmp_dir.name)), [])
-        backup_files = list((backup_root / "left").glob("*.json"))
-        self.assertEqual(len(backup_files), 1)
-        api_class.return_value.create_backup.assert_called_once_with(backup_root)
+        self.assertEqual(list(backup_root.glob("**/*.json")), [])
+        api_class.return_value.fetch_template_counts.assert_called_once_with()
 
     def test_api_source_check_worker_honours_stop_request(self):
         config = get_config()
@@ -3512,7 +3525,7 @@ class FlaskRouteTests(unittest.TestCase):
             def __init__(self, server, progress):
                 self.progress = progress
 
-            def create_backup(self, root):
+            def fetch_template_counts(self):
                 self.progress(None)
 
         with patch("web_app.threading.Thread") as thread_class, patch("web_app.GhostwriterApi", CancellableApi):

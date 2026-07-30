@@ -291,6 +291,117 @@ class GhostwriterApi:
             "observations": self.fetch_observations(),
         }
 
+    def fetch_template_counts(self) -> dict[str, int]:
+        """Return current Finding and Observation counts without fetching records."""
+        query = """
+        query CountTemplates {
+          finding_aggregate {
+            aggregate { count }
+          }
+          observation_aggregate {
+            aggregate { count }
+          }
+        }
+        """
+        self.progress(SyncEvent("count", f"Checking {self.server.name}", 0, 0))
+        try:
+            data = self.client.execute(query)
+            counts = {
+                "findings": _parse_template_count(data, "finding_aggregate", "Finding"),
+                "observations": _parse_template_count(data, "observation_aggregate", "Observation"),
+            }
+        except GhostwriterApiError as exc:
+            if "Ghostwriter GraphQL error:" not in str(exc):
+                raise
+            counts = self._fetch_template_counts_by_id()
+
+        total = counts["findings"] + counts["observations"]
+        self.progress(
+            SyncEvent(
+                "count",
+                (
+                    f"Connected to {self.server.name}; found {counts['findings']} Finding(s) "
+                    f"and {counts['observations']} Observation(s)"
+                ),
+                total,
+                total,
+                "done",
+            )
+        )
+        return counts
+
+    def _fetch_template_counts_by_id(self) -> dict[str, int]:
+        """Count IDs when aggregate queries are unavailable to the configured token."""
+        query = """
+        query CountTemplateIds($limit: Int!, $findingOffset: Int!, $observationOffset: Int!) {
+          finding(limit: $limit, offset: $findingOffset, order_by: {id: asc}) { id }
+          observation(limit: $limit, offset: $observationOffset, order_by: {id: asc}) { id }
+        }
+        """
+        limit = 1000
+        counts = {"findings": 0, "observations": 0}
+        offsets = {"findings": 0, "observations": 0}
+        complete = {"findings": False, "observations": False}
+        seen_ids: dict[str, set[str]] = {"findings": set(), "observations": set()}
+
+        while not all(complete.values()):
+            data = self.client.execute(
+                query,
+                {
+                    "limit": limit,
+                    "findingOffset": offsets["findings"],
+                    "observationOffset": offsets["observations"],
+                },
+            )
+            for key, response_key, label in (
+                ("findings", "finding", "Finding"),
+                ("observations", "observation", "Observation"),
+            ):
+                if complete[key]:
+                    continue
+                batch = data.get(response_key)
+                if not isinstance(batch, list):
+                    raise GhostwriterApiError(
+                        f"Ghostwriter did not return a {label} list while checking template counts."
+                    )
+                if not batch:
+                    complete[key] = True
+                    continue
+
+                page_ids = []
+                for item in batch:
+                    record_id = item.get("id") if isinstance(item, dict) else None
+                    if record_id in (None, ""):
+                        raise GhostwriterApiError(
+                            f"Ghostwriter returned a {label} without an ID while checking template counts."
+                        )
+                    page_ids.append(str(record_id))
+
+                if len(set(page_ids)) != len(page_ids) or seen_ids[key].intersection(page_ids):
+                    raise GhostwriterApiError(
+                        f"Ghostwriter returned repeated {label} IDs while checking template counts; "
+                        "pagination did not advance safely."
+                    )
+
+                seen_ids[key].update(page_ids)
+                offsets[key] += len(batch)
+                counts[key] = len(seen_ids[key])
+
+            total = counts["findings"] + counts["observations"]
+            self.progress(
+                SyncEvent(
+                    "count",
+                    (
+                        f"Counting templates on {self.server.name}: "
+                        f"{counts['findings']} Finding(s), {counts['observations']} Observation(s)"
+                    ),
+                    total,
+                    0,
+                )
+            )
+
+        return counts
+
     def fetch_observations(self) -> list[dict[str, Any]]:
         field_types = self.fetch_extra_field_specs()["observation"]
         query = """
@@ -1136,6 +1247,18 @@ def _optional_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_template_count(data: Any, aggregate_key: str, label: str) -> int:
+    """Extract a non-negative aggregate count from a Ghostwriter response."""
+    if not isinstance(data, dict):
+        raise GhostwriterApiError(f"Ghostwriter did not return {label} count data.")
+    aggregate = data.get(aggregate_key)
+    aggregate_fields = aggregate.get("aggregate") if isinstance(aggregate, dict) else None
+    value = aggregate_fields.get("count") if isinstance(aggregate_fields, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise GhostwriterApiError(f"Ghostwriter did not return a valid {label} count.")
+    return value
 
 
 def _extra_fields(value: Any, last_synced_at: Optional[str] = None) -> dict[str, Any]:
