@@ -1007,22 +1007,24 @@ def _check_api_source(app: Flask, jobs_dir: Path, check_id: str) -> None:
                 )
                 _save_api_source_check_state(jobs_dir, check_id, current)
 
-            backup_path = GhostwriterApi(server, progress=update).create_backup(backup_root_from_config(CONFIG))
-            backup = verify_backup(backup_path)
+            counts = GhostwriterApi(server, progress=update).fetch_template_counts()
+            findings_count = counts["findings"]
+            observations_count = counts["observations"]
+            total_count = findings_count + observations_count
             state = _load_api_source_check_state(jobs_dir, check_id)
             state.update(
                 {
                     "status": "done",
                     "stage": "complete",
                     "message": (
-                        f"Fetched and backed up {backup['record_count']} findings from {server.name} "
-                        f"and {backup.get('observation_count', 0)} observations."
+                        f"Connected to {server.name}; found {findings_count} Finding(s) "
+                        f"and {observations_count} Observation(s)."
                     ),
-                    "complete": backup["record_count"] + backup.get("observation_count", 0),
-                    "total": backup["record_count"] + backup.get("observation_count", 0),
-                    "backup_filename": backup_path.name,
-                    "record_count": backup["record_count"],
-                    "observation_count": backup.get("observation_count", 0),
+                    "complete": total_count,
+                    "total": total_count,
+                    "backup_filename": None,
+                    "record_count": findings_count,
+                    "observation_count": observations_count,
                 }
             )
             _save_api_source_check_state(jobs_dir, check_id, state)

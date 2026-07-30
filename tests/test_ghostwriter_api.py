@@ -17,7 +17,11 @@ from ghostwriter_api import (
     load_server_configs,
     verify_backup,
 )
-from ghostwriter_graphql_stub import ghostwriter_finding_record, running_ghostwriter_stub
+from ghostwriter_graphql_stub import (
+    ghostwriter_finding_record,
+    ghostwriter_observation_record,
+    running_ghostwriter_stub,
+)
 
 
 def server_config(**overrides):
@@ -77,6 +81,7 @@ class FakeGraphQLClient:
         finding_extra_fields=None,
         observation_extra_fields=None,
         fail_extra_field_specs=False,
+        fail_template_aggregates=False,
     ):
         self.calls = []
         self.deleted_ids = []
@@ -92,10 +97,23 @@ class FakeGraphQLClient:
         self.finding_extra_fields = dict(finding_extra_fields or {})
         self.observation_extra_fields = dict(observation_extra_fields or {})
         self.fail_extra_field_specs = fail_extra_field_specs
+        self.fail_template_aggregates = fail_template_aggregates
 
     def execute(self, query, variables=None):
         variables = variables or {}
         self.calls.append((query, variables))
+        if "CountTemplates" in query:
+            if self.fail_template_aggregates:
+                raise GhostwriterApiError("Ghostwriter GraphQL error: aggregate fields are unavailable")
+            return {
+                "finding_aggregate": {"aggregate": {"count": 1}},
+                "observation_aggregate": {"aggregate": {"count": 1}},
+            }
+        if "CountTemplateIds" in query:
+            return {
+                "finding": [{"id": 99}] if variables.get("findingOffset", 0) == 0 else [],
+                "observation": [{"id": 77}] if variables.get("observationOffset", 0) == 0 else [],
+            }
         if "FetchExtraFieldSpecs" in query:
             if self.fail_extra_field_specs:
                 raise GhostwriterApiError("extraFieldSpec is unavailable")
@@ -233,6 +251,102 @@ class FakeUrlResponse:
 
 
 class GhostwriterApiTests(unittest.TestCase):
+    def test_fetch_template_counts_uses_one_aggregate_query(self):
+        client = FakeGraphQLClient()
+        events = []
+
+        counts = GhostwriterApi(server_config(), client=client, progress=events.append).fetch_template_counts()
+
+        self.assertEqual(counts, {"findings": 1, "observations": 1})
+        self.assertEqual(len(client.calls), 1)
+        self.assertIn("CountTemplates", client.calls[0][0])
+        self.assertEqual(events[-1].complete, 2)
+        self.assertEqual(events[-1].total, 2)
+        self.assertEqual(events[-1].status, "done")
+
+    def test_fetch_template_counts_falls_back_to_id_only_query(self):
+        client = FakeGraphQLClient(fail_template_aggregates=True)
+
+        counts = GhostwriterApi(server_config(), client=client).fetch_template_counts()
+
+        self.assertEqual(counts, {"findings": 1, "observations": 1})
+        self.assertEqual(len(client.calls), 2)
+        self.assertIn("CountTemplates", client.calls[0][0])
+        self.assertIn("CountTemplateIds", client.calls[1][0])
+        self.assertNotIn("FetchFindings", client.calls[1][0])
+        self.assertNotIn("Tags(", client.calls[1][0])
+
+    def test_fetch_template_counts_fallback_paginates_large_collections(self):
+        class PaginatedCountClient:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, query, variables=None):
+                variables = variables or {}
+                self.calls.append((query, variables))
+                if "CountTemplates" in query:
+                    raise GhostwriterApiError("Ghostwriter GraphQL error: aggregate fields are unavailable")
+                finding_offset = variables["findingOffset"]
+                observation_offset = variables["observationOffset"]
+                return {
+                    "finding": [
+                        {"id": index}
+                        for index in range(finding_offset, min(finding_offset + 1000, 1001))
+                    ],
+                    "observation": [
+                        {"id": index}
+                        for index in range(observation_offset, min(observation_offset + 1000, 2))
+                    ],
+                }
+
+        client = PaginatedCountClient()
+
+        counts = GhostwriterApi(server_config(), client=client).fetch_template_counts()
+
+        self.assertEqual(counts, {"findings": 1001, "observations": 2})
+        self.assertEqual(len(client.calls), 3)
+        self.assertEqual(client.calls[-1][1]["findingOffset"], 1000)
+
+    def test_fetch_template_counts_does_not_retry_connectivity_errors(self):
+        class UnreachableClient:
+            def __init__(self):
+                self.calls = 0
+
+            def execute(self, query, variables=None):
+                self.calls += 1
+                raise GhostwriterApiError("Ghostwriter connection failed: timed out")
+
+        client = UnreachableClient()
+
+        with self.assertRaisesRegex(GhostwriterApiError, "connection failed"):
+            GhostwriterApi(server_config(), client=client).fetch_template_counts()
+
+        self.assertEqual(client.calls, 1)
+
+    def test_fetch_template_counts_over_http_returns_only_aggregate_counts(self):
+        with running_ghostwriter_stub(
+            bearer_token="integration-token",
+            findings=[
+                ghostwriter_finding_record(1, "First"),
+                ghostwriter_finding_record(2, "Second"),
+            ],
+            observations=[ghostwriter_observation_record(3, "Observation")],
+        ) as server:
+            api = GhostwriterApi(
+                server_config(
+                    graphql_url=server.graphql_url,
+                    bearer_token="integration-token",
+                )
+            )
+
+            counts = api.fetch_template_counts()
+
+        self.assertEqual(counts, {"findings": 2, "observations": 1})
+        self.assertEqual(len(server.requests), 1)
+        self.assertIn("CountTemplates", server.requests[0]["query"])
+        self.assertNotIn("FetchFindings", server.requests[0]["query"])
+        self.assertNotIn("Tags(", server.requests[0]["query"])
+
     @patch.dict(
         get_config(),
         {
