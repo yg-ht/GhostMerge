@@ -40,7 +40,7 @@
     <dt>Message</dt><dd>{{ state.message|default("Queued") }}</dd>
   </dl>
   {% if state.status == "running" %}
-  <meta http-equiv="refresh" content="2">
+  <meta http-equiv="refresh" content="1">
   {% endif %}
   <div class="actions">
     {% if state.status == "done" and state.job_id %}

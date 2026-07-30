@@ -3336,6 +3336,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Validate Cleanup", response.data)
         self.assertNotIn(b"validate_cleanup", response.data)
+        self.assertIn(b'<meta http-equiv="refresh" content="1">', response.data)
 
     def test_live_sync_rejects_missing_csrf_token(self):
         jobs_dir = Path(self.tmp_dir.name)
@@ -3413,7 +3414,8 @@ class FlaskRouteTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        response = self.client.get("/imports/importprogress123/status")
+        with patch("web_app._ACTIVE_API_IMPORTS", {"importprogress123"}):
+            response = self.client.get("/imports/importprogress123/status")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Inbound API import status", response.data)
@@ -3425,6 +3427,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Records fetched", response.data)
         self.assertIn(b"42 records fetched in the current API step", response.data)
         self.assertIn(b"No previous template-count estimate is available", response.data)
+        self.assertIn(b'<meta http-equiv="refresh" content="1">', response.data)
 
     def test_api_import_status_separates_finding_and_observation_estimates(self):
         checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
