@@ -12,6 +12,18 @@ LEVEL_ORDER = ["DEBUG", "INFO", "WARN", "ERROR"]
 # content. Comparing it would make otherwise equivalent records appear to
 # conflict after each side was synchronised at a different time.
 COMPARISON_IGNORED_EXTRA_FIELD_KEYS = frozenset({"ghostmerge_last_synced_at"})
+RICH_TEXT_FIELD_NAMES = frozenset(
+    {
+        "description",
+        "impact",
+        "mitigation",
+        "replication_steps",
+        "host_detection_techniques",
+        "network_detection_techniques",
+        "finding_guidance",
+        "extra_fields",
+    }
+)
 
 
 class Aborting(Exception):
@@ -306,8 +318,43 @@ def setup_signal_handlers():
     signal.signal(signal.SIGTERM, handle_exit)
 
 # ── Data Utilities ──────────────────────────────────────────────────
+def _transform_outside_code_elements(input_string: str, transform: Any) -> str:
+    """Apply a string transform without changing complete pre/code elements.
+
+    Code contents can contain meaningful tabs, repeated spaces, non-breaking
+    spaces, and whitespace between formatting marks. Protect complete elements
+    before generic cosmetic whitespace cleanup. Malformed elements are not
+    matched and therefore remain subject to the existing best-effort behaviour.
+    """
+    protected_fragments: list[str] = []
+    placeholder_prefix = "\x00GHOSTMERGE_CODE_"
+    while placeholder_prefix in input_string:
+        placeholder_prefix += "_"
+
+    code_element_pattern = re.compile(
+        r"<\s*(pre|code)\b[^<>]*>.*?<\s*/\s*\1\s*>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    def protect(match: Any) -> str:
+        index = len(protected_fragments)
+        protected_fragments.append(match.group(0))
+        return f"{placeholder_prefix}{index}\x00"
+
+    protected = code_element_pattern.sub(protect, input_string)
+    transformed = transform(protected)
+
+    for index, fragment in enumerate(protected_fragments):
+        transformed = transformed.replace(f"{placeholder_prefix}{index}\x00", fragment)
+
+    return transformed
+
+
 def remove_double_spaces_from_string(input_string: str) -> str:
-    result = re.sub(r' {2,}', ' ', input_string)
+    result = _transform_outside_code_elements(
+        input_string,
+        lambda value: re.sub(r' {2,}', ' ', value),
+    )
     if result != input_string:
         log("DEBUG", "Whitespace runs collapsed", prefix="UTILS")
     else:
@@ -341,27 +388,48 @@ def _normalise_sensitive_term_for_matching(term: str) -> str:
 
     return normalised
 
-def apply_configured_normalisation(value: Any) -> Any:
+def apply_configured_normalisation(value: Any, repair_flattened_code_blocks: bool = True) -> Any:
     """
     Apply configured normalisation recursively to strings, lists, and dictionaries.
     Non-string scalar values are returned unchanged.
     """
     if isinstance(value, str):
-        return apply_configured_string_normalisation(value)
+        return apply_configured_string_normalisation(
+            value,
+            repair_flattened_code_blocks=repair_flattened_code_blocks,
+        )
     if isinstance(value, list):
-        return [apply_configured_normalisation(item) for item in value]
+        return [
+            apply_configured_normalisation(
+                item,
+                repair_flattened_code_blocks=repair_flattened_code_blocks,
+            )
+            for item in value
+        ]
     if isinstance(value, tuple):
-        return tuple(apply_configured_normalisation(item) for item in value)
+        return tuple(
+            apply_configured_normalisation(
+                item,
+                repair_flattened_code_blocks=repair_flattened_code_blocks,
+            )
+            for item in value
+        )
     if isinstance(value, dict):
         return {
-            key: apply_configured_normalisation(item)
+            key: apply_configured_normalisation(
+                item,
+                repair_flattened_code_blocks=repair_flattened_code_blocks,
+            )
             for key, item in value.items()
         }
     return value
 
 def normalise_unicode_whitespace(input_string: str) -> str:
-    """Normalise common invisible whitespace that creates cosmetic diffs."""
-    normalised = input_string.replace("\xa0", " ").replace("\t", " ")
+    """Normalise cosmetic whitespace outside whitespace-sensitive code."""
+    normalised = _transform_outside_code_elements(
+        input_string,
+        lambda value: value.replace("\xa0", " ").replace("\t", " "),
+    )
     if normalised != input_string:
         log("DEBUG", "Unicode whitespace normalised", prefix="UTILS")
     return normalised
@@ -421,7 +489,10 @@ def normalise_cvss_vector(input_string: str) -> str:
 
 def apply_configured_field_normalisation(field_name: str, value: Any) -> Any:
     """Apply generic and field-specific normalisation for import/merge records."""
-    normalised = apply_configured_normalisation(value)
+    normalised = apply_configured_normalisation(
+        value,
+        repair_flattened_code_blocks=field_name in RICH_TEXT_FIELD_NAMES,
+    )
 
     if not isinstance(normalised, str):
         return normalised
@@ -517,10 +588,6 @@ def normalise_html_tag_spacing(input_string: str) -> str:
         r'<\1\2>',
         normalised,
     )
-
-    # Normalise single spaces or newlines between adjacent tags.
-    normalised = re.sub(r'>[ \t]+<', '><', normalised)
-    normalised = re.sub(r'>\n+<', '><', normalised)
 
     # A trailing semicolon in an inline style attribute is not semantically meaningful.
     normalised = re.sub(r'(style="[^"]*?);+"', r'\1"', normalised)
@@ -739,46 +806,80 @@ def _html_tag_is_balanced(input_string: str, tag_name: str) -> bool:
 
     return depth == 0
 
-def _normalise_redundant_code_wrappers(input_string: str) -> str:
-    """Collapse a code wrapper whose only meaningful child is another code tag.
+def _code_has_block_class(code_tag: Any) -> bool:
+    """Return whether a code tag retains a historical code-block class."""
+    classes = code_tag.attrs.get("class", [])
+    if isinstance(classes, str):
+        classes = classes.split()
+    return any(
+        css_class in {"rich-code", "text-evidence"}
+        or str(css_class).lower().startswith(("language-", "lang-"))
+        for css_class in classes
+    )
 
-    The default pre-to-code rule can encounter editor markup shaped as
-    ``<pre><code>...</code></pre>``. Once both configured rules have run, that
-    becomes invalid, redundant ``code > code`` markup. Only this narrow shape is
-    collapsed; sibling text and additional child elements retain their original
-    structure.
+
+def _code_is_recoverable_block(
+    code_tag: Any,
+    soup: BeautifulSoup,
+    repair_flattened_code_blocks: bool,
+) -> bool:
+    """Identify a code element that GhostMerge previously flattened from pre.
+
+    Ghostwriter's TinyMCE and TipTap editors both emit code blocks as root-level
+    block nodes. Inline code remains inside a paragraph, list item, heading,
+    table cell, or another phrasing container. GhostMerge changed the tag name
+    but did not move the element, so that parent context remains available.
     """
-    opening_tags = re.findall(r"<\s*code\b[^<>]*?>", input_string, flags=re.IGNORECASE)
-    if len(opening_tags) < 2 or not _html_tag_is_balanced(input_string, "code"):
-        return input_string
+    if code_tag.find_parent("pre") is not None:
+        return False
+    if not repair_flattened_code_blocks:
+        return False
+    if code_tag.parent is soup:
+        return True
+    if _code_has_block_class(code_tag):
+        return True
+    if "\n" in code_tag.get_text() or code_tag.find("br") is not None:
+        return True
+    return False
 
-    soup = BeautifulSoup(input_string, "html.parser")
-    changed = False
 
-    # Work from the innermost element outwards. This repairs repeated historical
-    # nesting in one pass without repeatedly rescanning potentially hostile HTML.
+def _move_children(source: Any, destination: Any) -> None:
+    """Move all children from one BeautifulSoup tag to another in order."""
+    for child in list(source.contents):
+        destination.append(child.extract())
+
+
+def _flatten_redundant_code_children(soup: BeautifulSoup) -> None:
+    """Repair a flattened block represented as code containing only code.
+
+    Older GhostMerge output could contain this intermediate structure before a
+    later pass collapsed it. Restrict the repair to code outside pre with one
+    code child and whitespace-only siblings so meaningful nested inline code is
+    left intact.
+    """
     for outer_code in reversed(soup.find_all("code")):
+        if outer_code.find_parent("pre") is not None:
+            continue
+
         direct_children = list(outer_code.children)
-        inner_code_tags = [
+        direct_code_tags = [
             child
             for child in direct_children
             if not isinstance(child, NavigableString) and getattr(child, "name", None) == "code"
         ]
-        if len(inner_code_tags) != 1:
+        if len(direct_code_tags) != 1:
             continue
 
-        inner_code = inner_code_tags[0]
-        non_wrapper_content = [
+        inner_code = direct_code_tags[0]
+        other_meaningful_content = [
             child
             for child in direct_children
             if child is not inner_code
             and (not isinstance(child, NavigableString) or str(child).strip())
         ]
-        if non_wrapper_content:
+        if other_meaningful_content:
             continue
 
-        # Whitespace around the inner element is code content. Move it inside
-        # the retained element rather than silently discarding it.
         inner_index = direct_children.index(inner_code)
         leading_whitespace = "".join(str(child) for child in direct_children[:inner_index])
         trailing_whitespace = "".join(str(child) for child in direct_children[inner_index + 1:])
@@ -787,37 +888,121 @@ def _normalise_redundant_code_wrappers(input_string: str) -> str:
         if trailing_whitespace:
             inner_code.append(NavigableString(trailing_whitespace))
 
-        # Prefer the more specific inner attributes while retaining any
-        # non-conflicting attributes placed on the generated outer wrapper.
-        merged_attrs = dict(outer_code.attrs)
-        merged_attrs.update(inner_code.attrs)
-        if "class" in outer_code.attrs and "class" in inner_code.attrs:
-            outer_value = outer_code.attrs["class"]
-            inner_value = inner_code.attrs["class"]
-            outer_classes = (
-                list(outer_value)
-                if isinstance(outer_value, (list, tuple))
-                else str(outer_value).split()
-            )
-            inner_classes = (
-                list(inner_value)
-                if isinstance(inner_value, (list, tuple))
-                else str(inner_value).split()
-            )
-            merged_attrs["class"] = sorted(set(outer_classes + inner_classes))
-        inner_code.attrs = merged_attrs
+        merged_classes: list[str] = []
+        for tag in (outer_code, inner_code):
+            classes = tag.attrs.get("class", [])
+            if isinstance(classes, str):
+                classes = classes.split()
+            merged_classes.extend(str(item) for item in classes)
+        if merged_classes:
+            inner_code.attrs["class"] = sorted(set(merged_classes))
 
-        # Extract before replacing the parent so BeautifulSoup does not retain
-        # the element in both locations during tree mutation.
         inner_code.extract()
         outer_code.replace_with(inner_code)
+
+
+def normalise_code_markup(
+    input_string: str,
+    repair_flattened_code_blocks: bool = True,
+) -> str:
+    """Canonicalise Ghostwriter code markup and repair flattened code blocks.
+
+    Current Ghostwriter serialises blocks as
+    ``<pre spellcheck="false"><code>…</code></pre>`` and inline code as
+    ``<code>…</code>``. Older GhostMerge versions flattened every pre element to
+    code and added spellcheck attributes to inline code. Root position, retained
+    historical classes, and multiline content provide conservative evidence for
+    reversing that damage without treating nested inline code as a block.
+    """
+    if not re.search(r"<\s*(?:pre|code)\b", input_string, flags=re.IGNORECASE):
+        return input_string
+
+    # Do not let BeautifulSoup's recovery behaviour hide malformed source.
+    for tag_name in ("pre", "code"):
+        if not _html_tag_is_balanced(input_string, tag_name):
+            log("WARN", f"Skipped code markup repair because {tag_name} tags are unbalanced", prefix="UTILS")
+            return input_string
+
+    soup = BeautifulSoup(input_string, "html.parser")
+    changed = False
+
+    # Canonicalise surviving old/current block forms before examining flattened
+    # top-level code elements. Move whitespace around a sole code child inside
+    # that child because it is code content, not cosmetic wrapper indentation.
+    for pre_tag in soup.find_all("pre"):
+        direct_children = list(pre_tag.children)
+        direct_code_tags = [
+            child
+            for child in direct_children
+            if not isinstance(child, NavigableString) and getattr(child, "name", None) == "code"
+        ]
+        other_meaningful_content = [
+            child
+            for child in direct_children
+            if child not in direct_code_tags
+            and (not isinstance(child, NavigableString) or str(child).strip())
+        ]
+        if len(direct_code_tags) == 1 and not other_meaningful_content:
+            code_tag = direct_code_tags[0]
+            code_index = direct_children.index(code_tag)
+            leading_whitespace = "".join(str(child) for child in direct_children[:code_index])
+            trailing_whitespace = "".join(str(child) for child in direct_children[code_index + 1:])
+            for child in direct_children:
+                if isinstance(child, NavigableString):
+                    child.extract()
+            if leading_whitespace:
+                code_tag.insert(0, NavigableString(leading_whitespace))
+            if trailing_whitespace:
+                code_tag.append(NavigableString(trailing_whitespace))
+        else:
+            code_tag = soup.new_tag("code")
+            _move_children(pre_tag, code_tag)
+            pre_tag.append(code_tag)
+
+        if pre_tag.attrs != {"spellcheck": "false"}:
+            pre_tag.attrs = {"spellcheck": "false"}
+            changed = True
+        if code_tag.attrs:
+            code_tag.attrs = {}
+            changed = True
+
+    _flatten_redundant_code_children(soup)
+
+    for code_tag in list(soup.find_all("code")):
+        if code_tag.find_parent("pre") is not None:
+            continue
+
+        if _code_is_recoverable_block(code_tag, soup, repair_flattened_code_blocks):
+            pre_tag = soup.new_tag("pre", attrs={"spellcheck": "false"})
+            code_tag.attrs = {}
+            code_tag.replace_with(pre_tag)
+            pre_tag.append(code_tag)
+            changed = True
+            continue
+
+        cleaned_attrs = {
+            key: value
+            for key, value in code_tag.attrs.items()
+            if str(key).lower() not in {"spellcheck", "data-end", "start"}
+        }
+        if "class" in cleaned_attrs:
+            classes = cleaned_attrs["class"]
+            if isinstance(classes, str):
+                classes = classes.split()
+            cleaned_attrs["class"] = sorted(str(item) for item in classes)
+        if cleaned_attrs != code_tag.attrs:
+            code_tag.attrs = cleaned_attrs
+            changed = True
+
+    canonical = str(soup)
+    if canonical != input_string:
         changed = True
 
     if not changed:
         return input_string
 
-    log("DEBUG", "Collapsed redundant nested code wrapper(s)", prefix="UTILS")
-    return str(soup)
+    log("DEBUG", "Canonicalised Ghostwriter code markup", prefix="UTILS")
+    return canonical
 
 def _iter_formatting_cleanup_rules() -> list[dict[str, Any]]:
     """Return validated formatting cleanup rules from config."""
@@ -867,7 +1052,10 @@ def _iter_formatting_cleanup_rules() -> list[dict[str, Any]]:
 
     return validated_rules
 
-def apply_formatting_cleanup(input_string: str) -> str:
+def apply_formatting_cleanup(
+    input_string: str,
+    repair_flattened_code_blocks: bool = True,
+) -> str:
     """Rewrite configured deprecated formatting HTML before review decisions.
 
     This is intentionally separate from sensitive-term processing. Formatting
@@ -880,9 +1068,13 @@ def apply_formatting_cleanup(input_string: str) -> str:
     if "<" not in input_string or ">" not in input_string:
         return input_string
 
+    normalised_input = normalise_code_markup(
+        input_string,
+        repair_flattened_code_blocks=repair_flattened_code_blocks,
+    )
     rules = _iter_formatting_cleanup_rules()
     if not rules:
-        return input_string
+        return normalised_input
 
     replacements: list[tuple[int, int, str]] = []
 
@@ -892,7 +1084,7 @@ def apply_formatting_cleanup(input_string: str) -> str:
             flags=re.IGNORECASE,
         )
 
-        for match in opening_pattern.finditer(input_string):
+        for match in opening_pattern.finditer(normalised_input):
             opening_tag = match.group(0)
             if re.search(r"/\s*>$", opening_tag):
                 continue
@@ -901,10 +1093,10 @@ def apply_formatting_cleanup(input_string: str) -> str:
             if attrs is None or not _configured_attrs_match(attrs, rule["attrs"]):
                 continue
 
-            if not _formatting_parent_matches(input_string, match.start(), rule):
+            if not _formatting_parent_matches(normalised_input, match.start(), rule):
                 continue
 
-            closing_span = _find_matching_html_closing_tag(input_string, match.end(), rule["tag"])
+            closing_span = _find_matching_html_closing_tag(normalised_input, match.end(), rule["tag"])
 
             if rule["action"] == "unwrap":
                 replacements.append((match.start(), match.end(), ""))
@@ -947,17 +1139,25 @@ def apply_formatting_cleanup(input_string: str) -> str:
             if start < cursor:
                 continue
 
-            result_parts.append(input_string[cursor:start])
+            result_parts.append(normalised_input[cursor:start])
             result_parts.append(replacement)
             cursor = end
             applied += 1
 
-        result_parts.append(input_string[cursor:])
-        normalised_result = _normalise_redundant_code_wrappers("".join(result_parts).strip())
+        result_parts.append(normalised_input[cursor:])
+        normalised_result = "".join(result_parts)
         log("DEBUG", f"Applied {applied} configured formatting cleanup replacement(s)", prefix="UTILS")
-        return normalise_html_tag_spacing(normalised_result)
+        # Older local configs may still contain the retired pre-to-code and
+        # code-spellcheck rules. Reassert the structural contract afterwards so
+        # those copied rules cannot flatten blocks or contaminate inline code.
+        return normalise_html_tag_spacing(
+            normalise_code_markup(
+                normalised_result,
+                repair_flattened_code_blocks=repair_flattened_code_blocks,
+            )
+        )
 
-    return input_string
+    return normalised_input
 
 def _normalise_list_item_paragraph_wrappers(soup: BeautifulSoup) -> None:
     """Unwrap redundant single paragraph wrappers inside list items.
@@ -1039,8 +1239,9 @@ def remove_pointless_html_tags(input_string: str) -> str:
     }
 
     for tag in reversed(all_tags):
-        # Never treat void elements as pointless
-        if tag.name in void_elements:
+        # Never treat void or code-structure elements as pointless. An empty code
+        # wrapper still carries the distinction between inline and block content.
+        if tag.name in void_elements or tag.name in {"pre", "code"}:
             continue
 
         # If the tag has any child elements, it is not considered pointless
@@ -1081,14 +1282,6 @@ def normalise_line_endings(input_string: str) -> str:
         log("DEBUG", "Found MacOS line endings that need to be normalised", prefix="UTILS")
         normalised = normalised.replace("\r", "\n")
 
-    if ">\n<" in normalised:
-        log("DEBUG", "Found line endings between HTML tags that need to be removed", prefix="UTILS")
-        normalised = normalised.replace(">\n<", "><")
-
-    if "> <" in normalised:
-        log("DEBUG", "Found single spaces between HTML tags that need to be removed", prefix="UTILS")
-        normalised = normalised.replace("> <", "><")
-
     normalised = normalise_html_tag_spacing(normalised)
 
     if normalised == input_string:
@@ -1096,7 +1289,10 @@ def normalise_line_endings(input_string: str) -> str:
 
     return normalised
 
-def apply_configured_string_normalisation(input_string: str) -> str:
+def apply_configured_string_normalisation(
+    input_string: str,
+    repair_flattened_code_blocks: bool = True,
+) -> str:
     """
     Apply every string-level normalisation enabled in config.
 
@@ -1106,6 +1302,14 @@ def apply_configured_string_normalisation(input_string: str) -> str:
     so comparisons are always made against these configured normalised values.
     """
     normalised = input_string
+
+    # Repair code structure before generic whitespace cleanup so already-damaged
+    # blocks and valid inline code are both protected from further content loss.
+    if CONFIG.get('formatting_cleanup_enabled', False):
+        normalised = apply_formatting_cleanup(
+            normalised,
+            repair_flattened_code_blocks=repair_flattened_code_blocks,
+        )
 
     if CONFIG.get('normalise_unicode_whitespace', True):
         normalised = normalise_unicode_whitespace(normalised)
@@ -1121,9 +1325,6 @@ def apply_configured_string_normalisation(input_string: str) -> str:
         if stripped != normalised:
             log("DEBUG", "Leading or trailing whitespace stripped", prefix="UTILS")
         normalised = stripped
-
-    if CONFIG.get('formatting_cleanup_enabled', False):
-        normalised = apply_formatting_cleanup(normalised)
 
     if CONFIG.get('remove_pointless_html_tags', False):
         normalised = remove_pointless_html_tags(normalised)
