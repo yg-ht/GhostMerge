@@ -1,4 +1,6 @@
 (() => {
+  let reviewInFlight = false;
+
   function isTypingTarget(element) {
     if (!element) {
       return false;
@@ -8,6 +10,9 @@
   }
 
   document.addEventListener("keydown", (event) => {
+    if (event.repeat || reviewInFlight) {
+      return;
+    }
     const activeElement = document.activeElement;
     const enterOnRadio =
       event.key === "Enter" && activeElement instanceof HTMLInputElement && activeElement.type === "radio";
@@ -121,5 +126,29 @@
       });
     }
     syncSelectedClass();
+  });
+
+  document.querySelectorAll("[data-review-form]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      if (reviewInFlight || form.getAttribute("aria-busy") === "true") {
+        event.preventDefault();
+        return;
+      }
+      reviewInFlight = true;
+      form.setAttribute("aria-busy", "true");
+      const status = document.createElement("p");
+      status.className = "review-busy-status";
+      status.setAttribute("role", "status");
+      status.textContent = form.dataset.busyMessage || "Working…";
+      form.appendChild(status);
+    });
+  });
+
+  window.addEventListener("pageshow", () => {
+    reviewInFlight = false;
+    document.querySelectorAll("[data-review-form][aria-busy='true']").forEach((form) => {
+      form.removeAttribute("aria-busy");
+      form.querySelectorAll(".review-busy-status").forEach((status) => status.remove());
+    });
   });
 })();

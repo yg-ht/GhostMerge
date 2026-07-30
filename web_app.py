@@ -7,6 +7,8 @@ import secrets
 import shutil
 import threading
 import uuid
+import fcntl
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -27,6 +29,7 @@ from globals import get_config
 from sensitivity import load_sensitive_terms, sensitive_terms_digest
 from utils import load_config
 from web_service import (
+    StaleReviewSubmission,
     WebMergeError,
     approve_output_preview,
     acknowledge_sensitivity_review,
@@ -38,6 +41,8 @@ from web_service import (
     apply_sensitivity_decision,
     create_manual_match,
     create_merge_job,
+    consume_review_action_token,
+    ensure_review_action_token,
     finalised_job_result,
     get_active_conflict_position,
     get_current_match_preview,
@@ -242,218 +247,269 @@ def create_app(test_config: dict | None = None) -> Flask:
     @app.get("/jobs/<job_id>/conflicts")
     def conflicts(job_id: str):
         try:
-            job = load_job(jobs_dir, job_id)
-            initial_conflict_kind, initial_match_index = get_active_conflict_position(job)
-            if not job.preview_acknowledged:
-                preview = get_current_match_preview(job)
-                save_job(job, jobs_dir)
-                if preview is not None:
-                    return render_template(
-                        "match_preview.html",
-                        job=job,
-                        preview=preview,
-                        source_labels=_source_identity_labels(job),
-                        progress=_review_progress(job),
-                    )
-            item = get_next_conflict(job)
-            save_job(job, jobs_dir)
-            if item is None:
-                orphan_prompt = get_orphan_reprocessing_prompt(job)
-                if orphan_prompt is not None:
-                    return render_template(
-                        "orphan_reprocessing.html",
-                        job=job,
-                        orphan_prompt=orphan_prompt,
-                        source_labels=_source_identity_labels(job),
-                        progress=_review_progress(job),
-                    )
-                manual_prompt = get_manual_matching_prompt(job)
-                if manual_prompt is not None:
+            with _job_state_lock(jobs_dir, job_id):
+                job = load_job(jobs_dir, job_id)
+                initial_conflict_kind, initial_match_index = get_active_conflict_position(job)
+                if not job.preview_acknowledged:
+                    preview = get_current_match_preview(job)
+                    if preview is not None:
+                        ensure_review_action_token(job)
                     save_job(job, jobs_dir)
-                    return render_template(
-                        "manual_matching.html",
-                        job=job,
-                        manual_prompt=manual_prompt,
-                        source_labels=_source_identity_labels(job),
-                        progress=_review_progress(job),
-                    )
-                return redirect(url_for("sensitivity", job_id=job.job_id))
-            if not job.preview_acknowledged and (
-                item.template_type != initial_conflict_kind or item.match_index != initial_match_index
-            ):
-                reset_match_to_preview(job, item.template_type, item.match_index)
-                preview = get_current_match_preview(job)
+                    if preview is not None:
+                        return render_template(
+                            "match_preview.html",
+                            job=job,
+                            preview=preview,
+                            source_labels=_source_identity_labels(job),
+                            progress=_review_progress(job),
+                        )
+                item = get_next_conflict(job)
+                if item is not None:
+                    ensure_review_action_token(job)
                 save_job(job, jobs_dir)
-                if preview is not None:
-                    return render_template(
-                        "match_preview.html",
-                        job=job,
-                        preview=preview,
-                        source_labels=_source_identity_labels(job),
-                        progress=_review_progress(job),
-                    )
-                return redirect(url_for("conflicts", job_id=job.job_id))
-            return render_template(
-                "conflict.html",
-                job=job,
-                item=item,
-                source_labels=_source_identity_labels(job),
-                progress=_review_progress(job),
-            )
+                if item is None:
+                    orphan_prompt = get_orphan_reprocessing_prompt(job)
+                    if orphan_prompt is not None:
+                        ensure_review_action_token(job)
+                        save_job(job, jobs_dir)
+                        return render_template(
+                            "orphan_reprocessing.html",
+                            job=job,
+                            orphan_prompt=orphan_prompt,
+                            source_labels=_source_identity_labels(job),
+                            progress=_review_progress(job),
+                        )
+                    manual_prompt = get_manual_matching_prompt(job)
+                    if manual_prompt is not None:
+                        save_job(job, jobs_dir)
+                        return render_template(
+                            "manual_matching.html",
+                            job=job,
+                            manual_prompt=manual_prompt,
+                            source_labels=_source_identity_labels(job),
+                            progress=_review_progress(job),
+                        )
+                    return redirect(url_for("sensitivity", job_id=job.job_id))
+                if not job.preview_acknowledged and (
+                    item.template_type != initial_conflict_kind or item.match_index != initial_match_index
+                ):
+                    reset_match_to_preview(job, item.template_type, item.match_index)
+                    preview = get_current_match_preview(job)
+                    if preview is not None:
+                        ensure_review_action_token(job)
+                    save_job(job, jobs_dir)
+                    if preview is not None:
+                        return render_template(
+                            "match_preview.html",
+                            job=job,
+                            preview=preview,
+                            source_labels=_source_identity_labels(job),
+                            progress=_review_progress(job),
+                        )
+                    return redirect(url_for("conflicts", job_id=job.job_id))
+                return render_template(
+                    "conflict.html",
+                    job=job,
+                    item=item,
+                    source_labels=_source_identity_labels(job),
+                    progress=_review_progress(job),
+                )
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
     @app.post("/jobs/<job_id>/conflicts")
     def apply_conflict(job_id: str):
         try:
-            job = load_job(jobs_dir, job_id)
-            if request.form.get("preview_action") == "continue":
-                acknowledge_current_preview(job)
-            elif request.form.get("preview_action") == "accept_offered":
-                accept_offered_for_current_match(job)
-            elif request.form.get("preview_action") == "accept_selected_offered":
-                accept_offered_fields_for_current_match(job, request.form.getlist("selected_fields"))
-            elif request.form.get("preview_action") == "apply_field_choices":
-                apply_preview_field_choices(job, _preview_field_choices_from_form(request.form))
-            elif request.form.get("preview_action") == "reject_match":
-                reject_current_match(job)
-            elif request.form.get("preview_action") == "reprocess_orphans":
-                reprocess_orphans_for_current_kind(job)
-            elif request.form.get("preview_action") == "stop_orphan_reprocessing":
-                stop_orphan_reprocessing_for_current_kind(job)
-            elif request.form.get("preview_action") == "create_manual_match":
-                create_manual_match(
-                    job,
-                    request.form.get("manual_matching_token", ""),
-                    request.form.get("left_index"),
-                    request.form.get("right_index"),
-                )
-            elif request.form.get("preview_action") == "stop_manual_matching":
-                stop_manual_matching_for_current_kind(
-                    job,
-                    request.form.get("manual_matching_token", ""),
-                )
-            else:
-                apply_conflict_decision(job, request.form.to_dict())
-            save_job(job, jobs_dir)
-            return redirect(url_for("conflicts", job_id=job.job_id))
+            with _job_state_lock(jobs_dir, job_id):
+                job = load_job(jobs_dir, job_id)
+                preview_action = request.form.get("preview_action")
+                if preview_action in {
+                    "continue",
+                    "accept_offered",
+                    "accept_selected_offered",
+                    "apply_field_choices",
+                    "reject_match",
+                    "reprocess_orphans",
+                    "stop_orphan_reprocessing",
+                } or not preview_action:
+                    consume_review_action_token(job, request.form.get("review_action_token", ""))
+                if preview_action == "continue":
+                    acknowledge_current_preview(job)
+                elif preview_action == "accept_offered":
+                    accept_offered_for_current_match(job)
+                elif preview_action == "accept_selected_offered":
+                    accept_offered_fields_for_current_match(job, request.form.getlist("selected_fields"))
+                elif preview_action == "apply_field_choices":
+                    apply_preview_field_choices(job, _preview_field_choices_from_form(request.form))
+                elif preview_action == "reject_match":
+                    reject_current_match(job)
+                elif preview_action == "reprocess_orphans":
+                    reprocess_orphans_for_current_kind(job)
+                elif preview_action == "stop_orphan_reprocessing":
+                    stop_orphan_reprocessing_for_current_kind(job)
+                elif preview_action == "create_manual_match":
+                    create_manual_match(
+                        job,
+                        request.form.get("manual_matching_token", ""),
+                        request.form.get("left_index"),
+                        request.form.get("right_index"),
+                    )
+                elif preview_action == "stop_manual_matching":
+                    stop_manual_matching_for_current_kind(
+                        job,
+                        request.form.get("manual_matching_token", ""),
+                    )
+                else:
+                    apply_conflict_decision(job, request.form.to_dict())
+                save_job(job, jobs_dir)
+                return redirect(url_for("conflicts", job_id=job.job_id))
+        except StaleReviewSubmission as exc:
+            return render_template(
+                "error.html",
+                error=str(exc),
+                resume_url=url_for("conflicts", job_id=job_id),
+            ), 409
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
     @app.post("/jobs/<job_id>/abandon")
     def abandon_job(job_id: str):
         try:
-            job = load_job(jobs_dir, job_id)
-            _require_job_abandonable(job)
-            _require_no_running_live_sync(jobs_dir, job)
-            _delete_job_directory(jobs_dir, job.job_id)
-            return redirect(url_for("index", abandoned=job.job_id))
+            with _job_state_lock(jobs_dir, job_id):
+                job = load_job(jobs_dir, job_id)
+                _require_job_abandonable(job)
+                _require_no_running_live_sync(jobs_dir, job)
+                _delete_job_directory(jobs_dir, job.job_id)
+                return redirect(url_for("index", abandoned=job.job_id))
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
     @app.get("/jobs/<job_id>/sensitivity")
     def sensitivity(job_id: str):
         try:
-            job = load_job(jobs_dir, job_id)
-            terms = _sensitivity_terms_for_job(job)
-            if (
-                job.sensitivity_snapshot_version == 0
-                and CONFIG.get("sensitivity_check_enabled")
-                and terms is None
-            ):
-                # Legacy jobs did not persist a load error. Preserve their live
-                # configuration lookup but fail closed when it is unavailable.
-                job.sensitivity_configuration_error = "Configured sensitive-term rules could not be loaded."
-            initialise_sensitivity_review(job, terms)
-            if job.sensitivity_review_status == "configuration_error":
-                save_job(job, jobs_dir)
-                return render_template(
-                    "sensitivity_summary.html",
-                    job=job,
-                    audit=sensitivity_audit_summary(job),
-                    source_labels=_source_identity_labels(job),
-                    progress=_review_progress(job),
-                )
+            with _job_state_lock(jobs_dir, job_id):
+                job = load_job(jobs_dir, job_id)
+                terms = _sensitivity_terms_for_job(job)
+                if (
+                    job.sensitivity_snapshot_version == 0
+                    and CONFIG.get("sensitivity_check_enabled")
+                    and terms is None
+                ):
+                    # Legacy jobs did not persist a load error. Preserve their live
+                    # configuration lookup but fail closed when it is unavailable.
+                    job.sensitivity_configuration_error = "Configured sensitive-term rules could not be loaded."
+                initialise_sensitivity_review(job, terms)
+                if job.sensitivity_review_status == "configuration_error":
+                    save_job(job, jobs_dir)
+                    return render_template(
+                        "sensitivity_summary.html",
+                        job=job,
+                        audit=sensitivity_audit_summary(job),
+                        source_labels=_source_identity_labels(job),
+                        progress=_review_progress(job),
+                    )
 
-            item = get_next_sensitivity_item(job, terms)
-            save_job(job, jobs_dir)
-            if item is None:
+                item = get_next_sensitivity_item(job, terms)
+                save_job(job, jobs_dir)
+                if item is None:
+                    return render_template(
+                        "sensitivity_summary.html",
+                        job=job,
+                        audit=sensitivity_audit_summary(job),
+                        source_labels=_source_identity_labels(job),
+                        progress=_review_progress(job),
+                    )
                 return render_template(
-                    "sensitivity_summary.html",
+                    "sensitivity.html",
                     job=job,
-                    audit=sensitivity_audit_summary(job),
+                    item=item,
                     source_labels=_source_identity_labels(job),
                     progress=_review_progress(job),
                 )
-            return render_template(
-                "sensitivity.html",
-                job=job,
-                item=item,
-                source_labels=_source_identity_labels(job),
-                progress=_review_progress(job),
-            )
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
     @app.post("/jobs/<job_id>/sensitivity/acknowledge")
     def acknowledge_sensitivity(job_id: str):
         try:
-            job = load_job(jobs_dir, job_id)
-            acknowledge_sensitivity_review(job)
-            save_job(job, jobs_dir)
-            return redirect(url_for("complete", job_id=job.job_id))
+            with _job_state_lock(jobs_dir, job_id):
+                job = load_job(jobs_dir, job_id)
+                acknowledge_sensitivity_review(job)
+                save_job(job, jobs_dir)
+                return redirect(url_for("complete", job_id=job.job_id))
+        except StaleReviewSubmission as exc:
+            return render_template(
+                "error.html",
+                error=str(exc),
+                resume_url=url_for("complete", job_id=job_id),
+            ), 409
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
     @app.post("/jobs/<job_id>/sensitivity")
     def apply_sensitivity(job_id: str):
         try:
-            job = load_job(jobs_dir, job_id)
-            apply_sensitivity_decision(
-                job,
-                request.form.to_dict(),
-                terms=_sensitivity_terms_for_job(job),
-            )
-            save_job(job, jobs_dir)
-            return redirect(url_for("sensitivity", job_id=job.job_id))
+            with _job_state_lock(jobs_dir, job_id):
+                job = load_job(jobs_dir, job_id)
+                apply_sensitivity_decision(
+                    job,
+                    request.form.to_dict(),
+                    terms=_sensitivity_terms_for_job(job),
+                )
+                save_job(job, jobs_dir)
+                return redirect(url_for("sensitivity", job_id=job.job_id))
+        except StaleReviewSubmission as exc:
+            return render_template(
+                "error.html",
+                error=str(exc),
+                resume_url=url_for("sensitivity", job_id=job_id),
+            ), 409
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
     @app.get("/jobs/<job_id>/complete")
     def complete(job_id: str):
         try:
-            job = load_job(jobs_dir, job_id)
-            _require_completed_review(job, action="Completion")
-            if not job.output_phase_complete:
-                preview = prepare_output_preview(job)
-                save_job(job, jobs_dir)
+            with _job_state_lock(jobs_dir, job_id):
+                job = load_job(jobs_dir, job_id)
+                _require_completed_review(job, action="Completion")
+                if not job.output_phase_complete:
+                    preview = prepare_output_preview(job)
+                    save_job(job, jobs_dir)
+                    return render_template(
+                        "final_output_preview.html",
+                        job=job,
+                        preview=preview,
+                        source_labels=_source_identity_labels(job),
+                        progress=_review_progress(job),
+                    )
                 return render_template(
-                    "final_output_preview.html",
+                    "complete.html",
                     job=job,
-                    preview=preview,
                     source_labels=_source_identity_labels(job),
                     progress=_review_progress(job),
+                    api_servers=configured_server_summary(CONFIG),
                 )
-            return render_template(
-                "complete.html",
-                job=job,
-                source_labels=_source_identity_labels(job),
-                progress=_review_progress(job),
-                api_servers=configured_server_summary(CONFIG),
-            )
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
     @app.post("/jobs/<job_id>/complete/approve")
     def approve_output(job_id: str):
         try:
-            job = load_job(jobs_dir, job_id)
-            _require_completed_review(job, action="Output approval")
-            if job.output_phase_complete:
-                raise WebMergeError("Final output has already been approved and created.")
-            result = approve_output_preview(job, request.form.get("approval_token", ""))
-            save_outputs(job, jobs_dir, result)
-            return redirect(url_for("complete", job_id=job.job_id))
+            with _job_state_lock(jobs_dir, job_id):
+                job = load_job(jobs_dir, job_id)
+                _require_completed_review(job, action="Output approval")
+                if job.output_phase_complete:
+                    raise StaleReviewSubmission("Final output has already been approved and created.")
+                result = approve_output_preview(job, request.form.get("approval_token", ""))
+                save_outputs(job, jobs_dir, result)
+                return redirect(url_for("complete", job_id=job.job_id))
+        except StaleReviewSubmission as exc:
+            return render_template(
+                "error.html",
+                error=str(exc),
+                resume_url=url_for("complete", job_id=job_id),
+            ), 409
         except WebMergeError as exc:
             return render_template("error.html", error=str(exc)), 400
 
@@ -943,6 +999,23 @@ def _review_progress(job) -> dict[str, Any]:
     progress = get_review_progress(job)
     progress["source_labels"] = _source_identity_labels(job)
     return progress
+
+
+@contextmanager
+def _job_state_lock(jobs_dir: Path, job_id: str):
+    """Serialise read-modify-write review transactions across threads and workers."""
+    if not job_id or not job_id.isalnum():
+        raise WebMergeError("Invalid job ID.")
+    job_dir = jobs_dir / job_id
+    if not job_dir.is_dir():
+        raise WebMergeError("Job not found.")
+    lock_path = job_dir / ".review.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _start_api_source_check_thread(app: Flask, jobs_dir: Path, side: str) -> str:

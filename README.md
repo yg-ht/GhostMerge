@@ -329,11 +329,14 @@ Web templates auto-escape all source segments, and the CLI appends them as
 literal Rich text rather than interpreting record content as markup.
 
 Job state is saved between requests. Resume an in-progress job from the merge
-jobs list; refresh the current page after a stale or replayed decision is
-rejected. After an interrupted output write, reopening the job returns to final
-preview so the approved content can be retried safely. Completed jobs and
-compatible legacy completed jobs remain downloadable and cannot be abandoned
-through the Web UI.
+jobs list. Review forms prevent repeated browser submissions, and match,
+field, manual-matching, sensitivity, and final-approval actions use one-time
+server state so a stale or replayed decision cannot affect a later item. A
+rejected stale action links directly back to the job's current review stage.
+After an interrupted output write, reopening the job returns to final preview
+so the approved content can be retried safely. Completed jobs and compatible
+legacy completed jobs remain downloadable and cannot be abandoned through the
+Web UI.
 
 After conflict and sensitivity review, GhostMerge shows both complete proposed
 outputs, including Finding and Observation Template records. Approval is bound
@@ -356,6 +359,11 @@ Space        use offered/default value
 M            merge left and right text where available
 E            focus the custom edit field
 ```
+
+The shared progress panel reports Finding and Observation pair totals and
+unmatched counts separately. While a review action is being processed, the
+submitted form displays the current operation and blocks duplicate mouse or
+keyboard activation.
 
 The home page prioritises the Merge jobs status section, followed by creation of
 a new job, active inbound imports, API source checks, and API backups. It can
