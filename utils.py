@@ -20,7 +20,6 @@ RICH_TEXT_FIELD_NAMES = frozenset(
         "replication_steps",
         "host_detection_techniques",
         "network_detection_techniques",
-        "references",
         "finding_guidance",
     }
 )
@@ -35,6 +34,44 @@ CODE_BLOCK_REPAIR_POLICIES = frozenset(
         CODE_BLOCK_REPAIR_NONE,
         CODE_BLOCK_REPAIR_STRONG,
         CODE_BLOCK_REPAIR_RICH_TEXT,
+    }
+)
+BLOCK_HTML_TAG_NAMES = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "ul",
     }
 )
 
@@ -457,11 +494,10 @@ def normalise_unicode_whitespace(input_string: str) -> str:
     return normalised
 
 def normalise_references(input_string: str) -> str:
-    """Deduplicate and trim reference lines while preserving first-seen order.
+    """Deduplicate and trim URL lines while preserving first-seen order.
 
-    Ghostwriter reference fields are free text, so this deliberately avoids URL
-    parsing or validation. Exact line duplicates are removed after trimming so
-    analyst notes and non-URL references remain intact.
+    References are plain text rather than rich HTML. This deliberately avoids
+    URL parsing or rewriting; exact duplicate lines are removed after trimming.
     """
     lines = [line.strip() for line in input_string.splitlines()]
     normalised_lines: list[str] = []
@@ -479,6 +515,22 @@ def normalise_references(input_string: str) -> str:
     if normalised != input_string:
         log("DEBUG", "References normalised", prefix="UTILS")
     return normalised
+
+
+def decode_extra_fields_json_object(value: Any) -> Any:
+    """Decode a stringified extra-fields object before touching its values.
+
+    HTML embedded in JSON must not be passed through BeautifulSoup while its
+    attribute quotes are still JSON-escaped. Invalid or non-object JSON is
+    returned unchanged so the model's established type validation reports it.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return value
+    return parsed if isinstance(parsed, dict) else value
 
 def normalise_cvss_vector(input_string: str) -> str:
     """Normalise harmless CVSS vector spacing and casing.
@@ -511,6 +563,22 @@ def normalise_cvss_vector(input_string: str) -> str:
 
 def apply_configured_field_normalisation(field_name: str, value: Any) -> Any:
     """Apply generic and field-specific normalisation for import/merge records."""
+    if field_name == "references":
+        if not isinstance(value, str):
+            return value
+        normalised = value
+        if CONFIG.get("normalise_unicode_whitespace", True):
+            normalised = normalised.replace("\xa0", " ").replace("\t", " ")
+        if CONFIG.get("normalise_line_endings", False):
+            normalised = normalised.replace("\r\n", "\n").replace("\r", "\n")
+        if CONFIG.get("remove_double_spaces", False):
+            normalised = re.sub(r" {2,}", " ", normalised)
+        if CONFIG.get("remove_lead_and_trail_whitespace", False):
+            normalised = normalised.strip()
+        if CONFIG.get("normalise_references", True):
+            normalised = normalise_references(normalised)
+        return normalised
+
     if field_name == "extra_fields":
         # Extra-field block inference belongs at ingestion, where API metadata
         # or the explicit metadata-free fallback is available. Later merge and
@@ -532,9 +600,6 @@ def apply_configured_field_normalisation(field_name: str, value: Any) -> Any:
     if not isinstance(normalised, str):
         return normalised
 
-    if field_name == "references" and CONFIG.get("normalise_references", True):
-        normalised = normalise_references(normalised)
-
     if field_name == "cvss_vector" and CONFIG.get("normalise_cvss_vectors", True):
         normalised = normalise_cvss_vector(normalised)
 
@@ -552,11 +617,9 @@ def apply_configured_extra_fields_normalisation(
     non-rich values never infer blocks, while metadata-free values require
     stronger structural evidence than root position alone.
     """
+    value = decode_extra_fields_json_object(value)
     if not isinstance(value, dict):
-        return apply_configured_normalisation(
-            value,
-            code_block_repair_policy=CODE_BLOCK_REPAIR_STRONG,
-        )
+        return value
 
     types = field_types or {}
     normalised: dict[Any, Any] = {}
@@ -657,6 +720,21 @@ def normalise_html_tag_spacing(input_string: str) -> str:
         r'<\1\2>',
         normalised,
     )
+
+    adjacent_tags = re.compile(
+        r"(?P<left><\s*/?\s*(?P<left_name>[A-Za-z][A-Za-z0-9:_-]*)\b[^<>]*>)"
+        r"(?P<space>[ \t\r\n]+)"
+        r"(?=(?P<right><\s*/?\s*(?P<right_name>[A-Za-z][A-Za-z0-9:_-]*)\b[^<>]*>))"
+    )
+
+    def collapse_block_spacing(match: Any) -> str:
+        left_name = match.group("left_name").lower()
+        right_name = match.group("right_name").lower()
+        if left_name in BLOCK_HTML_TAG_NAMES and right_name in BLOCK_HTML_TAG_NAMES:
+            return match.group("left")
+        return match.group(0)
+
+    normalised = adjacent_tags.sub(collapse_block_spacing, normalised)
 
     # A trailing semicolon in an inline style attribute is not semantically meaningful.
     normalised = re.sub(r'(style="[^"]*?);+"', r'\1"', normalised)

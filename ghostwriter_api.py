@@ -894,8 +894,12 @@ class GhostwriterApi:
         record: dict[str, Any],
         field_types: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
-        extra_fields = apply_extra_fields_key_migrations(
+        extra_fields = apply_configured_extra_fields_normalisation(
             record.get("extraFields") or {},
+            field_types,
+        )
+        extra_fields = apply_extra_fields_key_migrations(
+            extra_fields,
             template_type="finding",
         )
         return {
@@ -914,10 +918,7 @@ class GhostwriterApi:
             "references": record.get("references") or "",
             "finding_guidance": record.get("findingGuidance") or "",
             "tags": "",
-            "extra_fields": apply_configured_extra_fields_normalisation(
-                extra_fields,
-                field_types,
-            ),
+            "extra_fields": extra_fields,
         }
 
     def _api_observation_to_ghostmerge(
@@ -925,8 +926,12 @@ class GhostwriterApi:
         record: dict[str, Any],
         field_types: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
-        extra_fields = apply_extra_fields_key_migrations(
+        extra_fields = apply_configured_extra_fields_normalisation(
             record.get("extraFields") or {},
+            field_types,
+        )
+        extra_fields = apply_extra_fields_key_migrations(
+            extra_fields,
             template_type="observation",
         )
         return {
@@ -934,10 +939,7 @@ class GhostwriterApi:
             "title": record.get("title") or "",
             "description": record.get("description") or "",
             "tags": "",
-            "extra_fields": apply_configured_extra_fields_normalisation(
-                extra_fields,
-                field_types,
-            ),
+            "extra_fields": extra_fields,
         }
 
 

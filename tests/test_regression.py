@@ -40,6 +40,7 @@ from sensitivity import (
 from utils import (
     Aborting,
     apply_configured_extra_fields_normalisation,
+    apply_configured_field_normalisation,
     apply_formatting_cleanup,
     apply_configured_normalisation,
     load_json,
@@ -281,6 +282,39 @@ class FindingModelRegressionTests(unittest.TestCase):
         self.assertEqual(serialised["tags"], "api, auth")
         self.assertEqual(json.loads(serialised["extra_fields"]), {"owner": "blue"})
 
+    def test_stringified_extra_fields_with_code_round_trip(self):
+        finding_source = finding(
+            extra_fields={
+                "formatted": '<pre spellcheck="false"><code>if  ready:\n\treturn  1</code></pre>',
+                "historical": '<code class="rich-code">payload</code>',
+            }
+        )
+        observation_source = Observation(
+            id=1,
+            title="Observation",
+            description="Detail",
+            tags=[],
+            extra_fields={
+                "formatted": '<pre spellcheck="false"><code>observation</code></pre>',
+            },
+        )
+
+        parsed_finding = Finding.from_dict(finding_source.to_dict())
+        parsed_observation = Observation.from_dict(observation_source.to_dict())
+
+        self.assertEqual(
+            parsed_finding.extra_fields["formatted"],
+            '<pre spellcheck="false"><code>if  ready:\n\treturn  1</code></pre>',
+        )
+        self.assertEqual(
+            parsed_finding.extra_fields["historical"],
+            '<pre spellcheck="false"><code>payload</code></pre>',
+        )
+        self.assertEqual(
+            parsed_observation.extra_fields["formatted"],
+            '<pre spellcheck="false"><code>observation</code></pre>',
+        )
+
     def test_invalid_severity_aborts_instead_of_silently_accepting(self):
         record = finding(severity="Urgent", references="").to_dict()
 
@@ -326,13 +360,47 @@ class NormalisationRegressionTests(unittest.TestCase):
 
     def test_string_normalisation_helpers_cover_common_format_noise(self):
         self.assertEqual(remove_double_spaces_from_string("alpha  beta   gamma"), "alpha beta gamma")
-        self.assertEqual(normalise_line_endings("<p>a</p>\r\n<p>b</p>"), "<p>a</p>\n<p>b</p>")
+        self.assertEqual(normalise_line_endings("<p>a</p>\r\n<p>b</p>"), "<p>a</p><p>b</p>")
         self.assertEqual(remove_pointless_html_tags("<p></p><span>  </span><p>kept</p>"), "<p>kept</p>")
 
     def test_references_are_trimmed_and_deduplicated(self):
-        value = " https://example.test/a \n\nhttps://example.test/a\nNote\n Note "
+        value = " https://example.test/a \n\nhttps://example.test/a\n https://example.test/b "
 
-        self.assertEqual(normalise_references(value), "https://example.test/a\nNote")
+        self.assertEqual(
+            normalise_references(value),
+            "https://example.test/a\nhttps://example.test/b",
+        )
+
+    def test_references_are_not_processed_as_html(self):
+        value = '<code spellcheck="false">https://example.test/a</code>'
+
+        self.assertEqual(
+            apply_configured_field_normalisation("references", value),
+            value,
+        )
+
+    def test_reference_normalisation_can_still_be_disabled(self):
+        configure_for_tests(normalise_references=False)
+        value = " https://example.test/a \nhttps://example.test/a "
+
+        self.assertEqual(
+            apply_configured_field_normalisation("references", value),
+            "https://example.test/a \nhttps://example.test/a",
+        )
+
+    def test_block_tag_spacing_is_collapsed_but_inline_spacing_is_preserved(self):
+        self.assertEqual(
+            apply_configured_normalisation("<p>one</p>\n<p>two</p>"),
+            "<p>one</p><p>two</p>",
+        )
+        self.assertEqual(
+            apply_configured_normalisation("<div>\n<section>\n<p>nested</p>\n</section>\n</div>"),
+            "<div><section>nested</section></div>",
+        )
+        self.assertEqual(
+            apply_configured_normalisation("<p><mark>one</mark> <mark>two</mark></p>"),
+            "<p><mark>one</mark> <mark>two</mark></p>",
+        )
 
     def test_cvss_vectors_are_case_and_whitespace_normalised(self):
         self.assertEqual(
@@ -485,7 +553,7 @@ class NormalisationRegressionTests(unittest.TestCase):
         data = finding(
             title='<code spellcheck="false">inline title</code>',
             description='<code spellcheck="false">flattened block</code>',
-            references='<code spellcheck="false">flattened reference block</code>',
+            references="https://example.test/a\nhttps://example.test/a",
         ).to_dict()
         data["extra_fields"] = {
             "nested": {
@@ -502,7 +570,7 @@ class NormalisationRegressionTests(unittest.TestCase):
         )
         self.assertEqual(
             parsed.references,
-            '<pre spellcheck="false"><code>flattened reference block</code></pre>',
+            "https://example.test/a",
         )
         self.assertEqual(
             parsed.extra_fields["nested"]["rich_text"],

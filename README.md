@@ -736,6 +736,9 @@ extra_fields
 The included `test_data_left.json` and `test_data_right.json` files are useful
 minimal examples.
 
+`references` is plain text containing one URL per line. GhostMerge trims blank
+lines and removes exact duplicates; it does not interpret the field as HTML.
+
 Observation records use the smaller Ghostwriter Observation Template schema:
 
 ```text

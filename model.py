@@ -9,8 +9,8 @@ CONFIG = get_config()
 # local module imports
 from utils import (CODE_BLOCK_REPAIR_NONE, Aborting, apply_configured_extra_fields_normalisation,
                    apply_configured_field_normalisation, apply_configured_normalisation,
-                   apply_extra_fields_key_migrations, blank_for_type, get_type_as_str, is_blank,
-                   is_optional_field, log)
+                   apply_extra_fields_key_migrations, blank_for_type, decode_extra_fields_json_object,
+                   get_type_as_str, is_blank, is_optional_field, log)
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -77,11 +77,13 @@ class Finding:
                 raw_value = data.get(field_name, None)
 
                 if field_name == "extra_fields":
+                    raw_value = decode_extra_fields_json_object(raw_value)
                     if extra_fields_are_normalised:
-                        raw_value = apply_configured_normalisation(
-                            raw_value,
-                            code_block_repair_policy=CODE_BLOCK_REPAIR_NONE,
-                        )
+                        if isinstance(raw_value, dict):
+                            raw_value = apply_configured_normalisation(
+                                raw_value,
+                                code_block_repair_policy=CODE_BLOCK_REPAIR_NONE,
+                            )
                     else:
                         raw_value = apply_configured_extra_fields_normalisation(raw_value)
                 else:
@@ -322,11 +324,13 @@ class Observation:
                 raw_value = data.get(field_name, None)
 
                 if field_name == "extra_fields":
+                    raw_value = decode_extra_fields_json_object(raw_value)
                     if extra_fields_are_normalised:
-                        raw_value = apply_configured_normalisation(
-                            raw_value,
-                            code_block_repair_policy=CODE_BLOCK_REPAIR_NONE,
-                        )
+                        if isinstance(raw_value, dict):
+                            raw_value = apply_configured_normalisation(
+                                raw_value,
+                                code_block_repair_policy=CODE_BLOCK_REPAIR_NONE,
+                            )
                     else:
                         raw_value = apply_configured_extra_fields_normalisation(raw_value)
                 else:

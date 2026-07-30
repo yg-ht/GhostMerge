@@ -233,6 +233,41 @@ class FakeUrlResponse:
 
 
 class GhostwriterApiTests(unittest.TestCase):
+    @patch.dict(
+        get_config(),
+        {
+            "formatting_cleanup_enabled": True,
+            "extra_fields_key_migration_enabled": True,
+            "extra_fields_key_migrations": [
+                {
+                    "template_type": "finding",
+                    "prefix": "extra_",
+                    "collision": "preserve_existing",
+                }
+            ],
+        },
+        clear=False,
+    )
+    def test_api_normalises_typed_extra_field_before_key_migration(self):
+        api = GhostwriterApi(server_config(), client=FakeGraphQLClient())
+
+        converted = api._api_record_to_ghostmerge(
+            {
+                "id": 1,
+                "extraFields": {
+                    "extra_formatted": '<code spellcheck="false">block</code>',
+                },
+            },
+            {"extra_formatted": "rich_text"},
+        )
+
+        self.assertEqual(
+            converted["extra_fields"],
+            {
+                "formatted": '<pre spellcheck="false"><code>block</code></pre>',
+            },
+        )
+
     @patch.dict(get_config(), {"formatting_cleanup_enabled": True}, clear=False)
     def test_fetch_uses_cached_extra_field_specs_for_code_semantics(self):
         client = FakeGraphQLClient(
