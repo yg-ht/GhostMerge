@@ -891,7 +891,10 @@ single-line code without a block signal remains inline.
 
 Whitespace inside complete `<pre>` and `<code>` elements is excluded from
 cosmetic tab and repeated-space cleanup. Whitespace between adjacent inline
-formatting tags is also retained because it may be visible content.
+formatting tags is also retained because it may be visible content. When a
+`<pre>` element is adjacent to another tag, GhostMerge separates the external
+boundary with one newline while retaining the canonical
+`<pre spellcheck="false"><code>…</code></pre>` structure internally.
 
 The default rule rewrites legacy yellow highlight spans:
 

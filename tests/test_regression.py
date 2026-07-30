@@ -402,6 +402,27 @@ class NormalisationRegressionTests(unittest.TestCase):
             "<p><mark>one</mark> <mark>two</mark></p>",
         )
 
+    def test_pre_blocks_have_canonical_newlines_at_external_tag_boundaries(self):
+        reported = (
+            "<p>unauthorised access pathways.</p><p>Review of the Azure policy assignments "
+            "showed the following setting enabled:</p>"
+            '<pre spellcheck="false"><code><mark>&lt;EVIDENCE&gt;</mark></code></pre>'
+        )
+        expected = (
+            "<p>unauthorised access pathways.</p><p>Review of the Azure policy assignments "
+            "showed the following setting enabled:</p>\n"
+            '<pre spellcheck="false"><code><mark>&lt;EVIDENCE&gt;</mark></code></pre>'
+        )
+
+        self.assertEqual(apply_configured_normalisation(reported), expected)
+        self.assertEqual(apply_configured_normalisation(expected), expected)
+        self.assertEqual(
+            apply_configured_normalisation(
+                '<p>Before</p> \t\n<pre><code>payload</code></pre>\r\n <p>After</p>'
+            ),
+            '<p>Before</p>\n<pre spellcheck="false"><code>payload</code></pre>\n<p>After</p>',
+        )
+
     def test_cvss_vectors_are_case_and_whitespace_normalised(self):
         self.assertEqual(
             normalise_cvss_vector(" cvss:3.1 / av:n / ac:l / pr:n "),
@@ -528,7 +549,7 @@ class NormalisationRegressionTests(unittest.TestCase):
             apply_formatting_cleanup(
                 '<p>Before</p><code class="language-python" spellcheck="false">payload</code><p>After</p>'
             ),
-            '<p>Before</p><pre spellcheck="false"><code>payload</code></pre><p>After</p>',
+            '<p>Before</p>\n<pre spellcheck="false"><code>payload</code></pre>\n<p>After</p>',
         )
 
     def test_boolean_code_repair_keyword_remains_backwards_compatible(self):
@@ -684,11 +705,11 @@ class NormalisationRegressionTests(unittest.TestCase):
     def test_formatting_cleanup_uses_multiline_and_historical_class_block_signals(self):
         self.assertEqual(
             apply_formatting_cleanup("<div><code>line one\nline two</code></div>"),
-            '<div><pre spellcheck="false"><code>line one\nline two</code></pre></div>',
+            '<div>\n<pre spellcheck="false"><code>line one\nline two</code></pre>\n</div>',
         )
         self.assertEqual(
             apply_formatting_cleanup('<div><code class="rich-code">payload</code></div>'),
-            '<div><pre spellcheck="false"><code>payload</code></pre></div>',
+            '<div>\n<pre spellcheck="false"><code>payload</code></pre>\n</div>',
         )
 
     def test_formatting_cleanup_leaves_ambiguous_nested_code_inline(self):

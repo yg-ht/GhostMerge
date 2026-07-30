@@ -702,6 +702,30 @@ def apply_extra_fields_key_migrations(extra_fields: Any, template_type: str) -> 
 
     return migrated
 
+def _normalise_pre_block_boundaries(input_string: str) -> str:
+    """Put external pre boundaries on their own lines without changing code."""
+    pre_boundaries = re.compile(
+        r"(?P<left><\s*(?P<left_close>/?)\s*(?P<left_name>[A-Za-z][A-Za-z0-9:_-]*)\b[^<>]*>)"
+        r"[ \t\r\n]*"
+        r"(?=(?P<right><\s*(?P<right_close>/?)\s*(?P<right_name>[A-Za-z][A-Za-z0-9:_-]*)\b[^<>]*>))"
+    )
+
+    def separate_pre_boundary(match: Any) -> str:
+        left_is_closing_pre = (
+            bool(match.group("left_close"))
+            and match.group("left_name").lower() == "pre"
+        )
+        right_is_opening_pre = (
+            not match.group("right_close")
+            and match.group("right_name").lower() == "pre"
+        )
+        if left_is_closing_pre or right_is_opening_pre:
+            return f"{match.group('left')}\n"
+        return match.group(0)
+
+    return pre_boundaries.sub(separate_pre_boundary, input_string)
+
+
 def normalise_html_tag_spacing(input_string: str) -> str:
     """
     Normalise semantically irrelevant HTML syntax noise without removing content.
@@ -735,6 +759,11 @@ def normalise_html_tag_spacing(input_string: str) -> str:
         return match.group(0)
 
     normalised = adjacent_tags.sub(collapse_block_spacing, normalised)
+
+    # Keep pre as a single canonical code element internally, but put its outer
+    # block boundaries on their own lines so surrounding rich-text blocks do
+    # not run into the code block in Ghostwriter's serialised HTML.
+    normalised = _normalise_pre_block_boundaries(normalised)
 
     # A trailing semicolon in an inline style attribute is not semantically meaningful.
     normalised = re.sub(r'(style="[^"]*?);+"', r'\1"', normalised)
@@ -1349,7 +1378,7 @@ def apply_formatting_cleanup(
             )
         )
 
-    return normalised_input
+    return _normalise_pre_block_boundaries(normalised_input)
 
 def _normalise_list_item_paragraph_wrappers(soup: BeautifulSoup) -> None:
     """Unwrap redundant single paragraph wrappers inside list items.
