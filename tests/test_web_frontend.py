@@ -1367,8 +1367,14 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Matched pairs reviewed", response.data)
         self.assertIn(b"Left source (JSON file) outbound sync status", response.data)
         self.assertIn(b"/jobs/homejob123/sync/left/status", response.data)
-        self.assertLess(response.data.index(b"<h2>Merge jobs</h2>"), response.data.index(b"<h2>Create merge job</h2>"))
-        self.assertLess(response.data.index(b"<h2>Create merge job</h2>"), response.data.index(b"<h2>API backups</h2>"))
+        self.assertLess(response.data.index(b"<h2>Create merge job</h2>"), response.data.index(b"<h2>Merge jobs</h2>"))
+        self.assertEqual(response.data.count(b'<section class="panel">'), 2)
+        self.assertNotIn(b"<h2>Inbound API imports</h2>", response.data)
+        self.assertNotIn(b"<h2>API source checks</h2>", response.data)
+        self.assertNotIn(b"<h2>API backups</h2>", response.data)
+        self.assertIn(b'href="/imports"', response.data)
+        self.assertIn(b'href="/api-sources/checks"', response.data)
+        self.assertIn(b'href="/api-backups"', response.data)
 
     def test_home_shows_unreadable_previous_jobs(self):
         jobs_dir = Path(self.tmp_dir.name)
@@ -1383,9 +1389,8 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Job state could not be read", response.data)
 
     def test_home_limits_previous_jobs_and_links_to_full_history(self):
-        get_config()["web_ui"]["home_previous_jobs_limit"] = 2
         jobs_dir = Path(self.tmp_dir.name)
-        for index, job_id in enumerate(("oldjob", "midjob", "newjob"), start=1):
+        for index, job_id in enumerate(("oldjob", "midjob", "newjob", "latestjob"), start=1):
             job_dir = jobs_dir / job_id
             job_dir.mkdir()
             job_path = job_dir / "job.json"
@@ -1396,15 +1401,17 @@ class FlaskRouteTests(unittest.TestCase):
         full_response = self.client.get("/jobs")
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn(b"latestjob", response.data)
         self.assertIn(b"newjob", response.data)
         self.assertIn(b"midjob", response.data)
         self.assertNotIn(b"oldjob", response.data)
-        self.assertIn(b"Showing 2 of 3 merge jobs.", response.data)
-        self.assertIn(b"/jobs", response.data)
+        self.assertIn(b"Showing the latest 3 of 4 merge jobs.", response.data)
+        self.assertIn(b"View all merge jobs", response.data)
         self.assertEqual(full_response.status_code, 200)
         self.assertIn(b"oldjob", full_response.data)
         self.assertIn(b"midjob", full_response.data)
         self.assertIn(b"newjob", full_response.data)
+        self.assertIn(b"latestjob", full_response.data)
 
     def test_merge_job_history_paginates_newest_first_and_bounds_page_numbers(self):
         jobs_dir = Path(self.tmp_dir.name)
@@ -1431,7 +1438,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Page 2 of 2", last.data)
         self.assertIn(b'rel="prev"', last.data)
 
-    def test_home_shows_api_source_check_status_links(self):
+    def test_api_source_check_history_shows_status_links(self):
         checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
         checks_dir.mkdir()
         (checks_dir / "check123.json").write_text(
@@ -1452,7 +1459,7 @@ class FlaskRouteTests(unittest.TestCase):
         )
         os.utime(checks_dir / "check123.json", (1700000100, 1700000100))
 
-        response = self.client.get("/")
+        response = self.client.get("/api-sources/checks")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"API source checks", response.data)
@@ -1461,45 +1468,32 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"YGHT Ghostwriter", response.data)
         self.assertIn(b"worker process is no longer active", response.data)
         self.assertIn(b"/api-sources/checks/check123/status", response.data)
-        self.assertLess(response.data.index(b"<h2>Create merge job</h2>"), response.data.index(b"<h2>API source checks</h2>"))
-        self.assertLess(response.data.index(b"<h2>API source checks</h2>"), response.data.index(b"<h2>API backups</h2>"))
 
-    def test_home_limits_api_source_checks_and_links_to_full_history(self):
-        get_config()["web_ui"]["home_api_source_checks_limit"] = 2
+    def test_home_excludes_api_source_check_history_rows(self):
         checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
         checks_dir.mkdir()
-        for index, check_id in enumerate(("oldcheck", "midcheck", "newcheck"), start=1):
-            check_path = checks_dir / f"{check_id}.json"
-            check_path.write_text(
-                json.dumps(
-                    {
-                        "check_id": check_id,
-                        "side": "left",
-                        "server_name": f"Server {check_id}",
-                        "status": "done",
-                        "stage": "done",
-                        "message": f"Finished {check_id}",
-                        "complete": 1,
-                        "total": 1,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            os.utime(check_path, (index, index))
+        check_path = checks_dir / "hiddencheck.json"
+        check_path.write_text(
+            json.dumps(
+                {
+                    "check_id": "hiddencheck",
+                    "side": "left",
+                    "server_name": "Hidden server",
+                    "status": "done",
+                    "stage": "done",
+                    "message": "Finished hidden check",
+                    "complete": 1,
+                    "total": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         response = self.client.get("/")
-        full_response = self.client.get("/api-sources/checks")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"newcheck", response.data)
-        self.assertIn(b"midcheck", response.data)
-        self.assertNotIn(b"oldcheck", response.data)
-        self.assertIn(b"Showing 2 of 3 API source checks.", response.data)
-        self.assertIn(b"/api-sources/checks", response.data)
-        self.assertEqual(full_response.status_code, 200)
-        self.assertIn(b"oldcheck", full_response.data)
-        self.assertIn(b"midcheck", full_response.data)
-        self.assertIn(b"newcheck", full_response.data)
+        self.assertNotIn(b"hiddencheck", response.data)
+        self.assertIn(b'href="/api-sources/checks"', response.data)
 
     def test_api_source_check_history_has_accessible_pagination(self):
         checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
@@ -1529,7 +1523,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Page 2 of 2", response.data)
         self.assertIn(b'href="/api-sources/checks?page=1"', response.data)
 
-    def test_home_marks_api_source_checks_without_live_worker_as_stale(self):
+    def test_api_source_check_history_marks_missing_worker_as_stale(self):
         checks_dir = Path(self.tmp_dir.name) / "api_source_checks"
         checks_dir.mkdir()
         (checks_dir / "stalecheck123.json").write_text(
@@ -1548,7 +1542,7 @@ class FlaskRouteTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        response = self.client.get("/")
+        response = self.client.get("/api-sources/checks")
         status_response = self.client.get("/api-sources/checks/stalecheck123/status")
 
         self.assertEqual(response.status_code, 200)
@@ -1558,7 +1552,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"stale", status_response.data)
         self.assertNotIn(b'http-equiv="refresh"', status_response.data)
 
-    def test_home_shows_api_import_status_links(self):
+    def test_api_import_history_shows_status_links(self):
         imports_dir = Path(self.tmp_dir.name) / "api_imports"
         imports_dir.mkdir()
         (imports_dir / "import123.json").write_text(
@@ -1578,7 +1572,7 @@ class FlaskRouteTests(unittest.TestCase):
         )
         os.utime(imports_dir / "import123.json", (1700000200, 1700000200))
 
-        response = self.client.get("/")
+        response = self.client.get("/imports")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Inbound API imports", response.data)
@@ -1586,8 +1580,35 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"2023-11-14 22:16:40 UTC", response.data)
         self.assertIn(b"worker process is no longer active", response.data)
         self.assertIn(b"/imports/import123/status", response.data)
-        self.assertLess(response.data.index(b"<h2>Create merge job</h2>"), response.data.index(b"<h2>Inbound API imports</h2>"))
-        self.assertLess(response.data.index(b"<h2>Inbound API imports</h2>"), response.data.index(b"<h2>API backups</h2>"))
+
+    def test_api_import_history_has_accessible_pagination(self):
+        imports_dir = Path(self.tmp_dir.name) / "api_imports"
+        imports_dir.mkdir()
+        for index, import_id in enumerate(("oldimport", "midimport", "newimport"), start=1):
+            import_path = imports_dir / f"{import_id}.json"
+            import_path.write_text(
+                json.dumps(
+                    {
+                        "import_id": import_id,
+                        "status": "done",
+                        "stage": "done",
+                        "message": f"Finished {import_id}",
+                        "job_id": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.utime(import_path, (index, index))
+
+        with patch("web_app.HISTORY_PAGE_SIZE", 2):
+            response = self.client.get("/imports?page=2")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"oldimport", response.data)
+        self.assertNotIn(b"newimport", response.data)
+        self.assertIn(b'aria-label="Inbound API import history pages"', response.data)
+        self.assertIn(b"Page 2 of 2", response.data)
+        self.assertIn(b'href="/imports?page=1"', response.data)
 
     def test_upload_review_complete_and_download_outputs(self):
         left = json.dumps([record(description="Left detail")]).encode("utf-8")
