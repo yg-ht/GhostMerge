@@ -473,16 +473,24 @@ Outbound sync is destructive. For the selected API-backed side, GhostMerge:
 1. Runs a non-destructive GraphQL preflight.
 2. Validates the reviewed records can be converted to Ghostwriter API inputs.
 3. Writes a local backup of existing target Finding Templates, Observation Templates, and tags.
-4. Temporarily creates the reviewed records and tags, then removes those temporary records, to
-   prove the destination accepts every prepared payload before replacing the live library.
+4. According to the configured validation mode, temporarily creates all reviewed records, a
+   bounded sample, or no temporary records. Any temporary records and tags are removed before
+   replacing the live library.
 5. Deletes existing target Finding and Observation Templates.
 6. Recreates the reviewed output for both template types.
 7. Reapplies tags.
 
-The outbound-sync status page reports temporary creation and cleanup as separate validation stages.
-The cleanup counter starts at zero and advances as the temporary records are removed. Both stages
-use the configured API rate limit, so cleanup can take a similar amount of time to creation for a
-large library even though no live records are being replaced during that phase.
+The outbound-sync status page reports temporary creation and cleanup as separate validation stages,
+or reports that temporary validation was skipped. Inbound and backup tag reads, plus outbound
+creation, tagging, and deletion operations, group up to `sync_batch_size` records into one GraphQL
+request. The configured API rate limit applies per request rather than per record, so batching can
+substantially reduce elapsed time.
+
+`sync_validation_mode` defaults to `full`, retaining the safest existing behaviour by proving every
+prepared payload before live deletion. `sample` validates up to
+`sync_validation_sample_size` Findings and Observations, while `none` relies on local conversion,
+GraphQL preflight, and the verified backup. The latter modes reduce work but increase the chance
+that a destination-side constraint is discovered only after live replacement has started.
 
 Before confirming an outbound sync:
 
@@ -598,6 +606,9 @@ Enable only the sides you intend to use:
 ```json
 {
   "ghostwriter_api": {
+    "sync_batch_size": 25,
+    "sync_validation_mode": "full",
+    "sync_validation_sample_size": 10,
     "servers": {
       "left": {
         "enabled": true,
@@ -619,6 +630,13 @@ Set `rate_limit_per_second` per server, or set
 GhostMerge sends GraphQL requests. The default is `0.2`, which sends one request
 approximately every five seconds. Keep this conservative for production
 Ghostwriter instances because full backups also retrieve tags for each finding.
+
+`sync_batch_size`, `sync_validation_mode`, and `sync_validation_sample_size` may
+also be overridden inside either server entry. The batch size and sample size
+must be positive integers, and the batch size must not exceed 100 records so a
+configuration error cannot create unbounded GraphQL requests. Supported
+validation modes are `full`, `sample`, and `none`. The sync confirmation page
+displays the effective values before any replacement begins.
 
 Leave `verify_tls` enabled for normal deployments. If an internal CA chain is
 trusted by the operating system but fails with an OpenSSL strict-mode error such

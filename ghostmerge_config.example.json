@@ -138,6 +138,9 @@
   "ghostwriter_api": {
     "backup_dir": "ghostmerge_api_backups",
     "default_rate_limit_per_second": 0.2,
+    "sync_batch_size": 25,
+    "sync_validation_mode": "full",
+    "sync_validation_sample_size": 10,
     "servers": {
       "left": {
         "enabled": false,

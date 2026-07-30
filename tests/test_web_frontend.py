@@ -2784,6 +2784,38 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"only available for API-backed merge jobs", response.data)
 
+    def test_live_sync_confirmation_shows_effective_batch_and_validation_settings(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record()],
+            [],
+            job_id="syncsettings123",
+            input_sources={"left": "api", "right": "file"},
+        )
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        approve_and_save_output(job, jobs_dir)
+        config = get_config()
+        config["ghostwriter_api"].update({
+            "sync_batch_size": 20,
+            "sync_validation_mode": "sample",
+            "sync_validation_sample_size": 4,
+        })
+        config["ghostwriter_api"]["servers"]["left"].update({
+            "enabled": True,
+            "base_url": "https://left.example",
+            "bearer_token": "left-token",
+            "sync_batch_size": 8,
+        })
+
+        response = self.client.get("/jobs/syncsettings123/sync/left")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"<dt>Request batch size</dt><dd>8 record(s)</dd>", response.data)
+        self.assertIn(b"<dt>Temporary validation</dt>", response.data)
+        self.assertIn(b"Sample", response.data)
+        self.assertIn(b"up to 4 record(s) of each template type", response.data)
+
     def test_direct_complete_does_not_unlock_live_sync_for_incomplete_review(self):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job(

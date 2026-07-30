@@ -193,12 +193,11 @@ service, routes, persistence, matching, review, output approval, and outbound-sy
       and unknown estimates. Current-step progress is now separate from historical counts; known
       Finding and Observation estimates are displayed separately and summed, while legacy
       Finding-only and unknown estimates are labelled without implying an invalid total.
-- [ ] Investigate reducing per-record API requests during inbound API imports.
+- [x] Reduce per-record API requests during inbound API imports.
       Finding and Observation list queries already fetch pages of up to 100 records, but tags are
-      retrieved with a follow-up query for each record. Determine whether Ghostwriter GraphQL can
-      return tags through relationships or a safe batched query, then assess pagination, memory use,
-      rate limiting, progress reporting, cancellation, and backwards compatibility before changing
-      the import strategy.
+      retrieved separately. Tag actions are now grouped into bounded aliased GraphQL queries using
+      the configured sync batch size, preserving record-to-tag mapping, existing page boundaries,
+      rate limiting, progress reporting, and single-record compatibility.
 - [x] Fix web sensitivity review so multiple sensitive terms in the same field are all reviewed.
       Review now remains on the current field until every sensitive hit has been handled, preventing
       later terms in the same value from reaching downloaded output without a decision.
