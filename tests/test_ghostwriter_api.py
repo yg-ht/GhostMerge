@@ -274,6 +274,27 @@ class FakeGraphQLClient:
         raise AssertionError(f"Unexpected query: {query}")
 
 
+class PaginatedTemplateClient(FakeGraphQLClient):
+    def __init__(self, *, findings=None, observations=None):
+        super().__init__()
+        self.findings = list(findings or [])
+        self.observations = list(observations or [])
+
+    def execute(self, query, variables=None):
+        variables = variables or {}
+        if "FetchRawFindings" in query or "FetchFindings" in query:
+            self.calls.append((query, variables))
+            offset = variables["offset"]
+            limit = variables["limit"]
+            return {"finding": self.findings[offset:offset + limit]}
+        if "FetchRawObservations" in query or "FetchObservations" in query:
+            self.calls.append((query, variables))
+            offset = variables["offset"]
+            limit = variables["limit"]
+            return {"observation": self.observations[offset:offset + limit]}
+        return super().execute(query, variables)
+
+
 class FakeUrlResponse:
     def __enter__(self):
         return self
@@ -311,6 +332,63 @@ class GhostwriterApiTests(unittest.TestCase):
             if "FetchTagsBatch" in query or "query Tags(" in query
         ]
         self.assertEqual(len(tag_queries), 2)
+
+    def test_inbound_and_backup_reads_use_configured_batch_size(self):
+        findings = [
+            ghostwriter_finding_record(record_id, f"Finding {record_id}")
+            for record_id in range(1, 4)
+        ]
+        observations = [
+            ghostwriter_observation_record(record_id, f"Observation {record_id}")
+            for record_id in range(4, 7)
+        ]
+        client = PaginatedTemplateClient(findings=findings, observations=observations)
+        api = GhostwriterApi(server_config(sync_batch_size=2), client=client)
+
+        self.assertEqual(len(api.fetch_findings()), 3)
+        self.assertEqual(len(api.fetch_observations()), 3)
+        self.assertEqual(len(api.fetch_raw_findings_with_tags()), 3)
+        self.assertEqual(len(api.fetch_raw_observations_with_tags()), 3)
+
+        page_requests = [
+            variables
+            for query, variables in client.calls
+            if (
+                "FetchFindings" in query
+                or "FetchObservations" in query
+                or "FetchRawFindings" in query
+                or "FetchRawObservations" in query
+            )
+        ]
+        self.assertEqual(len(page_requests), 8)
+        self.assertTrue(all(request["limit"] == 2 for request in page_requests))
+        self.assertEqual(
+            [request["offset"] for request in page_requests],
+            [0, 2, 0, 2, 0, 2, 0, 2],
+        )
+
+    def test_inbound_fetch_reports_progress_after_each_completed_batch(self):
+        findings = [
+            ghostwriter_finding_record(record_id, f"Finding {record_id}")
+            for record_id in range(1, 4)
+        ]
+        events = []
+        api = GhostwriterApi(
+            server_config(sync_batch_size=2),
+            client=PaginatedTemplateClient(findings=findings),
+            progress=events.append,
+        )
+
+        api.fetch_findings()
+
+        completed_batches = [
+            event.complete
+            for event in events
+            if event.stage == "fetch"
+            and event.status != "done"
+            and event.message.startswith("Fetched")
+        ]
+        self.assertEqual(completed_batches, [2, 3])
 
     def test_fetch_template_counts_falls_back_to_id_only_query(self):
         client = FakeGraphQLClient(fail_template_aggregates=True)

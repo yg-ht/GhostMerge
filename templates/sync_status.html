@@ -14,7 +14,7 @@
     {% endif %}
   </dl>
   {% if state.status == "running" %}
-  <meta http-equiv="refresh" content="2">
+  <meta http-equiv="refresh" content="1">
   {% endif %}
   <div class="actions">
     <a class="button secondary" href="{{ url_for('summary', job_id=job.job_id) }}">Back to merge job</a>

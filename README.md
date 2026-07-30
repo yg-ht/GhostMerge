@@ -478,10 +478,11 @@ Outbound sync is destructive. For the selected API-backed side, GhostMerge:
 7. Reapplies tags.
 
 The outbound-sync status page reports temporary creation and cleanup as separate validation stages,
-or reports that temporary validation was skipped. Inbound and backup tag reads, plus outbound
-creation, tagging, and deletion operations, group up to `sync_batch_size` records into one GraphQL
-request. The configured API rate limit applies per request rather than per record, so batching can
-substantially reduce elapsed time.
+or reports that temporary validation was skipped. Inbound imports, backup reads, tag reads, and
+outbound creation, tagging, and deletion operations all use `sync_batch_size` as their common work
+unit. Progress is reported after each completed batch, and the inbound and outbound status pages
+refresh once per second. The configured API rate limit applies per request rather than per record,
+so batching can substantially reduce elapsed time.
 
 `sync_validation_mode` defaults to `full`, retaining the safest existing behaviour by proving every
 prepared payload before live deletion. `sample` validates up to
@@ -629,11 +630,13 @@ approximately every five seconds. Keep this conservative for production
 Ghostwriter instances because full backups also retrieve tags for each finding.
 
 `sync_batch_size`, `sync_validation_mode`, and `sync_validation_sample_size` may
-also be overridden inside either server entry. The batch size and sample size
-must be positive integers, and the batch size must not exceed 100 records so a
-configuration error cannot create unbounded GraphQL requests. Supported
-validation modes are `full`, `sample`, and `none`. The sync confirmation page
-displays the effective values before any replacement begins.
+also be overridden inside either server entry. The batch size controls the page
+size for inbound imports and backups as well as the outbound mutation batch
+size. The batch size and sample size must be positive integers, and the batch
+size must not exceed 100 records so a configuration error cannot create
+unbounded GraphQL requests. Supported validation modes are `full`, `sample`,
+and `none`. The sync confirmation page displays the effective values before any
+replacement begins.
 
 Leave `verify_tls` enabled for normal deployments. If an internal CA chain is
 trusted by the operating system but fails with an OpenSSL strict-mode error such

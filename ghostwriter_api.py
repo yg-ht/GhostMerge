@@ -264,7 +264,7 @@ class GhostwriterApi:
         """
         records: list[dict[str, Any]] = []
         offset = 0
-        limit = 100
+        limit = self.server.sync_batch_size
         while True:
             self.progress(SyncEvent("fetch", f"Fetching {self.server.name}", len(records), 0))
             data = self.client.execute(query, {"limit": limit, "offset": offset})
@@ -279,14 +279,14 @@ class GhostwriterApi:
                 record = self._api_record_to_ghostmerge(item, field_types)
                 record["tags"] = ", ".join(tags_by_id[int(item["id"])])
                 records.append(record)
-                self.progress(
-                    SyncEvent(
-                        "fetch",
-                        f"Fetched {len(records)} finding(s) from {self.server.name}",
-                        len(records),
-                        0,
-                    )
+            self.progress(
+                SyncEvent(
+                    "fetch",
+                    f"Fetched {len(records)} finding(s) from {self.server.name}",
+                    len(records),
+                    0,
                 )
+            )
             if len(batch) < limit:
                 break
             offset += limit
@@ -425,7 +425,7 @@ class GhostwriterApi:
         """
         records: list[dict[str, Any]] = []
         offset = 0
-        limit = 100
+        limit = self.server.sync_batch_size
         while True:
             self.progress(SyncEvent("fetch", f"Fetching observations from {self.server.name}", len(records), 0))
             data = self.client.execute(query, {"limit": limit, "offset": offset})
@@ -440,14 +440,14 @@ class GhostwriterApi:
                 record = self._api_observation_to_ghostmerge(item, field_types)
                 record["tags"] = ", ".join(tags_by_id[int(item["id"])])
                 records.append(record)
-                self.progress(
-                    SyncEvent(
-                        "fetch",
-                        f"Fetched {len(records)} observation(s) from {self.server.name}",
-                        len(records),
-                        0,
-                    )
+            self.progress(
+                SyncEvent(
+                    "fetch",
+                    f"Fetched {len(records)} observation(s) from {self.server.name}",
+                    len(records),
+                    0,
                 )
+            )
             if len(batch) < limit:
                 break
             offset += limit
@@ -566,7 +566,7 @@ class GhostwriterApi:
         """
         raw_records: list[dict[str, Any]] = []
         offset = 0
-        limit = 100
+        limit = self.server.sync_batch_size
         while True:
             self.progress(SyncEvent("backup_fetch", f"Fetching backup records from {self.server.name}", len(raw_records), 0))
             data = self.client.execute(query, {"limit": limit, "offset": offset})
@@ -579,14 +579,14 @@ class GhostwriterApi:
             )
             for item in batch:
                 raw_records.append({"record": item, "tags": tags_by_id[int(item["id"])]})
-                self.progress(
-                    SyncEvent(
-                        "backup_fetch",
-                        f"Fetched {len(raw_records)} backup record(s) from {self.server.name}",
-                        len(raw_records),
-                        0,
-                    )
+            self.progress(
+                SyncEvent(
+                    "backup_fetch",
+                    f"Fetched {len(raw_records)} backup record(s) from {self.server.name}",
+                    len(raw_records),
+                    0,
                 )
+            )
             if len(batch) < limit:
                 break
             offset += limit
@@ -614,7 +614,7 @@ class GhostwriterApi:
         """
         raw_records: list[dict[str, Any]] = []
         offset = 0
-        limit = 100
+        limit = self.server.sync_batch_size
         while True:
             self.progress(SyncEvent("backup_fetch", f"Fetching observation backup records from {self.server.name}", len(raw_records), 0))
             data = self.client.execute(query, {"limit": limit, "offset": offset})
@@ -627,14 +627,14 @@ class GhostwriterApi:
             )
             for item in batch:
                 raw_records.append({"record": item, "tags": tags_by_id[int(item["id"])]})
-                self.progress(
-                    SyncEvent(
-                        "backup_fetch",
-                        f"Fetched {len(raw_records)} observation backup record(s) from {self.server.name}",
-                        len(raw_records),
-                        0,
-                    )
+            self.progress(
+                SyncEvent(
+                    "backup_fetch",
+                    f"Fetched {len(raw_records)} observation backup record(s) from {self.server.name}",
+                    len(raw_records),
+                    0,
                 )
+            )
             if len(batch) < limit:
                 break
             offset += limit
