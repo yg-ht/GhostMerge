@@ -2,6 +2,7 @@
 .idea/
 __pycache__/
 ghostmerge_config.json
+sensitive_terms.txt.local
 ghostmerge.log
 ghostmerge_web_jobs/
 ghostmerge_api_backups/
