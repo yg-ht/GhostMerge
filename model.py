@@ -7,8 +7,10 @@ from imports import dataclass, field, fields, Any, Dict, List, Optional, Union, 
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import (log, is_blank, is_optional_field, blank_for_type, get_type_as_str, Aborting,
-                   apply_configured_field_normalisation, apply_extra_fields_key_migrations)
+from utils import (CODE_BLOCK_REPAIR_NONE, Aborting, apply_configured_extra_fields_normalisation,
+                   apply_configured_field_normalisation, apply_configured_normalisation,
+                   apply_extra_fields_key_migrations, blank_for_type, get_type_as_str, is_blank,
+                   is_optional_field, log)
 
 """
 This class is here to enable sensible handling of unexpected types.
@@ -42,6 +44,7 @@ class Finding:
         cls,
         data: Dict[str, Any],
         allow_interactive_correction: Optional[bool] = None,
+        extra_fields_are_normalised: bool = False,
     ) -> 'Finding' or None:
         """
         Convert a raw dict (e.g., from JSON) into a Finding instance, validating and coercing fields
@@ -50,7 +53,9 @@ class Finding:
         When no override is supplied, correction follows the CLI's configured
         interactive mode. Callers without a terminal, such as the Web service,
         must pass False so malformed input fails closed instead of blocking on
-        an invisible prompt.
+        an invisible prompt. API ingestion sets ``extra_fields_are_normalised``
+        after applying the server's field specifications so later passes do not
+        reinterpret known non-rich values.
         """
         try:
             correction_enabled = (
@@ -71,7 +76,16 @@ class Finding:
                 expected_type_str = get_type_as_str(field_type)
                 raw_value = data.get(field_name, None)
 
-                raw_value = apply_configured_field_normalisation(field_name, raw_value)
+                if field_name == "extra_fields":
+                    if extra_fields_are_normalised:
+                        raw_value = apply_configured_normalisation(
+                            raw_value,
+                            code_block_repair_policy=CODE_BLOCK_REPAIR_NONE,
+                        )
+                    else:
+                        raw_value = apply_configured_extra_fields_normalisation(raw_value)
+                else:
+                    raw_value = apply_configured_field_normalisation(field_name, raw_value)
 
                 log('DEBUG', f'Checking "{field_name}" if data type is as expected. '
                              f'Currently {type(raw_value)}', prefix='MODEL')
@@ -286,8 +300,16 @@ class Observation:
     extra_fields: Optional[Dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Observation' or None:
-        """Convert a raw dict into an Observation instance with light coercion."""
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+        extra_fields_are_normalised: bool = False,
+    ) -> 'Observation' or None:
+        """Convert a raw dict into an Observation instance with light coercion.
+
+        API ingestion sets ``extra_fields_are_normalised`` after applying the
+        server's field specifications.
+        """
         try:
             log("DEBUG", f"Parsing observation record with {len(data)} field(s)", prefix="MODEL")
             coerced_data = {}
@@ -299,7 +321,16 @@ class Observation:
                 expected_type_str = get_type_as_str(field_type)
                 raw_value = data.get(field_name, None)
 
-                raw_value = apply_configured_field_normalisation(field_name, raw_value)
+                if field_name == "extra_fields":
+                    if extra_fields_are_normalised:
+                        raw_value = apply_configured_normalisation(
+                            raw_value,
+                            code_block_repair_policy=CODE_BLOCK_REPAIR_NONE,
+                        )
+                    else:
+                        raw_value = apply_configured_extra_fields_normalisation(raw_value)
+                else:
+                    raw_value = apply_configured_field_normalisation(field_name, raw_value)
 
                 origin = get_origin(field_type)
                 args = get_args(field_type)

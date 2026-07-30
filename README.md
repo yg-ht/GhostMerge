@@ -776,6 +776,24 @@ Template `extra_fields` are not changed by the default rule.
 When both old and new keys exist, `preserve_existing` keeps the unprefixed key
 and drops the prefixed duplicate.
 
+### Extra-field HTML normalisation
+
+Ghostwriter extra fields can be rich text, single-line text, JSON, Boolean, or
+numeric values. For API-backed inputs, GhostMerge fetches each server's
+`ExtraFieldSpec` metadata and only uses root-level `<code>` as evidence of a
+flattened code block when that extra field is declared as `rich_text`. Known
+non-rich fields retain one-line `<code>` as inline code.
+
+Legacy file inputs do not contain extra-field type metadata. GhostMerge handles
+those conservatively: existing `<pre>` blocks are canonicalised, and flattened
+code is restored only when multiline content, a `<br>` element, or a historical
+block class such as `rich-code` or `language-*` provides strong evidence. A
+one-line root `<code>` element remains inline because its original meaning
+cannot be determined safely without the field specification.
+
+If an older Ghostwriter server or token cannot expose `extraFieldSpec`,
+API-backed input uses the same conservative fallback and logs a warning.
+
 ### Output files
 
 GhostMerge writes two JSON files:

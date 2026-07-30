@@ -39,11 +39,13 @@ from sensitivity import (
 )
 from utils import (
     Aborting,
+    apply_configured_extra_fields_normalisation,
     apply_formatting_cleanup,
     apply_configured_normalisation,
     load_json,
     load_config,
     normalise_cvss_vector,
+    normalise_finding_record,
     normalise_line_endings,
     normalise_references,
     remove_double_spaces_from_string,
@@ -461,6 +463,24 @@ class NormalisationRegressionTests(unittest.TestCase):
             '<p>Before</p><pre spellcheck="false"><code>payload</code></pre><p>After</p>',
         )
 
+    def test_boolean_code_repair_keyword_remains_backwards_compatible(self):
+        source = '<code spellcheck="false">one line</code>'
+
+        self.assertEqual(
+            apply_configured_normalisation(
+                source,
+                repair_flattened_code_blocks=True,
+            ),
+            '<pre spellcheck="false"><code>one line</code></pre>',
+        )
+        self.assertEqual(
+            apply_configured_normalisation(
+                source,
+                repair_flattened_code_blocks=False,
+            ),
+            "<code>one line</code>",
+        )
+
     def test_record_normalisation_repairs_blocks_only_in_rich_text_fields(self):
         data = finding(
             title='<code spellcheck="false">inline title</code>',
@@ -486,7 +506,72 @@ class NormalisationRegressionTests(unittest.TestCase):
         )
         self.assertEqual(
             parsed.extra_fields["nested"]["rich_text"],
-            '<pre spellcheck="false"><code>extra block</code></pre>',
+            "<code>extra block</code>",
+        )
+
+    def test_extra_field_normalisation_uses_types_and_conservative_fallback(self):
+        extra_fields = {
+            "formatted": '<code spellcheck="false">one-line block</code>',
+            "command": '<code spellcheck="false">inline command</code>',
+            "payload": {"example": '<code spellcheck="false">inline JSON</code>'},
+            "ambiguous": '<code spellcheck="false">unknown inline</code>',
+            "historical": '<code class="rich-code">historical block</code>',
+            "multiline": "<code>line one<br>line two</code>",
+            "enabled": True,
+            "attempts": 3,
+        }
+        field_types = {
+            "formatted": "rich_text",
+            "command": "single_line_text",
+            "payload": "json",
+            "enabled": "checkbox",
+            "attempts": "integer",
+        }
+
+        normalised = apply_configured_extra_fields_normalisation(
+            extra_fields,
+            field_types,
+        )
+
+        self.assertEqual(
+            normalised["formatted"],
+            '<pre spellcheck="false"><code>one-line block</code></pre>',
+        )
+        self.assertEqual(normalised["command"], "<code>inline command</code>")
+        self.assertEqual(normalised["payload"]["example"], "<code>inline JSON</code>")
+        self.assertEqual(normalised["ambiguous"], "<code>unknown inline</code>")
+        self.assertEqual(
+            normalised["historical"],
+            '<pre spellcheck="false"><code>historical block</code></pre>',
+        )
+        self.assertEqual(
+            normalised["multiline"],
+            '<pre spellcheck="false"><code>line one<br/>line two</code></pre>',
+        )
+        self.assertIs(normalised["enabled"], True)
+        self.assertEqual(normalised["attempts"], 3)
+        self.assertEqual(
+            apply_configured_extra_fields_normalisation(normalised, field_types),
+            normalised,
+        )
+
+    def test_typed_api_extra_fields_are_not_reclassified_later(self):
+        data = finding().to_dict()
+        data["extra_fields"] = {
+            "command": '<code class="language-python">print(1)</code>',
+            "formatted": '<pre spellcheck="false"><code>block</code></pre>',
+        }
+
+        parsed = Finding.from_dict(data, extra_fields_are_normalised=True)
+        normalise_finding_record(parsed)
+
+        self.assertEqual(
+            parsed.extra_fields["command"],
+            '<code class="language-python">print(1)</code>',
+        )
+        self.assertEqual(
+            parsed.extra_fields["formatted"],
+            '<pre spellcheck="false"><code>block</code></pre>',
         )
 
     def test_formatting_cleanup_repairs_redundant_flattened_code_tags(self):

@@ -22,7 +22,19 @@ RICH_TEXT_FIELD_NAMES = frozenset(
         "network_detection_techniques",
         "references",
         "finding_guidance",
-        "extra_fields",
+    }
+)
+CODE_BLOCK_REPAIR_NONE = "none"
+CODE_BLOCK_REPAIR_STRONG = "strong"
+CODE_BLOCK_REPAIR_RICH_TEXT = "rich_text"
+KNOWN_EXTRA_FIELD_TYPES = frozenset(
+    {"checkbox", "single_line_text", "rich_text", "integer", "float", "json"}
+)
+CODE_BLOCK_REPAIR_POLICIES = frozenset(
+    {
+        CODE_BLOCK_REPAIR_NONE,
+        CODE_BLOCK_REPAIR_STRONG,
+        CODE_BLOCK_REPAIR_RICH_TEXT,
     }
 )
 
@@ -389,21 +401,30 @@ def _normalise_sensitive_term_for_matching(term: str) -> str:
 
     return normalised
 
-def apply_configured_normalisation(value: Any, repair_flattened_code_blocks: bool = True) -> Any:
+def apply_configured_normalisation(
+    value: Any,
+    code_block_repair_policy: str | bool = CODE_BLOCK_REPAIR_RICH_TEXT,
+    *,
+    repair_flattened_code_blocks: Optional[bool] = None,
+) -> Any:
     """
     Apply configured normalisation recursively to strings, lists, and dictionaries.
     Non-string scalar values are returned unchanged.
     """
+    policy = _resolve_code_block_repair_policy(
+        code_block_repair_policy,
+        repair_flattened_code_blocks,
+    )
     if isinstance(value, str):
         return apply_configured_string_normalisation(
             value,
-            repair_flattened_code_blocks=repair_flattened_code_blocks,
+            code_block_repair_policy=policy,
         )
     if isinstance(value, list):
         return [
             apply_configured_normalisation(
                 item,
-                repair_flattened_code_blocks=repair_flattened_code_blocks,
+                code_block_repair_policy=policy,
             )
             for item in value
         ]
@@ -411,7 +432,7 @@ def apply_configured_normalisation(value: Any, repair_flattened_code_blocks: boo
         return tuple(
             apply_configured_normalisation(
                 item,
-                repair_flattened_code_blocks=repair_flattened_code_blocks,
+                code_block_repair_policy=policy,
             )
             for item in value
         )
@@ -419,7 +440,7 @@ def apply_configured_normalisation(value: Any, repair_flattened_code_blocks: boo
         return {
             key: apply_configured_normalisation(
                 item,
-                repair_flattened_code_blocks=repair_flattened_code_blocks,
+                code_block_repair_policy=policy,
             )
             for key, item in value.items()
         }
@@ -490,9 +511,22 @@ def normalise_cvss_vector(input_string: str) -> str:
 
 def apply_configured_field_normalisation(field_name: str, value: Any) -> Any:
     """Apply generic and field-specific normalisation for import/merge records."""
+    if field_name == "extra_fields":
+        # Extra-field block inference belongs at ingestion, where API metadata
+        # or the explicit metadata-free fallback is available. Later merge and
+        # sensitivity passes must only canonicalise the resulting structure.
+        return apply_configured_normalisation(
+            value,
+            code_block_repair_policy=CODE_BLOCK_REPAIR_NONE,
+        )
+
     normalised = apply_configured_normalisation(
         value,
-        repair_flattened_code_blocks=field_name in RICH_TEXT_FIELD_NAMES,
+        code_block_repair_policy=(
+            CODE_BLOCK_REPAIR_RICH_TEXT
+            if field_name in RICH_TEXT_FIELD_NAMES
+            else CODE_BLOCK_REPAIR_NONE
+        ),
     )
 
     if not isinstance(normalised, str):
@@ -504,6 +538,40 @@ def apply_configured_field_normalisation(field_name: str, value: Any) -> Any:
     if field_name == "cvss_vector" and CONFIG.get("normalise_cvss_vectors", True):
         normalised = normalise_cvss_vector(normalised)
 
+    return normalised
+
+
+def apply_configured_extra_fields_normalisation(
+    value: Any,
+    field_types: Optional[dict[str, str]] = None,
+) -> Any:
+    """Normalise extra-field values without assuming every string is rich text.
+
+    Ghostwriter's field specifications apply to top-level keys. Known rich-text
+    values can therefore use root position to recover flattened blocks. Known
+    non-rich values never infer blocks, while metadata-free values require
+    stronger structural evidence than root position alone.
+    """
+    if not isinstance(value, dict):
+        return apply_configured_normalisation(
+            value,
+            code_block_repair_policy=CODE_BLOCK_REPAIR_STRONG,
+        )
+
+    types = field_types or {}
+    normalised: dict[Any, Any] = {}
+    for key, item in value.items():
+        field_type = types.get(str(key))
+        if field_type == "rich_text":
+            policy = CODE_BLOCK_REPAIR_RICH_TEXT
+        elif field_type in KNOWN_EXTRA_FIELD_TYPES:
+            policy = CODE_BLOCK_REPAIR_NONE
+        else:
+            policy = CODE_BLOCK_REPAIR_STRONG
+        normalised[key] = apply_configured_normalisation(
+            item,
+            code_block_repair_policy=policy,
+        )
     return normalised
 
 def apply_extra_fields_key_migrations(extra_fields: Any, template_type: str) -> Any:
@@ -819,10 +887,28 @@ def _code_has_block_class(code_tag: Any) -> bool:
     )
 
 
+def _resolve_code_block_repair_policy(
+    policy: str | bool,
+    legacy_repair_flag: Optional[bool] = None,
+) -> str:
+    """Return a validated repair policy while accepting the former Boolean API."""
+    if legacy_repair_flag is not None:
+        return (
+            CODE_BLOCK_REPAIR_RICH_TEXT
+            if legacy_repair_flag
+            else CODE_BLOCK_REPAIR_NONE
+        )
+    if isinstance(policy, bool):
+        return CODE_BLOCK_REPAIR_RICH_TEXT if policy else CODE_BLOCK_REPAIR_NONE
+    if policy not in CODE_BLOCK_REPAIR_POLICIES:
+        raise ValueError(f"Unknown code-block repair policy: {policy!r}")
+    return policy
+
+
 def _code_is_recoverable_block(
     code_tag: Any,
     soup: BeautifulSoup,
-    repair_flattened_code_blocks: bool,
+    code_block_repair_policy: str,
 ) -> bool:
     """Identify a code element that GhostMerge previously flattened from pre.
 
@@ -833,14 +919,18 @@ def _code_is_recoverable_block(
     """
     if code_tag.find_parent("pre") is not None:
         return False
-    if not repair_flattened_code_blocks:
-        return False
-    if code_tag.parent is soup:
-        return True
     if _code_has_block_class(code_tag):
-        return True
+        return code_block_repair_policy in {
+            CODE_BLOCK_REPAIR_STRONG,
+            CODE_BLOCK_REPAIR_RICH_TEXT,
+        }
     if "\n" in code_tag.get_text() or code_tag.find("br") is not None:
-        return True
+        return code_block_repair_policy in {
+            CODE_BLOCK_REPAIR_STRONG,
+            CODE_BLOCK_REPAIR_RICH_TEXT,
+        }
+    if code_tag.parent is soup:
+        return code_block_repair_policy == CODE_BLOCK_REPAIR_RICH_TEXT
     return False
 
 
@@ -904,7 +994,9 @@ def _flatten_redundant_code_children(soup: BeautifulSoup) -> None:
 
 def normalise_code_markup(
     input_string: str,
-    repair_flattened_code_blocks: bool = True,
+    code_block_repair_policy: str | bool = CODE_BLOCK_REPAIR_RICH_TEXT,
+    *,
+    repair_flattened_code_blocks: Optional[bool] = None,
 ) -> str:
     """Canonicalise Ghostwriter code markup and repair flattened code blocks.
 
@@ -915,6 +1007,10 @@ def normalise_code_markup(
     historical classes, and multiline content provide conservative evidence for
     reversing that damage without treating nested inline code as a block.
     """
+    policy = _resolve_code_block_repair_policy(
+        code_block_repair_policy,
+        repair_flattened_code_blocks,
+    )
     if not re.search(r"<\s*(?:pre|code)\b", input_string, flags=re.IGNORECASE):
         return input_string
 
@@ -973,7 +1069,7 @@ def normalise_code_markup(
         if code_tag.find_parent("pre") is not None:
             continue
 
-        if _code_is_recoverable_block(code_tag, soup, repair_flattened_code_blocks):
+        if _code_is_recoverable_block(code_tag, soup, policy):
             pre_tag = soup.new_tag("pre", attrs={"spellcheck": "false"})
             code_tag.attrs = {}
             code_tag.replace_with(pre_tag)
@@ -1055,7 +1151,9 @@ def _iter_formatting_cleanup_rules() -> list[dict[str, Any]]:
 
 def apply_formatting_cleanup(
     input_string: str,
-    repair_flattened_code_blocks: bool = True,
+    code_block_repair_policy: str | bool = CODE_BLOCK_REPAIR_RICH_TEXT,
+    *,
+    repair_flattened_code_blocks: Optional[bool] = None,
 ) -> str:
     """Rewrite configured deprecated formatting HTML before review decisions.
 
@@ -1063,6 +1161,10 @@ def apply_formatting_cleanup(
     cleanup is deterministic normalisation, while sensitivity review is a human
     decision workflow for real sensitive content.
     """
+    policy = _resolve_code_block_repair_policy(
+        code_block_repair_policy,
+        repair_flattened_code_blocks,
+    )
     if not CONFIG.get("formatting_cleanup_enabled", False):
         return input_string
 
@@ -1071,7 +1173,7 @@ def apply_formatting_cleanup(
 
     normalised_input = normalise_code_markup(
         input_string,
-        repair_flattened_code_blocks=repair_flattened_code_blocks,
+        code_block_repair_policy=policy,
     )
     rules = _iter_formatting_cleanup_rules()
     if not rules:
@@ -1154,7 +1256,7 @@ def apply_formatting_cleanup(
         return normalise_html_tag_spacing(
             normalise_code_markup(
                 normalised_result,
-                repair_flattened_code_blocks=repair_flattened_code_blocks,
+                code_block_repair_policy=policy,
             )
         )
 
@@ -1292,7 +1394,9 @@ def normalise_line_endings(input_string: str) -> str:
 
 def apply_configured_string_normalisation(
     input_string: str,
-    repair_flattened_code_blocks: bool = True,
+    code_block_repair_policy: str | bool = CODE_BLOCK_REPAIR_RICH_TEXT,
+    *,
+    repair_flattened_code_blocks: Optional[bool] = None,
 ) -> str:
     """
     Apply every string-level normalisation enabled in config.
@@ -1302,6 +1406,10 @@ def apply_configured_string_normalisation(
     before fuzzy matching. Keep matching code using Finding fields, not raw JSON,
     so comparisons are always made against these configured normalised values.
     """
+    policy = _resolve_code_block_repair_policy(
+        code_block_repair_policy,
+        repair_flattened_code_blocks,
+    )
     normalised = input_string
 
     # Repair code structure before generic whitespace cleanup so already-damaged
@@ -1309,7 +1417,7 @@ def apply_configured_string_normalisation(
     if CONFIG.get('formatting_cleanup_enabled', False):
         normalised = apply_formatting_cleanup(
             normalised,
-            repair_flattened_code_blocks=repair_flattened_code_blocks,
+            code_block_repair_policy=policy,
         )
 
     if CONFIG.get('normalise_unicode_whitespace', True):

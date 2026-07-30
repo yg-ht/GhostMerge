@@ -177,6 +177,38 @@ class WebServiceTests(unittest.TestCase):
 
         prompt.assert_not_called()
 
+    def test_api_provenance_prevents_later_extra_field_reclassification(self):
+        api_record = record(
+            extra_fields={
+                "command": '<code class="language-python">print(1)</code>',
+            }
+        )
+        file_record = record(
+            extra_fields={
+                "legacy": '<code class="language-python">print(2)</code>',
+            },
+        )
+
+        api_job = create_merge_job(
+            [api_record],
+            [],
+            input_sources={"left": "api", "right": "file"},
+        )
+        file_job = create_merge_job(
+            [file_record],
+            [],
+            input_sources={"left": "file", "right": "file"},
+        )
+
+        self.assertEqual(
+            api_job.unmatched_left[0].extra_fields["command"],
+            '<code class="language-python">print(1)</code>',
+        )
+        self.assertEqual(
+            file_job.unmatched_left[0].extra_fields["legacy"],
+            '<pre spellcheck="false"><code>print(2)</code></pre>',
+        )
+
     def test_sensitivity_snapshot_records_loaded_and_failed_configuration(self):
         configure_for_web_tests(sensitivity_check_enabled=True)
 
