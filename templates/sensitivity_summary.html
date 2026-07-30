@@ -61,7 +61,7 @@
 <form class="panel" action="{{ url_for('acknowledge_sensitivity', job_id=job.job_id) }}" method="post">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <p>Output remains locked until this sensitivity result is acknowledged.</p>
-  <button type="submit">Acknowledge sensitivity result and continue</button>
+  <button type="submit" data-shortcut="Enter"><span class="shortcut">Enter</span>Acknowledge sensitivity result and continue</button>
 </form>
 {% endif %}
 

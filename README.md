@@ -342,10 +342,12 @@ preview submissions fail closed. Existing completed jobs created before this
 approval stage remain available when their final records and both durable
 output files are present.
 
-Decision buttons can be clicked directly, and common CLI-style keyboard
-shortcuts are available during review:
+Decision buttons can be clicked directly. On individual field-review pages,
+the left, right, and offered value panels can also be clicked to apply that
+value. Common CLI-style keyboard shortcuts are available during review:
 
 ```text
+Enter        perform the primary action on review and approval pages
 Left arrow   use left value
 Right arrow  use right value
 Up arrow     keep left and right intact
