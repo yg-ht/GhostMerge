@@ -55,7 +55,7 @@
   </div>
 </div>
 
-<form class="panel" action="{{ url_for('approve_output', job_id=job.job_id) }}" method="post">
+<form class="panel" action="{{ url_for('approve_output', job_id=job.job_id) }}" method="post" data-review-form data-busy-message="Creating output files…">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="approval_token" value="{{ job.output_preview_token }}">
   {% if job.output_approved %}

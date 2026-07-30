@@ -2,6 +2,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -292,6 +293,7 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(len(job.unmatched_left), 1)
         self.assertEqual(len(job.unmatched_right), 1)
         self.assertIsNone(get_next_conflict(job))
+        self.assertEqual(get_review_progress(job)["active_template_type"], "finding")
         stop_orphan_reprocessing_for_current_kind(job)
         manual_prompt = get_manual_matching_prompt(job)
         stop_manual_matching_for_current_kind(job, manual_prompt["token"])
@@ -697,6 +699,83 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(len(job.merged_right), 3)
         self.assertIsNone(job.manual_matching_token)
         self.assertIsNotNone(prompt["token"])
+
+    def test_unmatched_findings_and_observations_are_written_to_both_outputs(self):
+        configure_for_web_tests(orphan_reprocessing_enabled=False, fuzzy_match_threshold=[101])
+        job = create_merge_job(
+            {
+                "findings": [record(id="1", title="Left-only finding")],
+                "observations": [observation(id="1", title="Left-only observation")],
+            },
+            {
+                "findings": [record(id="2", title="Right-only finding")],
+                "observations": [observation(id="2", title="Right-only observation")],
+            },
+            job_id="unmatchedbothkinds123",
+        )
+
+        self.assertIsNone(get_next_conflict(job))
+        finding_prompt = get_manual_matching_prompt(job)
+        self.assertEqual(finding_prompt["template_type"], "finding")
+        self.assertEqual(get_review_progress(job)["active_template_type"], "finding")
+        stop_manual_matching_for_current_kind(job, finding_prompt["token"])
+        self.assertIsNone(get_next_conflict(job))
+        observation_prompt = get_manual_matching_prompt(job)
+        self.assertEqual(observation_prompt["template_type"], "observation")
+        self.assertEqual(get_review_progress(job)["active_template_type"], "observation")
+        stop_manual_matching_for_current_kind(job, observation_prompt["token"])
+        self.assertIsNone(get_next_conflict(job))
+
+        self.assertIsNot(job.merged_left[0], job.merged_right[0])
+        self.assertIsNot(job.merged_observations_left[0], job.merged_observations_right[0])
+        initialise_sensitivity_review(job, None)
+        acknowledge_sensitivity_review(job)
+        prepare_output_preview(job)
+        result = approve_output_preview(job, job.output_preview_token)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jobs_dir = Path(tmp_dir)
+            save_outputs(job, jobs_dir, result)
+            durable_left = json.loads((jobs_dir / job.job_id / "left.json").read_text(encoding="utf-8"))
+            durable_right = json.loads((jobs_dir / job.job_id / "right.json").read_text(encoding="utf-8"))
+
+        expected_findings = {"Left-only finding", "Right-only finding"}
+        expected_observations = {"Left-only observation", "Right-only observation"}
+        self.assertEqual({item["title"] for item in result.left_records}, expected_findings)
+        self.assertEqual({item["title"] for item in result.right_records}, expected_findings)
+        self.assertEqual({item["title"] for item in result.left_observations}, expected_observations)
+        self.assertEqual({item["title"] for item in result.right_observations}, expected_observations)
+        self.assertEqual({item["title"] for item in durable_left["findings"]}, expected_findings)
+        self.assertEqual({item["title"] for item in durable_right["findings"]}, expected_findings)
+        self.assertEqual({item["title"] for item in durable_left["observations"]}, expected_observations)
+        self.assertEqual({item["title"] for item in durable_right["observations"]}, expected_observations)
+
+    def test_review_progress_distinguishes_findings_and_observations(self):
+        job = create_merge_job(
+            {
+                "findings": [record(title="Same finding")],
+                "observations": [observation(title="Shared observation", description="Left detail")],
+            },
+            {
+                "findings": [record(id="2", title="Same finding")],
+                "observations": [
+                    observation(id="2", title="Shared observation", description="Right detail"),
+                    observation(id="3", title="Right-only observation"),
+                ],
+            },
+            job_id="typedprogress123",
+        )
+
+        item = get_next_conflict(job)
+        progress = get_review_progress(job)
+
+        self.assertEqual(item.template_type, "observation")
+        self.assertEqual(progress["active_template_type"], "observation")
+        self.assertEqual(progress["finding_reviewed_matches"], 1)
+        self.assertEqual(progress["finding_total_matches"], 1)
+        self.assertEqual(progress["observation_reviewed_matches"], 0)
+        self.assertEqual(progress["observation_total_matches"], 1)
+        self.assertEqual(progress["unmatched_observations_right"], 1)
 
     def test_manual_matching_token_and_origin_round_trip_in_persisted_job(self):
         configure_for_web_tests(orphan_reprocessing_enabled=False, fuzzy_match_threshold=[101])
@@ -1223,6 +1302,14 @@ class FlaskRouteTests(unittest.TestCase):
         submitted["_csrf_token"] = self.csrf_token()
         return submitted
 
+    def with_review_action(self, job_id, data=None):
+        page = self.client.get(f"/jobs/{job_id}/conflicts")
+        self.assertEqual(page.status_code, 200)
+        job = load_job(Path(self.tmp_dir.name), job_id)
+        submitted = dict(data or {})
+        submitted["review_action_token"] = job.review_action_token
+        return self.with_csrf(submitted)
+
     def acknowledge_sensitivity_for_job(self, job_id: str):
         return self.client.post(
             f"/jobs/{job_id}/sensitivity/acknowledge",
@@ -1546,10 +1633,12 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"<th class=\"value-cell\">right.json (JSON file)</th>", conflict.data)
         self.assertIn(b"Apply selected field choices", conflict.data)
         self.assertIn(b"Reject match", conflict.data)
+        self.assertIn(b'name="review_action_token"', conflict.data)
+        self.assertIn(b"data-review-form", conflict.data)
 
         conflict = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data=self.with_csrf({"preview_action": "continue"}),
+            data=self.with_review_action(job_id, {"preview_action": "continue"}),
             follow_redirects=True,
         )
         self.assertEqual(conflict.status_code, 200)
@@ -1563,7 +1652,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         sensitivity_summary = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data=self.with_csrf({"field_name": "description", "action": "right"}),
+            data=self.with_review_action(job_id, {"field_name": "description", "action": "right"}),
             follow_redirects=True,
         )
         self.assertEqual(sensitivity_summary.status_code, 200)
@@ -1592,6 +1681,125 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(right_download.status_code, 200)
         self.assertEqual(left_download.get_json()[0]["description"], "Right detail")
         self.assertEqual(right_download.get_json()[0]["description"], "Right detail")
+
+    def test_replayed_match_action_is_rejected_without_advancing_review(self):
+        left = json.dumps([record(description="Left detail")]).encode("utf-8")
+        right = json.dumps([record(id="2", description="Right detail")]).encode("utf-8")
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+        self.client.get(f"/jobs/{job_id}/conflicts")
+        token = load_job(Path(self.tmp_dir.name), job_id).review_action_token
+        action = self.with_csrf({"preview_action": "continue", "review_action_token": token})
+
+        accepted = self.client.post(f"/jobs/{job_id}/conflicts", data=action)
+        replayed = self.client.post(f"/jobs/{job_id}/conflicts", data=action)
+        persisted = load_job(Path(self.tmp_dir.name), job_id)
+
+        self.assertEqual(accepted.status_code, 302)
+        self.assertEqual(replayed.status_code, 409)
+        self.assertIn(b"Resume current review", replayed.data)
+        self.assertTrue(persisted.preview_acknowledged)
+        self.assertEqual(persisted.field_index, 0)
+
+    def test_replayed_orphan_action_is_rejected_without_skipping_manual_matching(self):
+        left = json.dumps([record(description="Left detail")]).encode("utf-8")
+        right = json.dumps([record(id="2", description="Right detail")]).encode("utf-8")
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+        rejected = self.client.post(
+            f"/jobs/{job_id}/conflicts",
+            data=self.with_review_action(job_id, {"preview_action": "reject_match"}),
+        )
+        self.assertEqual(rejected.status_code, 302)
+        self.client.get(f"/jobs/{job_id}/conflicts")
+        token = load_job(Path(self.tmp_dir.name), job_id).review_action_token
+        action = self.with_csrf({
+            "preview_action": "stop_orphan_reprocessing",
+            "review_action_token": token,
+        })
+
+        accepted = self.client.post(f"/jobs/{job_id}/conflicts", data=action)
+        replayed = self.client.post(f"/jobs/{job_id}/conflicts", data=action)
+        resumed = self.client.get(f"/jobs/{job_id}/conflicts")
+
+        self.assertEqual(accepted.status_code, 302)
+        self.assertEqual(replayed.status_code, 409)
+        self.assertIn(b"Resume current review", replayed.data)
+        self.assertIn(b"Manually match unmatched finding records", resumed.data)
+
+    def test_concurrent_match_actions_are_serialised_by_job_lock(self):
+        left = json.dumps([record(description="Left detail")]).encode("utf-8")
+        right = json.dumps([record(id="2", description="Right detail")]).encode("utf-8")
+        upload = self.client.post(
+            "/jobs",
+            data=self.with_csrf({
+                "left_file": (io.BytesIO(left), "left.json"),
+                "right_file": (io.BytesIO(right), "right.json"),
+            }),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
+        self.client.get(f"/jobs/{job_id}/conflicts")
+        token = load_job(Path(self.tmp_dir.name), job_id).review_action_token
+        entered_first_action = threading.Event()
+        release_first_action = threading.Event()
+        second_finished = threading.Event()
+        responses = []
+
+        first_client = self.app.test_client()
+        second_client = self.app.test_client()
+        for client in (first_client, second_client):
+            with client.session_transaction() as session:
+                session["_csrf_token"] = "concurrent-csrf-token"
+
+        def delayed_acknowledgement(job):
+            acknowledge_current_preview(job)
+            entered_first_action.set()
+            release_first_action.wait(timeout=2)
+
+        def submit(client, finished=None):
+            response = client.post(
+                f"/jobs/{job_id}/conflicts",
+                data={
+                    "_csrf_token": "concurrent-csrf-token",
+                    "preview_action": "continue",
+                    "review_action_token": token,
+                },
+            )
+            responses.append(response)
+            if finished is not None:
+                finished.set()
+
+        with patch("web_app.acknowledge_current_preview", side_effect=delayed_acknowledgement):
+            first_thread = threading.Thread(target=submit, args=(first_client,))
+            second_thread = threading.Thread(target=submit, args=(second_client, second_finished))
+            first_thread.start()
+            self.assertTrue(entered_first_action.wait(timeout=1))
+            second_thread.start()
+            self.assertFalse(second_finished.wait(timeout=0.1))
+            release_first_action.set()
+            first_thread.join(timeout=2)
+            second_thread.join(timeout=2)
+
+        self.assertEqual(sorted(response.status_code for response in responses), [302, 409])
+        self.assertTrue(load_job(Path(self.tmp_dir.name), job_id).preview_acknowledged)
 
     def test_final_preview_rejects_invalid_approval_without_writing_outputs(self):
         jobs_dir = Path(self.tmp_dir.name)
@@ -1623,8 +1831,9 @@ class FlaskRouteTests(unittest.TestCase):
             data=self.with_csrf({"approval_token": "stale-browser-token"}),
         )
 
-        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(rejected.status_code, 409)
         self.assertIn(b"stale or invalid", rejected.data)
+        self.assertIn(b"Resume current review", rejected.data)
         self.assertFalse((jobs_dir / "invalidapproval123" / "left.json").exists())
         self.assertFalse((jobs_dir / "invalidapproval123" / "right.json").exists())
 
@@ -1647,8 +1856,9 @@ class FlaskRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(approved.status_code, 302)
-        self.assertEqual(replayed.status_code, 400)
+        self.assertEqual(replayed.status_code, 409)
         self.assertIn(b"already been approved and created", replayed.data)
+        self.assertIn(b"Resume current review", replayed.data)
         self.assertTrue((jobs_dir / "approvalreplay123" / "left.json").exists())
         self.assertTrue((jobs_dir / "approvalreplay123" / "right.json").exists())
 
@@ -1858,8 +2068,9 @@ class FlaskRouteTests(unittest.TestCase):
             data=self.with_csrf({"decision_token": "altered-token", "action": "offered"}),
         )
         unchanged_job = load_job(Path(self.tmp_dir.name), job_id)
-        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(rejected.status_code, 409)
         self.assertIn(b"stale or invalid", rejected.data)
+        self.assertIn(b"Resume current review", rejected.data)
         self.assertEqual(unchanged_job.merged_left[0].description, "Secret sauce detail")
         self.assertEqual(unchanged_job.sensitivity_decision_token, pending_job.sensitivity_decision_token)
 
@@ -1883,7 +2094,7 @@ class FlaskRouteTests(unittest.TestCase):
         after_replay = load_job(Path(self.tmp_dir.name), job_id)
 
         self.assertEqual(accepted.status_code, 302)
-        self.assertEqual(replayed.status_code, 400)
+        self.assertEqual(replayed.status_code, 409)
         self.assertIn(b"stale or invalid", replayed.data)
         self.assertEqual(after_replay.merged_left[0].description, "proprietary technique detail")
         self.assertNotIn("ATTACKER VALUE", after_replay.merged_left[0].description)
@@ -1899,6 +2110,26 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"Invalid or missing form token", response.data)
+
+    def test_replayed_sensitivity_acknowledgement_resumes_final_preview(self):
+        job = create_merge_job([record()], [], job_id="sensackreplay123")
+        self.assertIsNone(get_next_conflict(job))
+        initialise_sensitivity_review(job, None)
+        save_job(job, Path(self.tmp_dir.name))
+
+        accepted = self.client.post(
+            "/jobs/sensackreplay123/sensitivity/acknowledge",
+            data=self.with_csrf(),
+        )
+        replayed = self.client.post(
+            "/jobs/sensackreplay123/sensitivity/acknowledge",
+            data=self.with_csrf(),
+        )
+
+        self.assertEqual(accepted.status_code, 302)
+        self.assertEqual(replayed.status_code, 409)
+        self.assertIn(b"Resume current review", replayed.data)
+        self.assertIn(b"/jobs/sensackreplay123/complete", replayed.data)
 
     def test_preview_reject_match_preserves_both_records_as_unmatched_outputs(self):
         left = json.dumps([record(title="Shared title", description="Left detail")]).encode("utf-8")
@@ -1921,7 +2152,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         prompt = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data=self.with_csrf({"preview_action": "reject_match"}),
+            data=self.with_review_action(job_id, {"preview_action": "reject_match"}),
             follow_redirects=True,
         )
         self.assertEqual(prompt.status_code, 200)
@@ -1930,7 +2161,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         manual_matching = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data=self.with_csrf({"preview_action": "stop_orphan_reprocessing"}),
+            data=self.with_review_action(job_id, {"preview_action": "stop_orphan_reprocessing"}),
             follow_redirects=True,
         )
         self.assertIn(b"Manually match unmatched finding records", manual_matching.data)
@@ -2015,7 +2246,7 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertIn(b"Finding match preview", selected.data)
         self.assertIn(b"Manually selected", selected.data)
         self.assertEqual(after_selection.matches[0]["origin"], "manual")
-        self.assertEqual(replayed.status_code, 400)
+        self.assertEqual(replayed.status_code, 409)
         self.assertIn(b"stale or invalid", replayed.data)
         self.assertEqual(len(after_replay.matches), 1)
 
@@ -2059,7 +2290,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         prompt = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data=self.with_csrf({"preview_action": "reject_match"}),
+            data=self.with_review_action(job_id, {"preview_action": "reject_match"}),
             follow_redirects=True,
         )
         self.assertEqual(prompt.status_code, 200)
@@ -2067,7 +2298,7 @@ class FlaskRouteTests(unittest.TestCase):
 
         response = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data=self.with_csrf({"preview_action": "reprocess_orphans"}),
+            data=self.with_review_action(job_id, {"preview_action": "reprocess_orphans"}),
             follow_redirects=True,
         )
         self.assertEqual(response.status_code, 200)
@@ -2433,6 +2664,7 @@ class FlaskRouteTests(unittest.TestCase):
             "finding_manual_matching_stopped",
             "observation_manual_matching_stopped",
             "manual_matching_token",
+            "review_action_token",
             "preview_acknowledged",
             "sensitivity_snapshot_version",
             "sensitivity_enabled",
@@ -2492,7 +2724,7 @@ class FlaskRouteTests(unittest.TestCase):
         job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
         response = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data=self.with_csrf({"preview_action": "accept_offered"}),
+            data=self.with_review_action(job_id, {"preview_action": "accept_offered"}),
             follow_redirects=True,
         )
 
@@ -2519,7 +2751,7 @@ class FlaskRouteTests(unittest.TestCase):
         job_id = upload.headers["Location"].rstrip("/").split("/")[-2]
         response = self.client.post(
             f"/jobs/{job_id}/conflicts",
-            data=self.with_csrf({
+            data=self.with_review_action(job_id, {
                 "preview_action": "apply_field_choices",
                 "field_choice:description": "left",
                 "field_choice:impact": "right",
@@ -2551,6 +2783,38 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"only available for API-backed merge jobs", response.data)
+
+    def test_live_sync_confirmation_shows_effective_batch_and_validation_settings(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record()],
+            [],
+            job_id="syncsettings123",
+            input_sources={"left": "api", "right": "file"},
+        )
+        self.assertIsNone(get_next_conflict(job))
+        job.sensitivity_phase_complete = True
+        approve_and_save_output(job, jobs_dir)
+        config = get_config()
+        config["ghostwriter_api"].update({
+            "sync_batch_size": 20,
+            "sync_validation_mode": "sample",
+            "sync_validation_sample_size": 4,
+        })
+        config["ghostwriter_api"]["servers"]["left"].update({
+            "enabled": True,
+            "base_url": "https://left.example",
+            "bearer_token": "left-token",
+            "sync_batch_size": 8,
+        })
+
+        response = self.client.get("/jobs/syncsettings123/sync/left")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"<dt>Request batch size</dt><dd>8 record(s)</dd>", response.data)
+        self.assertIn(b"<dt>Temporary validation</dt>", response.data)
+        self.assertIn(b"Sample", response.data)
+        self.assertIn(b"up to 4 record(s) of each template type", response.data)
 
     def test_direct_complete_does_not_unlock_live_sync_for_incomplete_review(self):
         jobs_dir = Path(self.tmp_dir.name)

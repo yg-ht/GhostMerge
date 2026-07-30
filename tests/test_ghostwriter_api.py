@@ -31,6 +31,7 @@ def server_config(**overrides):
         "graphql_url": "https://ghostwriter.example/v1/graphql",
         "bearer_token": "secret-token",
         "rate_limit_per_second": 1000.0,
+        "sync_batch_size": 1,
     }
     data.update(overrides)
     return GhostwriterServerConfig(**data)
@@ -216,24 +217,58 @@ class FakeGraphQLClient:
                 "findingSeverity": [{"id": 3, "severity": "Medium"}],
                 "findingType": [{"id": 7, "findingType": "Web"}],
             }
+        if "DeleteFindings" in query:
+            ids = [variables[f"value{index}"] for index in range(len(variables))]
+            self.deleted_ids.extend(ids)
+            return {f"item{index}": {"id": record_id} for index, record_id in enumerate(ids)}
+        if "DeleteObservations" in query:
+            ids = [variables[f"value{index}"] for index in range(len(variables))]
+            self.deleted_observation_ids.extend(ids)
+            return {f"item{index}": {"id": record_id} for index, record_id in enumerate(ids)}
         if "DeleteFinding" in query:
             self.deleted_ids.append(variables["id"])
             return {"delete_finding_by_pk": {"id": variables["id"]}}
         if "DeleteObservation" in query:
             self.deleted_observation_ids.append(variables["id"])
             return {"delete_observation_by_pk": {"id": variables["id"]}}
+        if "CreateFindings" in query:
+            objects = [variables[f"value{index}"] for index in range(len(variables))]
+            self.created_objects.extend(objects)
+            return {f"item{index}": {"id": 101 + index} for index in range(len(objects))}
+        if "CreateObservations" in query:
+            objects = [variables[f"value{index}"] for index in range(len(variables))]
+            self.created_observations.extend(objects)
+            return {f"item{index}": {"id": 202 + index} for index in range(len(objects))}
         if "CreateFinding" in query:
             self.created_objects.append(variables["object"])
             return {"insert_finding_one": {"id": 101}}
         if "CreateObservation" in query:
             self.created_observations.append(variables["object"])
             return {"insert_observation_one": {"id": 202}}
+        if "SetTagsBatch" in query:
+            indexes = range(len([key for key in variables if key.startswith("id")]))
+            response = {}
+            for index in indexes:
+                self.tag_call_count += 1
+                if self.fail_on_tag_call == self.tag_call_count:
+                    raise GhostwriterApiError("tag validation failed")
+                record_id = variables[f"id{index}"]
+                tags = variables[f"tags{index}"]
+                self.tag_sets.append((record_id, tags))
+                response[f"item{index}"] = {"tags": tags}
+            return response
         if "SetFindingTags" in query:
             self.tag_call_count += 1
             if self.fail_on_tag_call == self.tag_call_count:
                 raise GhostwriterApiError("tag validation failed")
             self.tag_sets.append((variables["id"], variables["tags"]))
             return {"setTags": {"tags": variables["tags"]}}
+        if "FetchTagsBatch" in query:
+            indexes = range(len([key for key in variables if key.startswith("id")]))
+            return {
+                f"item{index}": {"tags": [f"tag-{variables[f'id{index}']}"]}
+                for index in indexes
+            }
         if "Tags(" in query:
             return {"tags": {"tags": ["existing"]}}
         raise AssertionError(f"Unexpected query: {query}")
@@ -263,6 +298,19 @@ class GhostwriterApiTests(unittest.TestCase):
         self.assertEqual(events[-1].complete, 2)
         self.assertEqual(events[-1].total, 2)
         self.assertEqual(events[-1].status, "done")
+
+    def test_fetch_tags_batches_inbound_requests_and_preserves_record_mapping(self):
+        client = FakeGraphQLClient()
+        api = GhostwriterApi(server_config(sync_batch_size=2), client=client)
+
+        tags = api.fetch_tags_batch([10, 20, 30], model="finding")
+
+        self.assertEqual(tags, {10: ["tag-10"], 20: ["tag-20"], 30: ["existing"]})
+        tag_queries = [
+            query for query, _ in client.calls
+            if "FetchTagsBatch" in query or "query Tags(" in query
+        ]
+        self.assertEqual(len(tag_queries), 2)
 
     def test_fetch_template_counts_falls_back_to_id_only_query(self):
         client = FakeGraphQLClient(fail_template_aggregates=True)
@@ -590,6 +638,66 @@ class GhostwriterApiTests(unittest.TestCase):
 
         self.assertEqual(servers["left"].rate_limit_per_second, 0.2)
 
+    def test_server_config_applies_global_sync_settings_and_server_overrides(self):
+        config = {
+            "ghostwriter_api": {
+                "sync_batch_size": 20,
+                "sync_validation_mode": "sample",
+                "sync_validation_sample_size": 5,
+                "servers": {
+                    "left": {
+                        "enabled": True,
+                        "base_url": "https://left.example",
+                        "bearer_token": "left-token",
+                        "sync_batch_size": 8,
+                    }
+                },
+            }
+        }
+
+        server = load_server_configs(config)["left"]
+
+        self.assertEqual(server.sync_batch_size, 8)
+        self.assertEqual(server.sync_validation_mode, "sample")
+        self.assertEqual(server.sync_validation_sample_size, 5)
+
+    def test_server_config_rejects_invalid_sync_settings(self):
+        base_server = {
+            "enabled": True,
+            "base_url": "https://left.example",
+            "bearer_token": "left-token",
+        }
+        with self.subTest(setting="batch size"), self.assertRaisesRegex(
+            GhostwriterApiError,
+            "sync_batch_size must be a positive integer",
+        ):
+            load_server_configs({
+                "ghostwriter_api": {
+                    "sync_batch_size": 0,
+                    "servers": {"left": base_server},
+                }
+            })
+        with self.subTest(setting="validation mode"), self.assertRaisesRegex(
+            GhostwriterApiError,
+            "sync_validation_mode must be one of",
+        ):
+            load_server_configs({
+                "ghostwriter_api": {
+                    "sync_validation_mode": "quick",
+                    "servers": {"left": base_server},
+                }
+            })
+        with self.subTest(setting="batch size maximum"), self.assertRaisesRegex(
+            GhostwriterApiError,
+            "sync_batch_size must not exceed 100",
+        ):
+            load_server_configs({
+                "ghostwriter_api": {
+                    "sync_batch_size": 101,
+                    "servers": {"left": base_server},
+                }
+            })
+
     def test_server_config_accepts_full_graphql_endpoint(self):
         config = {
             "ghostwriter_api": {
@@ -702,6 +810,28 @@ class GhostwriterApiTests(unittest.TestCase):
             self.assertEqual(extra_fields["owner"], "red-team")
             self.assertIn(GHOSTMERGE_LAST_SYNCED_AT_FIELD, extra_fields)
 
+    def test_replace_all_batches_final_creation_and_tag_requests(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_client = FakeGraphQLClient()
+            api = GhostwriterApi(
+                server_config(sync_batch_size=2, sync_validation_mode="none"),
+                client=fake_client,
+            )
+            records = [
+                finding_record(id=str(index), title=f"Finding {index}")
+                for index in range(3)
+            ]
+
+            api.replace_all_findings(records, Path(tmp_dir))
+
+        operation_names = [query.split("(", 1)[0].strip() for query, _ in fake_client.calls]
+        self.assertEqual(operation_names.count("mutation CreateFindings"), 1)
+        self.assertEqual(operation_names.count("mutation CreateFinding"), 1)
+        self.assertEqual(operation_names.count("mutation SetTagsBatch"), 1)
+        self.assertEqual(operation_names.count("mutation SetFindingTags"), 1)
+        self.assertEqual(len(fake_client.created_objects), 3)
+        self.assertEqual(len(fake_client.tag_sets), 3)
+
     def test_replace_all_validates_create_and_cleans_up_before_deleting_real_records(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             fake_client = FakeGraphQLClient(fail_on_tag_call=1)
@@ -760,6 +890,85 @@ class GhostwriterApiTests(unittest.TestCase):
             ],
         )
 
+    def test_validation_batches_create_tag_and_cleanup_requests(self):
+        fake_client = FakeGraphQLClient()
+        events = []
+        api = GhostwriterApi(
+            server_config(sync_batch_size=2),
+            client=fake_client,
+            progress=events.append,
+        )
+        prepared_findings = [
+            {"api_record": {"title": f"Finding {index}"}, "tags": [f"finding-{index}"]}
+            for index in range(3)
+        ]
+
+        api.validate_prepared_records_can_be_created(prepared_findings)
+
+        operation_names = [query.split("(", 1)[0].strip() for query, _ in fake_client.calls]
+        self.assertEqual(operation_names.count("mutation CreateFindings"), 1)
+        self.assertEqual(operation_names.count("mutation SetTagsBatch"), 1)
+        self.assertEqual(operation_names.count("mutation DeleteFindings"), 1)
+        self.assertEqual(len(fake_client.created_objects), 3)
+        self.assertEqual(len(fake_client.deleted_ids), 3)
+        self.assertEqual(
+            [(event.stage, event.complete, event.total) for event in events],
+            [
+                ("validate_create", 2, 3),
+                ("validate_create", 3, 3),
+                ("validate_cleanup", 0, 3),
+                ("validate_cleanup", 2, 3),
+                ("validate_cleanup", 3, 3),
+                ("validate_complete", 3, 3),
+            ],
+        )
+
+    def test_sample_validation_limits_each_template_type(self):
+        fake_client = FakeGraphQLClient()
+        api = GhostwriterApi(
+            server_config(
+                sync_batch_size=10,
+                sync_validation_mode="sample",
+                sync_validation_sample_size=1,
+            ),
+            client=fake_client,
+        )
+        prepared_findings = [
+            {"api_record": {"title": f"Finding {index}"}, "tags": []}
+            for index in range(3)
+        ]
+        prepared_observations = [
+            {"api_record": {"title": f"Observation {index}"}, "tags": []}
+            for index in range(3)
+        ]
+
+        api.validate_prepared_records_can_be_created(prepared_findings, prepared_observations)
+
+        self.assertEqual(len(fake_client.created_objects), 1)
+        self.assertEqual(len(fake_client.created_observations), 1)
+        self.assertEqual(len(fake_client.deleted_ids), 1)
+        self.assertEqual(len(fake_client.deleted_observation_ids), 1)
+
+    def test_disabled_temporary_validation_reports_skipped_without_writes(self):
+        fake_client = FakeGraphQLClient()
+        events = []
+        api = GhostwriterApi(
+            server_config(sync_validation_mode="none"),
+            client=fake_client,
+            progress=events.append,
+        )
+
+        api.validate_prepared_records_can_be_created(
+            [{"api_record": {"title": "Finding"}, "tags": []}]
+        )
+
+        self.assertEqual(fake_client.created_objects, [])
+        self.assertEqual(fake_client.deleted_ids, [])
+        self.assertEqual(
+            [(event.stage, event.status) for event in events],
+            [("validate_skipped", "done")],
+        )
+
     def test_validation_failure_still_reports_cleanup_of_created_temporary_records(self):
         fake_client = FakeGraphQLClient(fail_on_tag_call=2)
         events = []
@@ -799,6 +1008,26 @@ class GhostwriterApiTests(unittest.TestCase):
             api.validate_prepared_records_can_be_created(prepared_findings)
 
         self.assertEqual(fake_client.deleted_ids, [101, 101])
+
+    def test_batched_cleanup_failure_retries_every_temporary_record_individually(self):
+        fake_client = FakeGraphQLClient()
+        api = GhostwriterApi(
+            server_config(sync_batch_size=2),
+            client=fake_client,
+        )
+        prepared_findings = [
+            {"api_record": {"title": "First"}, "tags": []},
+            {"api_record": {"title": "Second"}, "tags": []},
+        ]
+
+        with patch.object(
+            api,
+            "delete_findings",
+            side_effect=GhostwriterApiError("batched cleanup unavailable"),
+        ):
+            api.validate_prepared_records_can_be_created(prepared_findings)
+
+        self.assertEqual(fake_client.deleted_ids, [102, 101])
 
     def test_preflight_rejects_missing_sync_capabilities_before_writes(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

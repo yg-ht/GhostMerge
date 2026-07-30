@@ -195,6 +195,24 @@ class GhostwriterGraphQLStub:
             return {"finding": [{"id": item["id"]} for item in self.findings]}
         if "ObservationIds" in query:
             return {"observation": [{"id": item["id"]} for item in self.observations]}
+        if "DeleteFindings" in query:
+            response = {}
+            for index in range(len(variables)):
+                self._raise_configured_failure("DeleteFinding")
+                record_id = int(variables[f"value{index}"])
+                self.findings = [item for item in self.findings if int(item["id"]) != record_id]
+                self.tags.pop(("finding", record_id), None)
+                response[f"item{index}"] = {"id": record_id}
+            return response
+        if "DeleteObservations" in query:
+            response = {}
+            for index in range(len(variables)):
+                self._raise_configured_failure("DeleteObservation")
+                record_id = int(variables[f"value{index}"])
+                self.observations = [item for item in self.observations if int(item["id"]) != record_id]
+                self.tags.pop(("observation", record_id), None)
+                response[f"item{index}"] = {"id": record_id}
+            return response
         if "DeleteFinding" in query:
             self._raise_configured_failure("DeleteFinding")
             record_id = int(variables["id"])
@@ -207,6 +225,24 @@ class GhostwriterGraphQLStub:
             self.observations = [item for item in self.observations if int(item["id"]) != record_id]
             self.tags.pop(("observation", record_id), None)
             return {"delete_observation_by_pk": {"id": record_id}}
+        if "CreateFindings" in query:
+            response = {}
+            for index in range(len(variables)):
+                self._raise_configured_failure("CreateFinding")
+                record_id = self._next_finding_id
+                self._next_finding_id += 1
+                self.findings.append(self._finding_from_input(record_id, variables[f"value{index}"]))
+                response[f"item{index}"] = {"id": record_id}
+            return response
+        if "CreateObservations" in query:
+            response = {}
+            for index in range(len(variables)):
+                self._raise_configured_failure("CreateObservation")
+                record_id = self._next_observation_id
+                self._next_observation_id += 1
+                self.observations.append(self._observation_from_input(record_id, variables[f"value{index}"]))
+                response[f"item{index}"] = {"id": record_id}
+            return response
         if "CreateFinding" in query:
             self._raise_configured_failure("CreateFinding")
             record_id = self._next_finding_id
@@ -219,6 +255,17 @@ class GhostwriterGraphQLStub:
             self._next_observation_id += 1
             self.observations.append(self._observation_from_input(record_id, variables["object"]))
             return {"insert_observation_one": {"id": record_id}}
+        if "SetTagsBatch" in query:
+            response = {}
+            record_count = len([key for key in variables if key.startswith("id")])
+            for index in range(record_count):
+                self._raise_configured_failure("SetTags")
+                model = str(variables["model"])
+                record_id = int(variables[f"id{index}"])
+                record_tags = list(variables.get(f"tags{index}") or [])
+                self.tags[(model, record_id)] = record_tags
+                response[f"item{index}"] = {"tags": record_tags}
+            return response
         if "SetFindingTags" in query:
             self._raise_configured_failure("SetTags")
             model = str(variables["model"])
@@ -226,6 +273,17 @@ class GhostwriterGraphQLStub:
             record_tags = list(variables.get("tags") or [])
             self.tags[(model, record_id)] = record_tags
             return {"setTags": {"tags": record_tags}}
+        if "FetchTagsBatch" in query:
+            model = str(variables["model"])
+            record_count = len([key for key in variables if key.startswith("id")])
+            return {
+                f"item{index}": {
+                    "tags": copy.deepcopy(
+                        self.tags.get((model, int(variables[f"id{index}"])), [])
+                    )
+                }
+                for index in range(record_count)
+            }
         if "Tags(" in query:
             model = str(variables["model"])
             record_id = int(variables["id"])

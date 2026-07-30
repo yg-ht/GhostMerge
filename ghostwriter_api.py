@@ -52,6 +52,8 @@ SYNC_PREFLIGHT_MUTATION_FIELDS = {
     "setTags",
 }
 GHOSTMERGE_LAST_SYNCED_AT_FIELD = "ghostmerge_last_synced_at"
+SYNC_VALIDATION_MODES = frozenset({"full", "sample", "none"})
+MAX_SYNC_BATCH_SIZE = 100
 
 
 class GhostwriterApiError(RuntimeError):
@@ -68,6 +70,9 @@ class GhostwriterServerConfig:
     verify_tls: bool = True
     strict_x509_verification: bool = True
     rate_limit_per_second: float = 0.2
+    sync_batch_size: int = 25
+    sync_validation_mode: str = "full"
+    sync_validation_sample_size: int = 10
 
     @property
     def is_configured(self) -> bool:
@@ -266,9 +271,13 @@ class GhostwriterApi:
             batch = data.get("finding") or []
             if not batch:
                 break
+            tags_by_id = self.fetch_tags_batch(
+                [int(item["id"]) for item in batch],
+                model="finding",
+            )
             for item in batch:
                 record = self._api_record_to_ghostmerge(item, field_types)
-                record["tags"] = ", ".join(self.fetch_tags(int(item["id"])))
+                record["tags"] = ", ".join(tags_by_id[int(item["id"])])
                 records.append(record)
                 self.progress(
                     SyncEvent(
@@ -423,9 +432,13 @@ class GhostwriterApi:
             batch = data.get("observation") or []
             if not batch:
                 break
+            tags_by_id = self.fetch_tags_batch(
+                [int(item["id"]) for item in batch],
+                model="observation",
+            )
             for item in batch:
                 record = self._api_observation_to_ghostmerge(item, field_types)
-                record["tags"] = ", ".join(self.fetch_tags(int(item["id"]), model="observation"))
+                record["tags"] = ", ".join(tags_by_id[int(item["id"])])
                 records.append(record)
                 self.progress(
                     SyncEvent(
@@ -449,6 +462,32 @@ class GhostwriterApi:
         """
         data = self.client.execute(query, {"model": model, "id": finding_id})
         return list((data.get("tags") or {}).get("tags") or [])
+
+    def fetch_tags_batch(self, record_ids: list[int], model: str) -> dict[int, list[str]]:
+        """Fetch tags for several records per rate-limited GraphQL request."""
+        tags_by_id: dict[int, list[str]] = {}
+        for record_id_batch in _batches(record_ids, self.server.sync_batch_size):
+            if len(record_id_batch) == 1:
+                record_id = record_id_batch[0]
+                tags_by_id[record_id] = self.fetch_tags(record_id, model=model)
+                continue
+            definitions = ["$model: String!"]
+            fields = []
+            variables: dict[str, Any] = {"model": model}
+            for index, record_id in enumerate(record_id_batch):
+                definitions.append(f"$id{index}: bigint!")
+                fields.append(f"  item{index}: tags(model: $model, id: $id{index}) {{ tags }}")
+                variables[f"id{index}"] = record_id
+            query = f"query FetchTagsBatch({', '.join(definitions)}) {{\n" + "\n".join(fields) + "\n}"
+            data = self.client.execute(query, variables)
+            for index, record_id in enumerate(record_id_batch):
+                result = data.get(f"item{index}")
+                if not isinstance(result, dict):
+                    raise GhostwriterApiError(
+                        f"Ghostwriter did not return tags for every batched {model} record."
+                    )
+                tags_by_id[record_id] = list(result.get("tags") or [])
+        return tags_by_id
 
     def create_backup(self, backup_root: Path) -> Path:
         raw_findings = self.fetch_raw_findings_with_tags()
@@ -534,8 +573,12 @@ class GhostwriterApi:
             batch = data.get("finding") or []
             if not batch:
                 break
+            tags_by_id = self.fetch_tags_batch(
+                [int(item["id"]) for item in batch],
+                model="finding",
+            )
             for item in batch:
-                raw_records.append({"record": item, "tags": self.fetch_tags(int(item["id"]), model="finding")})
+                raw_records.append({"record": item, "tags": tags_by_id[int(item["id"])]})
                 self.progress(
                     SyncEvent(
                         "backup_fetch",
@@ -578,8 +621,12 @@ class GhostwriterApi:
             batch = data.get("observation") or []
             if not batch:
                 break
+            tags_by_id = self.fetch_tags_batch(
+                [int(item["id"]) for item in batch],
+                model="observation",
+            )
             for item in batch:
-                raw_records.append({"record": item, "tags": self.fetch_tags(int(item["id"]), model="observation")})
+                raw_records.append({"record": item, "tags": tags_by_id[int(item["id"])]})
                 self.progress(
                     SyncEvent(
                         "backup_fetch",
@@ -656,22 +703,74 @@ class GhostwriterApi:
         self.validate_prepared_records_can_be_created(prepared_records, prepared_observations)
         existing_ids = self.fetch_finding_ids()
         existing_observation_ids = self.fetch_observation_ids() if replace_observations else []
-        for index, finding_id in enumerate(existing_ids, start=1):
-            self.progress(SyncEvent("delete", f"Deleting existing findings from {self.server.name}", index, len(existing_ids)))
-            self.delete_finding(finding_id)
+        deleted = 0
+        delete_total = len(existing_ids) + len(existing_observation_ids)
+        for finding_ids in _batches(existing_ids, self.server.sync_batch_size):
+            self.delete_findings(finding_ids)
+            deleted += len(finding_ids)
+            self.progress(
+                SyncEvent(
+                    "delete",
+                    f"Deleting existing findings from {self.server.name}",
+                    deleted,
+                    delete_total,
+                )
+            )
         if replace_observations:
-            for index, observation_id in enumerate(existing_observation_ids, start=1):
-                self.progress(SyncEvent("delete", f"Deleting existing observations from {self.server.name}", index, len(existing_observation_ids)))
-                self.delete_observation(observation_id)
-        for index, prepared in enumerate(prepared_records, start=1):
-            self.progress(SyncEvent("create", f"Creating reviewed findings on {self.server.name}", index, len(records)))
-            created_id = self.create_prepared_finding(prepared["api_record"])
-            self.set_tags(created_id, prepared["tags"], model="finding")
+            for observation_ids in _batches(existing_observation_ids, self.server.sync_batch_size):
+                self.delete_observations(observation_ids)
+                deleted += len(observation_ids)
+                self.progress(
+                    SyncEvent(
+                        "delete",
+                        f"Deleting existing observations from {self.server.name}",
+                        deleted,
+                        delete_total,
+                    )
+                )
+        created = 0
+        create_total = len(prepared_records) + len(prepared_observations)
+        for prepared_batch in _batches(prepared_records, self.server.sync_batch_size):
+            created_ids = self.create_prepared_findings(
+                [prepared["api_record"] for prepared in prepared_batch]
+            )
+            self.set_tags_batch(
+                [
+                    (created_id, prepared["tags"])
+                    for created_id, prepared in zip(created_ids, prepared_batch, strict=True)
+                ],
+                model="finding",
+            )
+            created += len(prepared_batch)
+            self.progress(
+                SyncEvent(
+                    "create",
+                    f"Creating reviewed findings on {self.server.name}",
+                    created,
+                    create_total,
+                )
+            )
         if replace_observations:
-            for index, prepared in enumerate(prepared_observations, start=1):
-                self.progress(SyncEvent("create", f"Creating reviewed observations on {self.server.name}", index, len(prepared_observations)))
-                created_id = self.create_prepared_observation(prepared["api_record"])
-                self.set_tags(created_id, prepared["tags"], model="observation")
+            for prepared_batch in _batches(prepared_observations, self.server.sync_batch_size):
+                created_ids = self.create_prepared_observations(
+                    [prepared["api_record"] for prepared in prepared_batch]
+                )
+                self.set_tags_batch(
+                    [
+                        (created_id, prepared["tags"])
+                        for created_id, prepared in zip(created_ids, prepared_batch, strict=True)
+                    ],
+                    model="observation",
+                )
+                created += len(prepared_batch)
+                self.progress(
+                    SyncEvent(
+                        "create",
+                        f"Creating reviewed observations on {self.server.name}",
+                        created,
+                        create_total,
+                    )
+                )
         total_records = len(records) + len(prepared_observations)
         self.progress(SyncEvent("complete", f"Sync complete for {self.server.name}", total_records, total_records, "done"))
         return backup_path
@@ -681,28 +780,50 @@ class GhostwriterApi:
         prepared_records: list[dict[str, Any]],
         prepared_observations: Optional[list[dict[str, Any]]] = None,
     ) -> None:
-        """Create and remove temporary records before deleting the real library.
+        """Apply the configured temporary-creation check before live deletion.
 
         Preflight schema checks prove that required mutations exist, but they do
-        not prove that every prepared payload is acceptable to Ghostwriter. This
-        validation catches create/tag failures while the existing library is
-        still intact, then removes the temporary records before replacement.
+        not prove that a prepared payload is acceptable to Ghostwriter. Full or
+        sampled validation catches create/tag failures while the existing
+        library is still intact, then removes every temporary record.
         """
         created_findings: list[int] = []
         created_observations: list[int] = []
         prepared_observations = prepared_observations or []
-        total = len(prepared_records) + len(prepared_observations)
+        validation_findings = self._validation_records(prepared_records)
+        validation_observations = self._validation_records(prepared_observations)
+        total = len(validation_findings) + len(validation_observations)
+
+        if not total:
+            self.progress(
+                SyncEvent(
+                    "validate_skipped",
+                    f"Temporary creation validation skipped for {self.server.name}",
+                    0,
+                    0,
+                    "done",
+                )
+            )
+            return
 
         try:
             complete = 0
-            for prepared in prepared_records:
-                created_id = self.create_prepared_finding(prepared["api_record"])
-                created_findings.append(created_id)
-                self.set_tags(created_id, prepared["tags"], model="finding")
+            for prepared_batch in _batches(validation_findings, self.server.sync_batch_size):
+                created_ids = self.create_prepared_findings(
+                    [prepared["api_record"] for prepared in prepared_batch]
+                )
+                created_findings.extend(created_ids)
+                self.set_tags_batch(
+                    [
+                        (created_id, prepared["tags"])
+                        for created_id, prepared in zip(created_ids, prepared_batch, strict=True)
+                    ],
+                    model="finding",
+                )
                 # Report completed work only after both creation and tagging
                 # have succeeded.  This avoids showing 100% while the final
                 # validation request is still in flight.
-                complete += 1
+                complete += len(prepared_batch)
                 self.progress(
                     SyncEvent(
                         "validate_create",
@@ -712,11 +833,19 @@ class GhostwriterApi:
                     )
                 )
 
-            for prepared in prepared_observations:
-                created_id = self.create_prepared_observation(prepared["api_record"])
-                created_observations.append(created_id)
-                self.set_tags(created_id, prepared["tags"], model="observation")
-                complete += 1
+            for prepared_batch in _batches(validation_observations, self.server.sync_batch_size):
+                created_ids = self.create_prepared_observations(
+                    [prepared["api_record"] for prepared in prepared_batch]
+                )
+                created_observations.extend(created_ids)
+                self.set_tags_batch(
+                    [
+                        (created_id, prepared["tags"])
+                        for created_id, prepared in zip(created_ids, prepared_batch, strict=True)
+                    ],
+                    model="observation",
+                )
+                complete += len(prepared_batch)
                 self.progress(
                     SyncEvent(
                         "validate_create",
@@ -743,13 +872,11 @@ class GhostwriterApi:
                     # Continue with every deletion even when the status store
                     # cannot persist the transition into the cleanup stage.
                     cleanup_errors.append(f"progress before validation cleanup: {exc}")
-            for finding_id in reversed(created_findings):
-                try:
-                    self.delete_finding(finding_id)
-                except Exception as exc:
-                    cleanup_errors.append(f"finding {finding_id}: {exc}")
-                else:
-                    cleanup_complete += 1
+            for finding_ids in _batches(list(reversed(created_findings)), self.server.sync_batch_size):
+                deletion_errors = self._cleanup_validation_records(finding_ids, model="finding")
+                cleanup_errors.extend(deletion_errors)
+                if not deletion_errors:
+                    cleanup_complete += len(finding_ids)
                     try:
                         self.progress(
                             SyncEvent(
@@ -762,14 +889,12 @@ class GhostwriterApi:
                     except Exception as exc:
                         # A status persistence error must not stop the remaining
                         # temporary records from being removed.
-                        cleanup_errors.append(f"progress after finding {finding_id}: {exc}")
-            for observation_id in reversed(created_observations):
-                try:
-                    self.delete_observation(observation_id)
-                except Exception as exc:
-                    cleanup_errors.append(f"observation {observation_id}: {exc}")
-                else:
-                    cleanup_complete += 1
+                        cleanup_errors.append(f"progress after findings {finding_ids}: {exc}")
+            for observation_ids in _batches(list(reversed(created_observations)), self.server.sync_batch_size):
+                deletion_errors = self._cleanup_validation_records(observation_ids, model="observation")
+                cleanup_errors.extend(deletion_errors)
+                if not deletion_errors:
+                    cleanup_complete += len(observation_ids)
                     try:
                         self.progress(
                             SyncEvent(
@@ -780,7 +905,7 @@ class GhostwriterApi:
                             )
                         )
                     except Exception as exc:
-                        cleanup_errors.append(f"progress after observation {observation_id}: {exc}")
+                        cleanup_errors.append(f"progress after observations {observation_ids}: {exc}")
             if cleanup_errors:
                 raise GhostwriterApiError(
                     "Creation validation cleanup failed; existing library was not replaced. "
@@ -799,6 +924,34 @@ class GhostwriterApi:
                 "done",
             )
         )
+
+    def _cleanup_validation_records(self, record_ids: list[int], *, model: str) -> list[str]:
+        """Retry every temporary record separately if its batched deletion fails."""
+        delete_batch = self.delete_findings if model == "finding" else self.delete_observations
+        delete_one = self.delete_finding if model == "finding" else self.delete_observation
+        try:
+            delete_batch(record_ids)
+            return []
+        except Exception as batch_error:
+            individual_errors = []
+            for record_id in record_ids:
+                try:
+                    delete_one(record_id)
+                except Exception as exc:
+                    individual_errors.append(f"{model} {record_id}: {exc}")
+            if individual_errors:
+                return [
+                    f"{model} batch {record_ids} failed ({batch_error}); "
+                    + "; ".join(individual_errors)
+                ]
+            return []
+
+    def _validation_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if self.server.sync_validation_mode == "none":
+            return []
+        if self.server.sync_validation_mode == "sample":
+            return records[: self.server.sync_validation_sample_size]
+        return records
 
     def prepare_records_for_reload(
         self,
@@ -859,6 +1012,21 @@ class GhostwriterApi:
         """
         self.client.execute(mutation, {"id": finding_id})
 
+    def delete_findings(self, finding_ids: list[int]) -> None:
+        """Delete one request-sized batch of Finding Templates."""
+        if len(finding_ids) == 1:
+            self.delete_finding(finding_ids[0])
+            return
+        query, variables = _aliased_mutation(
+            "DeleteFindings",
+            "delete_finding_by_pk",
+            finding_ids,
+            variable_type="bigint!",
+            argument_name="id",
+            selection="{ id }",
+        )
+        self.client.execute(query, variables)
+
     def delete_observation(self, observation_id: int) -> None:
         mutation = """
         mutation DeleteObservation($id: bigint!) {
@@ -866,6 +1034,21 @@ class GhostwriterApi:
         }
         """
         self.client.execute(mutation, {"id": observation_id})
+
+    def delete_observations(self, observation_ids: list[int]) -> None:
+        """Delete one request-sized batch of Observation Templates."""
+        if len(observation_ids) == 1:
+            self.delete_observation(observation_ids[0])
+            return
+        query, variables = _aliased_mutation(
+            "DeleteObservations",
+            "delete_observation_by_pk",
+            observation_ids,
+            variable_type="bigint!",
+            argument_name="id",
+            selection="{ id }",
+        )
+        self.client.execute(query, variables)
 
     def fetch_lookup_ids(self) -> dict[str, dict[str, int]]:
         query = """
@@ -895,6 +1078,21 @@ class GhostwriterApi:
             raise GhostwriterApiError("Ghostwriter did not return the created finding ID.")
         return int(created["id"])
 
+    def create_prepared_findings(self, api_records: list[dict[str, Any]]) -> list[int]:
+        """Create one request-sized batch and preserve input-to-ID ordering."""
+        if len(api_records) == 1:
+            return [self.create_prepared_finding(api_records[0])]
+        query, variables = _aliased_mutation(
+            "CreateFindings",
+            "insert_finding_one",
+            api_records,
+            variable_type="finding_insert_input!",
+            argument_name="object",
+            selection="{ id }",
+        )
+        data = self.client.execute(query, variables)
+        return _created_ids(data, len(api_records), "finding")
+
     def create_prepared_observation(self, api_record: dict[str, Any]) -> int:
         mutation = """
         mutation CreateObservation($object: observation_insert_input!) {
@@ -907,6 +1105,21 @@ class GhostwriterApi:
             raise GhostwriterApiError("Ghostwriter did not return the created observation ID.")
         return int(created["id"])
 
+    def create_prepared_observations(self, api_records: list[dict[str, Any]]) -> list[int]:
+        """Create one request-sized Observation batch and return ordered IDs."""
+        if len(api_records) == 1:
+            return [self.create_prepared_observation(api_records[0])]
+        query, variables = _aliased_mutation(
+            "CreateObservations",
+            "insert_observation_one",
+            api_records,
+            variable_type="observation_insert_input!",
+            argument_name="object",
+            selection="{ id }",
+        )
+        data = self.client.execute(query, variables)
+        return _created_ids(data, len(api_records), "observation")
+
     def set_tags(self, finding_id: int, tags: list[str], model: str = "finding") -> None:
         mutation = """
         mutation SetFindingTags($model: String!, $id: bigint!, $tags: [String!]!) {
@@ -914,6 +1127,25 @@ class GhostwriterApi:
         }
         """
         self.client.execute(mutation, {"model": model, "id": finding_id, "tags": tags})
+
+    def set_tags_batch(self, records: list[tuple[int, list[str]]], model: str) -> None:
+        """Apply tags to several records in one GraphQL request."""
+        if len(records) == 1:
+            record_id, tags = records[0]
+            self.set_tags(record_id, tags, model=model)
+            return
+        definitions = ["$model: String!"]
+        fields = []
+        variables: dict[str, Any] = {"model": model}
+        for index, (record_id, tags) in enumerate(records):
+            definitions.extend((f"$id{index}: bigint!", f"$tags{index}: [String!]!"))
+            fields.append(
+                f"  item{index}: setTags(model: $model, id: $id{index}, tags: $tags{index}) {{ tags }}"
+            )
+            variables[f"id{index}"] = record_id
+            variables[f"tags{index}"] = tags
+        query = f"mutation SetTagsBatch({', '.join(definitions)}) {{\n" + "\n".join(fields) + "\n}"
+        self.client.execute(query, variables)
 
     def restore_backup_record(self, backup_record: dict[str, Any], replace_existing_id: Optional[int] = None) -> int:
         if replace_existing_id is not None:
@@ -1095,10 +1327,52 @@ def ghostmerge_observation_to_api_input(
     }
 
 
+def _batches(items: list[Any], batch_size: int) -> list[list[Any]]:
+    """Split a materialised collection into non-empty request-sized batches."""
+    return [items[start : start + batch_size] for start in range(0, len(items), batch_size)]
+
+
+def _aliased_mutation(
+    operation_name: str,
+    field_name: str,
+    values: list[Any],
+    *,
+    variable_type: str,
+    argument_name: str,
+    selection: str,
+) -> tuple[str, dict[str, Any]]:
+    """Build a bounded GraphQL mutation using stable aliases and variables."""
+    definitions = [f"$value{index}: {variable_type}" for index in range(len(values))]
+    fields = [
+        f"  item{index}: {field_name}({argument_name}: $value{index}) {selection}"
+        for index in range(len(values))
+    ]
+    query = f"mutation {operation_name}({', '.join(definitions)}) {{\n" + "\n".join(fields) + "\n}"
+    return query, {f"value{index}": value for index, value in enumerate(values)}
+
+
+def _created_ids(data: dict[str, Any], expected_count: int, template_type: str) -> list[int]:
+    created_ids = []
+    for index in range(expected_count):
+        created = data.get(f"item{index}")
+        if not isinstance(created, dict) or created.get("id") is None:
+            raise GhostwriterApiError(
+                f"Ghostwriter did not return every created {template_type} ID for a batched request."
+            )
+        created_ids.append(int(created["id"]))
+    return created_ids
+
+
 def load_server_configs(config: dict[str, Any]) -> dict[str, Optional[GhostwriterServerConfig]]:
     api_config = config.get("ghostwriter_api", {})
     servers = api_config.get("servers", {})
     default_rate = float(api_config.get("default_rate_limit_per_second", 0.2))
+    default_batch_size = _sync_batch_size(api_config.get("sync_batch_size", 25))
+    default_validation_mode = _validation_mode(api_config.get("sync_validation_mode", "full"))
+    default_sample_size = _positive_config_int(
+        api_config.get("sync_validation_sample_size", 10),
+        "sync_validation_sample_size",
+    )
     parsed: dict[str, Optional[GhostwriterServerConfig]] = {}
     for side in ("left", "right"):
         server = servers.get(side, {})
@@ -1121,6 +1395,49 @@ def load_server_configs(config: dict[str, Any]) -> dict[str, Optional[Ghostwrite
             verify_tls=bool(server.get("verify_tls", True)),
             strict_x509_verification=bool(server.get("strict_x509_verification", True)),
             rate_limit_per_second=float(server.get("rate_limit_per_second", default_rate)),
+            sync_batch_size=_sync_batch_size(
+                server.get("sync_batch_size", default_batch_size),
+                side=side,
+            ),
+            sync_validation_mode=_validation_mode(
+                server.get("sync_validation_mode", default_validation_mode),
+                side=side,
+            ),
+            sync_validation_sample_size=_positive_config_int(
+                server.get("sync_validation_sample_size", default_sample_size),
+                f"{side} sync_validation_sample_size",
+            ),
+        )
+    return parsed
+
+
+def _positive_config_int(value: Any, setting_name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise GhostwriterApiError(f"Ghostwriter API {setting_name} must be a positive integer.") from exc
+    if parsed < 1:
+        raise GhostwriterApiError(f"Ghostwriter API {setting_name} must be a positive integer.")
+    return parsed
+
+
+def _sync_batch_size(value: Any, *, side: Optional[str] = None) -> int:
+    prefix = f"{side} " if side else ""
+    parsed = _positive_config_int(value, f"{prefix}sync_batch_size")
+    if parsed > MAX_SYNC_BATCH_SIZE:
+        raise GhostwriterApiError(
+            f"Ghostwriter API {prefix}sync_batch_size must not exceed {MAX_SYNC_BATCH_SIZE}."
+        )
+    return parsed
+
+
+def _validation_mode(value: Any, *, side: Optional[str] = None) -> str:
+    parsed = str(value or "").strip().lower()
+    if parsed not in SYNC_VALIDATION_MODES:
+        prefix = f"{side} " if side else ""
+        allowed = ", ".join(sorted(SYNC_VALIDATION_MODES))
+        raise GhostwriterApiError(
+            f"Ghostwriter API {prefix}sync_validation_mode must be one of: {allowed}."
         )
     return parsed
 
@@ -1141,6 +1458,9 @@ def configured_server_summary(config: dict[str, Any]) -> dict[str, dict[str, Any
             "configured": server is not None,
             "name": server.name if server else side.title(),
             "rate_limit_per_second": server.rate_limit_per_second if server else None,
+            "sync_batch_size": server.sync_batch_size if server else None,
+            "sync_validation_mode": server.sync_validation_mode if server else None,
+            "sync_validation_sample_size": server.sync_validation_sample_size if server else None,
         }
         for side, server in servers.items()
     }

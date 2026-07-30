@@ -541,6 +541,16 @@
         border-color: var(--danger);
         color: var(--danger);
       }
+      [data-review-form][aria-busy="true"] button,
+      [data-review-form][aria-busy="true"] .button {
+        pointer-events: none;
+        opacity: 0.65;
+      }
+      .review-busy-status {
+        margin: 12px 0 0;
+        color: var(--muted);
+        font-weight: 700;
+      }
       dl {
         display: grid;
         grid-template-columns: 180px 1fr;
@@ -662,9 +672,11 @@
       {% if progress %}
       <section class="progress" aria-label="Review progress">
         <div class="metric"><span>Workflow stage</span><strong>{{ progress.phase_label }}</strong></div>
-        <div class="metric"><span>Matched pair</span><strong>{{ progress.current_match }} / {{ progress.total_matches }}</strong></div>
-        <div class="metric"><span>Reviewed matches</span><strong>{{ progress.completed_matches }}</strong></div>
-        <div class="metric"><span>Unmatched</span><strong>{{ progress.unmatched_left }} from {{ progress.source_labels.left }} / {{ progress.unmatched_right }} from {{ progress.source_labels.right }}</strong></div>
+        <div class="metric"><span>Current template type</span><strong>{{ progress.active_template_type|title if progress.active_template_type else "Review complete" }}</strong></div>
+        <div class="metric"><span>Finding pairs reviewed</span><strong>{{ progress.finding_reviewed_matches }} / {{ progress.finding_total_matches }}</strong></div>
+        <div class="metric"><span>Observation pairs reviewed</span><strong>{{ progress.observation_reviewed_matches }} / {{ progress.observation_total_matches }}</strong></div>
+        <div class="metric"><span>Unmatched Findings</span><strong>{{ progress.unmatched_left }} from {{ progress.source_labels.left }} / {{ progress.unmatched_right }} from {{ progress.source_labels.right }}</strong></div>
+        <div class="metric"><span>Unmatched Observations</span><strong>{{ progress.unmatched_observations_left }} from {{ progress.source_labels.left }} / {{ progress.unmatched_observations_right }} from {{ progress.source_labels.right }}</strong></div>
       </section>
       {% endif %}
       {% block content %}{% endblock %}

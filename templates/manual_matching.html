@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Manually match unmatched {{ manual_prompt.template_type }} records</h1>
 <p>Select one record from each source. The selected pair will enter the normal match preview before any values are merged.</p>
-<form class="panel" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post">
+<form class="panel" action="{{ url_for('apply_conflict', job_id=job.job_id) }}" method="post" data-review-form data-busy-message="Preparing selected match…">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="manual_matching_token" value="{{ manual_prompt.token }}">
   <div class="grid">

@@ -8,6 +8,14 @@
   <dl>
     <dt>Destination</dt><dd>{{ server.graphql_url }}</dd>
     <dt>Rate limit</dt><dd>{{ server.rate_limit_per_second }} request(s) per second</dd>
+    <dt>Request batch size</dt><dd>{{ server.sync_batch_size }} record(s)</dd>
+    <dt>Temporary validation</dt>
+    <dd>
+      {{ server.sync_validation_mode|title }}
+      {% if server.sync_validation_mode == "sample" %}
+      (up to {{ server.sync_validation_sample_size }} record(s) of each template type)
+      {% endif %}
+    </dd>
     <dt>Source findings</dt><dd>{% if side == "left" %}{{ job.final_left|length }}{% else %}{{ job.final_right|length }}{% endif %}</dd>
     <dt>Source observations</dt><dd>{% if side == "left" %}{{ (job.final_observations_left or [])|length }}{% else %}{{ (job.final_observations_right or [])|length }}{% endif %}</dd>
   </dl>

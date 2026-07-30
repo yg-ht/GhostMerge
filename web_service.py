@@ -63,6 +63,10 @@ class WebMergeError(ValueError):
     """Raised when uploaded data or review decisions cannot be processed."""
 
 
+class StaleReviewSubmission(WebMergeError):
+    """Raised when a one-time review action is missing, stale, or replayed."""
+
+
 @dataclass
 class ConflictReviewItem:
     template_type: str
@@ -147,6 +151,7 @@ class MergeJob:
     finding_manual_matching_stopped: bool = False
     observation_manual_matching_stopped: bool = False
     manual_matching_token: Optional[str] = None
+    review_action_token: Optional[str] = None
     sensitivity_snapshot_version: int = 0
     sensitivity_enabled: bool = False
     sensitivity_pre_match_enabled: bool = False
@@ -927,7 +932,9 @@ def apply_sensitivity_decision(
     submitted_token = str(decision.get("decision_token", ""))
     expected_token = job.sensitivity_decision_token or ""
     if not submitted_token or not secrets.compare_digest(submitted_token, expected_token):
-        raise WebMergeError("Sensitivity decision is stale or invalid. Reload the review page and try again.")
+        raise StaleReviewSubmission(
+            "Sensitivity decision is stale or invalid, or has already been applied. Resume the current review state."
+        )
 
     action = str(decision.get("action", ""))
     if action == "keep":
@@ -963,6 +970,10 @@ def apply_sensitivity_decision(
 
 def acknowledge_sensitivity_review(job: MergeJob) -> None:
     """Complete sensitivity review only after its visible result is acknowledged."""
+    if job.sensitivity_phase_complete or job.sensitivity_review_status == "complete":
+        raise StaleReviewSubmission(
+            "Sensitivity acknowledgement is stale or has already been applied. Resume the current review state."
+        )
     if not job.conflict_phase_complete:
         raise WebMergeError("Conflict review must be complete before sensitivity review.")
     if job.sensitivity_review_status == "configuration_error" or job.sensitivity_configuration_error:
@@ -1072,7 +1083,9 @@ def approve_output_preview(job: MergeJob, submitted_token: str) -> MergeResult:
     result = prepare_output_preview(job)
     expected_token = job.output_preview_token or ""
     if not submitted_token or not secrets.compare_digest(str(submitted_token), expected_token):
-        raise WebMergeError("Final output approval is stale or invalid. Reload the preview and try again.")
+        raise StaleReviewSubmission(
+            "Final output approval is stale or invalid, or has already been applied. Resume the current preview."
+        )
 
     # Rebuild through the existing finalisation boundary only after the exact
     # preview has been approved. The digest check in save_outputs protects
@@ -1265,20 +1278,57 @@ def get_review_progress(job: MergeJob) -> dict[str, int | bool | str]:
         "output_ready": "Merged output ready",
     }
 
+    active_kind = _active_review_kind(job)
+    finding_reviewed = min(job.match_index, len(job.matches))
+    observation_reviewed = min(job.observation_match_index, len(job.observation_matches))
     return {
         "phase": phase,
         "phase_label": phase_labels[phase],
+        "active_template_type": active_kind or "",
+        "finding_current_match": (
+            min(job.match_index + 1, len(job.matches))
+            if active_kind == "finding" and job.matches
+            else finding_reviewed
+        ),
+        "finding_total_matches": len(job.matches),
+        "finding_reviewed_matches": finding_reviewed,
+        "observation_current_match": (
+            min(job.observation_match_index + 1, len(job.observation_matches))
+            if active_kind == "observation" and job.observation_matches
+            else observation_reviewed
+        ),
+        "observation_total_matches": len(job.observation_matches),
+        "observation_reviewed_matches": observation_reviewed,
         "current_match": min(job.match_index + 1, len(job.matches)) if job.matches else 0,
         "total_matches": len(job.matches),
         "total_observation_matches": len(job.observation_matches),
-        "completed_matches": len(job.merged_left),
-        "completed_observation_matches": len(job.merged_observations_left),
+        "completed_matches": finding_reviewed,
+        "completed_observation_matches": observation_reviewed,
         "current_field": job.field_index,
         "total_fields": len(_reviewable_field_defs(_active_conflict_kind(job) or "finding")),
         "preview_acknowledged": job.preview_acknowledged,
         "unmatched_left": len(job.unmatched_left),
         "unmatched_right": len(job.unmatched_right),
+        "unmatched_observations_left": len(job.unmatched_observations_left),
+        "unmatched_observations_right": len(job.unmatched_observations_right),
     }
+
+
+def ensure_review_action_token(job: MergeJob) -> str:
+    """Return the current one-time match or field action token."""
+    if not job.review_action_token:
+        job.review_action_token = secrets.token_urlsafe(32)
+    return job.review_action_token
+
+
+def consume_review_action_token(job: MergeJob, submitted_token: str) -> None:
+    """Consume a browser action token before applying its match or field action."""
+    expected_token = job.review_action_token or ""
+    if not submitted_token or not secrets.compare_digest(str(submitted_token), expected_token):
+        raise StaleReviewSubmission(
+            "This review action is stale or has already been applied. Resume the current review state."
+        )
+    job.review_action_token = None
 
 
 def build_aligned_field_diff(left_value: Any, right_value: Any) -> FieldDiff:
@@ -1455,6 +1505,9 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
         observation_manual_matching_stopped=bool(data.get("observation_manual_matching_stopped", False)),
         manual_matching_token=(
             data.get("manual_matching_token") if isinstance(data.get("manual_matching_token"), str) else None
+        ),
+        review_action_token=(
+            data.get("review_action_token") if isinstance(data.get("review_action_token"), str) else None
         ),
         sensitivity_snapshot_version=int(data.get("sensitivity_snapshot_version", 0)),
         sensitivity_enabled=bool(data.get("sensitivity_enabled", False)),
@@ -1692,7 +1745,9 @@ def _validate_manual_matching_token(job: MergeJob, submitted_token: str) -> None
     """Reject stale manual-stage actions before consulting mutable pool state."""
     expected_token = job.manual_matching_token or ""
     if not submitted_token or not secrets.compare_digest(str(submitted_token), expected_token):
-        raise WebMergeError("Manual matching selection is stale or invalid. Reload the page and try again.")
+        raise StaleReviewSubmission(
+            "Manual matching selection is stale or invalid, or has already been applied. Resume the current review state."
+        )
 
 
 def _active_conflict_kind(job: MergeJob) -> Optional[str]:
@@ -1700,6 +1755,17 @@ def _active_conflict_kind(job: MergeJob) -> Optional[str]:
         return "finding"
     if not job.observation_conflict_phase_complete and job.observation_match_index < len(job.observation_matches):
         return "observation"
+    return None
+
+
+def _active_review_kind(job: MergeJob) -> Optional[str]:
+    """Return the template type whose match, orphan, or manual stage is active."""
+    active_match_kind = _active_conflict_kind(job)
+    if active_match_kind is not None:
+        return active_match_kind
+    for kind in TEMPLATE_KINDS:
+        if not _conflict_complete_for_kind(job, kind):
+            return kind
     return None
 
 
