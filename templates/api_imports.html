@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Inbound API imports</h1>
+<section class="panel">
+  {% if api_imports %}
+  <table class="record-table">
+    <thead>
+      <tr>
+        <th>Import</th>
+        <th>Last updated</th>
+        <th>Status</th>
+        <th>Message</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for import_state in api_imports %}
+      <tr>
+        <td>{{ import_state.import_id }}</td>
+        <td>{{ import_state.updated_at }}</td>
+        <td>{{ import_state.status|default("queued") }}</td>
+        <td>{{ import_state.message|default("Queued") }}</td>
+        <td class="actions">
+          <a class="button secondary" href="{{ url_for('import_status', import_id=import_state.import_id) }}">View status</a>
+          {% if import_state.status == "done" and import_state.job_id %}
+          <a class="button secondary" href="{{ url_for('summary', job_id=import_state.job_id) }}">Open merge job</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% include "_pagination.html" %}
+  {% else %}
+  <p>No inbound API imports found.</p>
+  {% endif %}
+</section>
+{% endblock %}

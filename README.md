@@ -365,17 +365,14 @@ unmatched counts separately. While a review action is being processed, the
 submitted form displays the current operation and blocks duplicate mouse or
 keyboard activation.
 
-The home page prioritises the Merge jobs status section, followed by creation of
-a new job, active inbound imports, API source checks, and API backups. It can
-resume local jobs and download completed outputs without changing the dedicated
-history views.
+The home page contains only the `Create merge job` panel and the three most
+recent `Merge jobs`, in that order. The merge-job panel always links to the full
+newest-first history, which uses pages of 25 rows with previous and next
+controls.
 
-The API source checks and merge jobs panes on the home page show a
-limited number of recent rows. Use the dedicated `API source checks` and
-`Merge jobs` links shown under those panes when more rows exist. Those dedicated
-history pages use newest-first pages of 25 rows with previous and next controls.
-Configure the home-page limits with `web_ui.home_api_source_checks_limit` and
-`web_ui.home_previous_jobs_limit`; both default to `10`.
+Inbound API imports, API source checks, and API backups have dedicated pages
+linked from the primary navigation. Import and source-check histories are
+newest-first and paginated independently.
 
 ### Web access controls
 
@@ -716,7 +713,6 @@ Useful configuration areas include:
 | Interaction | Enable terminal review; disabled mode accepts deterministic offers and fails closed when analyst judgement is required. |
 | Normalisation | Clean cosmetic whitespace outside code, remove empty HTML tags, normalise line endings, repair code blocks, deduplicate references, canonicalise CVSS vectors, and reduce matching-only text noise. |
 | Sensitivity checks | Enable term scanning and configure the terms file. |
-| Web UI | Limit how many API source checks and merge jobs are shown on the home page. |
 | Web access | Restrict browser access by source IP, API key, frame policy, and proxy prefix. |
 | Ghostwriter API | Configure inbound API sources, outbound sync destinations, tokens, rate limits, TLS, and backups. |
 | TUI layout | Tune render width, refresh rate, and display limits. |

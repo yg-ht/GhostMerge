@@ -70,8 +70,7 @@ from web_service import (
 CONFIG = get_config()
 SOURCE_IP_MODES = {"direct", "trusted_header", "both"}
 RUNNING_OPERATION_STATUSES = {"running", "cancelling"}
-DEFAULT_HOME_API_SOURCE_CHECKS_LIMIT = 10
-DEFAULT_HOME_PREVIOUS_JOBS_LIMIT = 10
+HOME_MERGE_JOB_LIMIT = 3
 HISTORY_PAGE_SIZE = 25
 _ACTIVE_API_SOURCE_CHECKS: set[str] = set()
 _ACTIVE_API_IMPORTS: set[str] = set()
@@ -146,6 +145,16 @@ def create_app(test_config: dict | None = None) -> Flask:
             label="API source check history pages",
         )
         return render_template("api_source_checks.html", api_source_checks=checks, pagination=pagination)
+
+    @app.get("/imports")
+    def api_imports_history():
+        imports, pagination = _paginate_history(
+            _list_api_imports(jobs_dir),
+            request.args.get("page"),
+            endpoint="api_imports_history",
+            label="Inbound API import history pages",
+        )
+        return render_template("api_imports.html", api_imports=imports, pagination=pagination)
 
     @app.get("/jobs")
     def jobs_history():
@@ -698,36 +707,12 @@ def _web_access_config() -> dict:
 
 def _home_context(jobs_dir: Path) -> dict[str, Any]:
     previous_jobs = list_previous_jobs(jobs_dir)
-    api_source_checks = _list_api_source_checks(jobs_dir)
-    history_limits = _home_history_limits()
-    previous_jobs_limit = history_limits["previous_jobs"]
-    api_source_checks_limit = history_limits["api_source_checks"]
     return {
-        "previous_jobs": previous_jobs[:previous_jobs_limit],
+        "previous_jobs": previous_jobs[:HOME_MERGE_JOB_LIMIT],
         "previous_jobs_total": len(previous_jobs),
-        "previous_jobs_limit": previous_jobs_limit,
-        "api_source_checks": api_source_checks[:api_source_checks_limit],
-        "api_source_checks_total": len(api_source_checks),
-        "api_source_checks_limit": api_source_checks_limit,
-        "api_imports": _list_api_imports(jobs_dir),
         "running_api_source_checks": _running_api_source_checks_by_side(jobs_dir),
         "api_servers": configured_server_summary(CONFIG),
-        "backups": list_backups(backup_root_from_config(CONFIG)),
         "abandoned_job": request.args.get("abandoned"),
-    }
-
-
-def _home_history_limits() -> dict[str, int]:
-    web_ui_config = CONFIG.get("web_ui") or {}
-    return {
-        "api_source_checks": _positive_int_config(
-            web_ui_config.get("home_api_source_checks_limit"),
-            DEFAULT_HOME_API_SOURCE_CHECKS_LIMIT,
-        ),
-        "previous_jobs": _positive_int_config(
-            web_ui_config.get("home_previous_jobs_limit"),
-            DEFAULT_HOME_PREVIOUS_JOBS_LIMIT,
-        ),
     }
 
 
@@ -759,14 +744,6 @@ def _paginate_history(
             "label": label,
         },
     )
-
-
-def _positive_int_config(value: Any, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default
 
 
 def _human_file_mtime(path: Path) -> str:
