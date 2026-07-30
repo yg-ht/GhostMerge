@@ -8,7 +8,16 @@
   }
 
   document.addEventListener("keydown", (event) => {
-    if (isTypingTarget(document.activeElement) && event.key !== "Escape") {
+    const activeElement = document.activeElement;
+    const enterOnRadio =
+      event.key === "Enter" && activeElement instanceof HTMLInputElement && activeElement.type === "radio";
+    if (isTypingTarget(activeElement) && event.key !== "Escape" && !enterOnRadio) {
+      return;
+    }
+    if (
+      activeElement instanceof HTMLButtonElement ||
+      (activeElement instanceof HTMLAnchorElement && activeElement.hasAttribute("href"))
+    ) {
       return;
     }
     if (event.key === "e") {
@@ -45,6 +54,28 @@
     });
     checkbox.addEventListener("change", syncSelectedClass);
     syncSelectedClass();
+  });
+
+  document.querySelectorAll("[data-decision-choice]").forEach((choice) => {
+    const action = choice.dataset.decisionChoice;
+    const decisionButton = Array.from(document.querySelectorAll("[data-decision-button]")).find(
+      (button) => button.dataset.decisionButton === action,
+    );
+    if (!decisionButton) {
+      return;
+    }
+    function applyDecision() {
+      decisionButton.click();
+    }
+    choice.addEventListener("click", applyDecision);
+    choice.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      applyDecision();
+    });
   });
 
   document.querySelectorAll("[data-choice-row]").forEach((row) => {

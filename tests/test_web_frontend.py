@@ -1555,6 +1555,10 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(conflict.status_code, 200)
         self.assertIn(b"Finding field review", conflict.data)
         self.assertIn(b"data-shortcut=\"ArrowLeft\"", conflict.data)
+        self.assertIn(b'data-decision-choice="left"', conflict.data)
+        self.assertIn(b'data-decision-choice="right"', conflict.data)
+        self.assertIn(b'data-decision-choice="offered"', conflict.data)
+        self.assertIn(b'data-decision-button="left"', conflict.data)
         self.assertIn(b"Highlighted difference", conflict.data)
 
         sensitivity_summary = self.client.post(
@@ -1564,6 +1568,7 @@ class FlaskRouteTests(unittest.TestCase):
         )
         self.assertEqual(sensitivity_summary.status_code, 200)
         self.assertIn(b"Sensitivity review ready to complete", sensitivity_summary.data)
+        self.assertIn(b'data-shortcut="Enter"', sensitivity_summary.data)
 
         bypass = self.client.get(f"/jobs/{job_id}/complete")
         self.assertEqual(bypass.status_code, 400)
@@ -1572,6 +1577,7 @@ class FlaskRouteTests(unittest.TestCase):
         completed = self.acknowledge_sensitivity_for_job(job_id)
         self.assertEqual(completed.status_code, 200)
         self.assertIn(b"Final output preview", completed.data)
+        self.assertIn(b'data-shortcut="Enter"', completed.data)
         self.assertIn(b"Right detail", completed.data)
         self.assertFalse((Path(self.tmp_dir.name) / job_id / "left.json").exists())
 
@@ -1920,6 +1926,7 @@ class FlaskRouteTests(unittest.TestCase):
         )
         self.assertEqual(prompt.status_code, 200)
         self.assertIn(b"Reprocess unmatched finding records", prompt.data)
+        self.assertIn(b'data-shortcut="Enter"', prompt.data)
 
         manual_matching = self.client.post(
             f"/jobs/{job_id}/conflicts",
@@ -1927,6 +1934,7 @@ class FlaskRouteTests(unittest.TestCase):
             follow_redirects=True,
         )
         self.assertIn(b"Manually match unmatched finding records", manual_matching.data)
+        self.assertIn(b'data-shortcut="Enter"', manual_matching.data)
         pending_job = load_job(Path(self.tmp_dir.name), job_id)
 
         sensitivity_summary = self.client.post(

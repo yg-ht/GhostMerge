@@ -12,15 +12,15 @@
   </dl>
 </section>
 <section class="grid">
-  <div class="panel">
+  <div class="panel decision-choice" role="button" tabindex="0" data-decision-choice="left" aria-label="Use {{ source_labels.left }} value">
     <h2>{{ source_labels.left }}</h2>
     <pre>{{ item.left_value }}</pre>
   </div>
-  <div class="panel">
+  <div class="panel decision-choice" role="button" tabindex="0" data-decision-choice="right" aria-label="Use {{ source_labels.right }} value">
     <h2>{{ source_labels.right }}</h2>
     <pre>{{ item.right_value }}</pre>
   </div>
-  <div class="panel">
+  <div class="panel decision-choice" role="button" tabindex="0" data-decision-choice="offered" aria-label="Use offered value">
     <h2>Offered</h2>
     <pre>{{ item.offered_value }}</pre>
   </div>
@@ -33,9 +33,9 @@
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="field_name" value="{{ item.field_name }}">
   <div class="decision-grid">
-    <button class="decision-button default" type="submit" name="action" value="offered" data-shortcut=" "><span class="shortcut">Space</span>Use offered value</button>
-    <button class="decision-button" type="submit" name="action" value="left" data-shortcut="ArrowLeft"><span class="shortcut">←</span>Use {{ source_labels.left }} value</button>
-    <button class="decision-button" type="submit" name="action" value="right" data-shortcut="ArrowRight"><span class="shortcut">→</span>Use {{ source_labels.right }} value</button>
+    <button class="decision-button default" type="submit" name="action" value="offered" data-shortcut=" " data-decision-button="offered"><span class="shortcut">Space</span>Use offered value</button>
+    <button class="decision-button" type="submit" name="action" value="left" data-shortcut="ArrowLeft" data-decision-button="left"><span class="shortcut">←</span>Use {{ source_labels.left }} value</button>
+    <button class="decision-button" type="submit" name="action" value="right" data-shortcut="ArrowRight" data-decision-button="right"><span class="shortcut">→</span>Use {{ source_labels.right }} value</button>
     <button class="decision-button" type="submit" name="action" value="keep" data-shortcut="ArrowUp"><span class="shortcut">↑</span>Keep both source values</button>
     {% if item.allow_merge %}
     <button class="decision-button" type="submit" name="action" value="merge" data-shortcut="m"><span class="shortcut">M</span>Merge text</button>
