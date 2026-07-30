@@ -781,7 +781,11 @@ def initialise_sensitivity_review(
                         continue
                     job.sensitivity_review_stats["fields_scanned"] += 1
                     job.sensitivity_review_stats["hits_found"] += len(
-                        check_for_sensitivities(record.get(field_def.name), terms)
+                        check_for_sensitivities(
+                            record.get(field_def.name),
+                            terms,
+                            field_name=field_def.name,
+                        )
                     )
 
     if job.sensitivity_review_stats["hits_found"]:
@@ -823,7 +827,11 @@ def get_next_sensitivity_item(
                         job.sensitivity_hit_index = 0
                         job.sensitivity_field_index += 1
                         continue
-                    hits = check_for_sensitivities(record.get(field_def.name), terms)
+                    hits = check_for_sensitivities(
+                        record.get(field_def.name),
+                        terms,
+                        field_name=field_def.name,
+                    )
                     if hits and job.sensitivity_hit_index < len(hits):
                         sensitive_term, offered = hits[job.sensitivity_hit_index]
                         # The token binds one browser form to this persisted
@@ -914,7 +922,12 @@ def apply_sensitivity_decision(
     record = records[item.record_index]
     record.set(
         item.field_name,
-        apply_sensitive_replacement(record.get(item.field_name), item.sensitive_term, replacement),
+        apply_sensitive_replacement(
+            record.get(item.field_name),
+            item.sensitive_term,
+            replacement,
+            field_name=item.field_name,
+        ),
     )
     job.sensitivity_hit_index = 0
     job.sensitivity_decision_token = None

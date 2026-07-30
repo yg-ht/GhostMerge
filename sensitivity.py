@@ -6,7 +6,13 @@ import json
 from globals import get_config, get_tui
 CONFIG = get_config()
 # local module imports
-from utils import log, stringify_field, apply_configured_normalisation, _normalise_sensitive_term_for_matching
+from utils import (
+    _normalise_sensitive_term_for_matching,
+    apply_configured_field_normalisation,
+    apply_configured_normalisation,
+    log,
+    stringify_field,
+)
 from model import Finding
 
 
@@ -163,10 +169,21 @@ def remove_double_spaces_from_string(input_string: str) -> str:
         log("DEBUG", "No double spaces to collapse", prefix="UTILS")
     return result
 
-def check_for_sensitivities(field, terms) -> List[Tuple[str, Optional[str]]]:
+def _normalise_sensitivity_value(field_value: Any, field_name: Optional[str]) -> Any:
+    """Normalise a sensitivity value with field-specific HTML semantics."""
+    if field_name is None:
+        return apply_configured_normalisation(field_value)
+    return apply_configured_field_normalisation(field_name, field_value)
+
+
+def check_for_sensitivities(
+    field,
+    terms,
+    field_name: Optional[str] = None,
+) -> List[Tuple[str, Optional[str]]]:
     """Returns List of [(found_term, optional suggested_replacement)...] if sensitivities are found, else []."""
     results = []
-    field = apply_configured_normalisation(field)
+    field = _normalise_sensitivity_value(field, field_name)
     stringified_field = stringify_field(field)
     if not stringified_field or not isinstance(stringified_field, str):
         log("DEBUG", "Skipping empty sensitivity-check field", prefix="SENSITIVITY")
@@ -182,14 +199,19 @@ def check_for_sensitivities(field, terms) -> List[Tuple[str, Optional[str]]]:
                 results.append((term, replacement))
     return results
 
-def apply_sensitive_replacement(field_value: Any, sensitive_term: str, replacement: str) -> Any:
+def apply_sensitive_replacement(
+    field_value: Any,
+    sensitive_term: str,
+    replacement: str,
+    field_name: Optional[str] = None,
+) -> Any:
     """Replace a sensitive term using literal, case-insensitive matching.
 
     Formatting-only HTML rewrites are handled by configured normalisation, but
     opening-tag replacements still remove the paired closing tag for backward
     compatibility with older local sensitive-term files.
     """
-    field_value = apply_configured_normalisation(field_value)
+    field_value = _normalise_sensitivity_value(field_value, field_name)
     if not isinstance(field_value, str):
         log(
             "WARN",
@@ -202,7 +224,7 @@ def apply_sensitive_replacement(field_value: Any, sensitive_term: str, replaceme
         replacement = ""
 
     replaced = _replace_literal_or_opening_tag_pair(field_value, sensitive_term, replacement)
-    return apply_configured_normalisation(replaced)
+    return _normalise_sensitivity_value(replaced, field_name)
 
 
 def apply_pre_match_sensitivity_replacements(
@@ -230,14 +252,23 @@ def apply_pre_match_sensitivity_replacements(
                 continue
 
             stats["fields_scanned"] += 1
-            for sensitive_term, offered in check_for_sensitivities(field_value, terms):
+            for sensitive_term, offered in check_for_sensitivities(
+                field_value,
+                terms,
+                field_name=field_def.name,
+            ):
                 stats["hits_found"] += 1
                 if offered is None:
                     stats["flag_only_hits_deferred"] += 1
                     continue
 
                 current_value = record.get(field_def.name)
-                replaced_value = apply_sensitive_replacement(current_value, sensitive_term, offered)
+                replaced_value = apply_sensitive_replacement(
+                    current_value,
+                    sensitive_term,
+                    offered,
+                    field_name=field_def.name,
+                )
                 if replaced_value != current_value:
                     record.set(field_def.name, replaced_value)
                     stats["replacements_applied"] += 1
@@ -263,7 +294,11 @@ def sensitivities_checker_records(
     ]
 
 def sensitivities_checker_single_field(field_name: str, record: Finding, field_side: str, terms: Dict[str, Optional[str]], interactive_override: Optional[bool] = None, prompt_for_flag_only: bool = True) -> Finding:
-    sensitivity_hits = check_for_sensitivities(record.get(field_name), terms)
+    sensitivity_hits = check_for_sensitivities(
+        record.get(field_name),
+        terms,
+        field_name=field_name,
+    )
 
     if len(sensitivity_hits) > 0:
         interactive_mode = (
@@ -318,12 +353,22 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
 
                 if action == "o" and offered is not None:
                     log('DEBUG', 'User chose the offered sensitivity replacement', prefix="SENSITIVITY")
-                    result = apply_sensitive_replacement(record.get(field_name), sensitive_term, offered)
+                    result = apply_sensitive_replacement(
+                        record.get(field_name),
+                        sensitive_term,
+                        offered,
+                        field_name=field_name,
+                    )
                     record.set(field_name, result)
                 elif action == "e" or action == key.UP:
                     edited_term = tui.invoke_editor(record.get(field_name))
                     log('DEBUG', 'User supplied a custom sensitivity replacement', prefix="SENSITIVITY")
-                    result = apply_sensitive_replacement(record.get(field_name), sensitive_term, edited_term)
+                    result = apply_sensitive_replacement(
+                        record.get(field_name),
+                        sensitive_term,
+                        edited_term,
+                        field_name=field_name,
+                    )
                     record.set(field_name, result)
                 elif action == "k" or action == key.DOWN:
                     log("WARN", "User chose to Keep field as is", prefix="SENSITIVITY")
@@ -333,7 +378,12 @@ def sensitivities_checker_single_field(field_name: str, record: Finding, field_s
                 # the offered variable is populated.  This is perfectly valid, but will result in "best
                 # guess" scenarios that will likely not be as desired.
                 log('DEBUG', 'Auto-accepted the offered sensitivity replacement', prefix="SENSITIVITY")
-                result = apply_sensitive_replacement(record.get(field_name), sensitive_term, offered)
+                result = apply_sensitive_replacement(
+                    record.get(field_name),
+                    sensitive_term,
+                    offered,
+                    field_name=field_name,
+                )
                 record.set(field_name, result)
 
     return record

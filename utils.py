@@ -20,6 +20,7 @@ RICH_TEXT_FIELD_NAMES = frozenset(
         "replication_steps",
         "host_detection_techniques",
         "network_detection_techniques",
+        "references",
         "finding_guidance",
         "extra_fields",
     }

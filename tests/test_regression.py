@@ -465,6 +465,7 @@ class NormalisationRegressionTests(unittest.TestCase):
         data = finding(
             title='<code spellcheck="false">inline title</code>',
             description='<code spellcheck="false">flattened block</code>',
+            references='<code spellcheck="false">flattened reference block</code>',
         ).to_dict()
         data["extra_fields"] = {
             "nested": {
@@ -478,6 +479,10 @@ class NormalisationRegressionTests(unittest.TestCase):
         self.assertEqual(
             parsed.description,
             '<pre spellcheck="false"><code>flattened block</code></pre>',
+        )
+        self.assertEqual(
+            parsed.references,
+            '<pre spellcheck="false"><code>flattened reference block</code></pre>',
         )
         self.assertEqual(
             parsed.extra_fields["nested"]["rich_text"],
@@ -982,6 +987,25 @@ class SensitivityRegressionTests(unittest.TestCase):
         self.assertEqual(stats["hits_found"], 2)
         self.assertEqual(stats["replacements_applied"], 1)
         self.assertEqual(stats["flag_only_hits_deferred"], 1)
+
+    def test_sensitivity_replacement_preserves_field_specific_code_semantics(self):
+        record = finding(
+            title='<code spellcheck="false">ACME</code>',
+            description='<code spellcheck="false">ACME</code>',
+        )
+
+        stats = apply_pre_match_sensitivity_replacements(
+            [record],
+            {"acme": "[CLIENT]"},
+        )
+
+        self.assertEqual(record.title, "<code>[CLIENT]</code>")
+        self.assertEqual(
+            record.description,
+            '<pre spellcheck="false"><code>[CLIENT]</code></pre>',
+        )
+        self.assertEqual(stats["hits_found"], 2)
+        self.assertEqual(stats["replacements_applied"], 2)
 
     def test_sensitive_terms_digest_is_stable_without_exposing_term_order(self):
         first = sensitive_terms_digest({"secret": None, "acme": "[CLIENT]"})
