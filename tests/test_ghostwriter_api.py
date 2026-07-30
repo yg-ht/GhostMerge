@@ -270,7 +270,7 @@ class GhostwriterApiTests(unittest.TestCase):
         counts = GhostwriterApi(server_config(), client=client).fetch_template_counts()
 
         self.assertEqual(counts, {"findings": 1, "observations": 1})
-        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(len(client.calls), 3)
         self.assertIn("CountTemplates", client.calls[0][0])
         self.assertIn("CountTemplateIds", client.calls[1][0])
         self.assertNotIn("FetchFindings", client.calls[1][0])
@@ -304,8 +304,52 @@ class GhostwriterApiTests(unittest.TestCase):
         counts = GhostwriterApi(server_config(), client=client).fetch_template_counts()
 
         self.assertEqual(counts, {"findings": 1001, "observations": 2})
-        self.assertEqual(len(client.calls), 3)
-        self.assertEqual(client.calls[-1][1]["findingOffset"], 1000)
+        self.assertEqual(len(client.calls), 4)
+        self.assertEqual(client.calls[-1][1]["findingOffset"], 1001)
+
+    def test_fetch_template_counts_fallback_handles_server_page_caps(self):
+        class CappedCountClient:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, query, variables=None):
+                variables = variables or {}
+                self.calls.append((query, variables))
+                if "CountTemplates" in query:
+                    raise GhostwriterApiError("Ghostwriter GraphQL error: aggregate fields are unavailable")
+                finding_offset = variables["findingOffset"]
+                observation_offset = variables["observationOffset"]
+                return {
+                    "finding": [
+                        {"id": index}
+                        for index in range(finding_offset, min(finding_offset + 100, 250))
+                    ],
+                    "observation": [
+                        {"id": index}
+                        for index in range(observation_offset, min(observation_offset + 100, 125))
+                    ],
+                }
+
+        client = CappedCountClient()
+
+        counts = GhostwriterApi(server_config(), client=client).fetch_template_counts()
+
+        self.assertEqual(counts, {"findings": 250, "observations": 125})
+        self.assertEqual(client.calls[-1][1]["findingOffset"], 250)
+        self.assertEqual(client.calls[-1][1]["observationOffset"], 125)
+
+    def test_fetch_template_counts_fallback_rejects_repeated_pages(self):
+        class RepeatingCountClient:
+            def execute(self, query, variables=None):
+                if "CountTemplates" in query:
+                    raise GhostwriterApiError("Ghostwriter GraphQL error: aggregate fields are unavailable")
+                return {
+                    "finding": [{"id": 1}],
+                    "observation": [],
+                }
+
+        with self.assertRaisesRegex(GhostwriterApiError, "repeated Finding IDs"):
+            GhostwriterApi(server_config(), client=RepeatingCountClient()).fetch_template_counts()
 
     def test_fetch_template_counts_does_not_retry_connectivity_errors(self):
         class UnreachableClient:

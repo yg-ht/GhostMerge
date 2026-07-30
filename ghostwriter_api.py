@@ -340,15 +340,17 @@ class GhostwriterApi:
         """
         limit = 1000
         counts = {"findings": 0, "observations": 0}
+        offsets = {"findings": 0, "observations": 0}
         complete = {"findings": False, "observations": False}
+        seen_ids: dict[str, set[str]] = {"findings": set(), "observations": set()}
 
         while not all(complete.values()):
             data = self.client.execute(
                 query,
                 {
                     "limit": limit,
-                    "findingOffset": counts["findings"],
-                    "observationOffset": counts["observations"],
+                    "findingOffset": offsets["findings"],
+                    "observationOffset": offsets["observations"],
                 },
             )
             for key, response_key, label in (
@@ -362,8 +364,28 @@ class GhostwriterApi:
                     raise GhostwriterApiError(
                         f"Ghostwriter did not return a {label} list while checking template counts."
                     )
-                counts[key] += len(batch)
-                complete[key] = len(batch) < limit
+                if not batch:
+                    complete[key] = True
+                    continue
+
+                page_ids = []
+                for item in batch:
+                    record_id = item.get("id") if isinstance(item, dict) else None
+                    if record_id in (None, ""):
+                        raise GhostwriterApiError(
+                            f"Ghostwriter returned a {label} without an ID while checking template counts."
+                        )
+                    page_ids.append(str(record_id))
+
+                if len(set(page_ids)) != len(page_ids) or seen_ids[key].intersection(page_ids):
+                    raise GhostwriterApiError(
+                        f"Ghostwriter returned repeated {label} IDs while checking template counts; "
+                        "pagination did not advance safely."
+                    )
+
+                seen_ids[key].update(page_ids)
+                offsets[key] += len(batch)
+                counts[key] = len(seen_ids[key])
 
             total = counts["findings"] + counts["observations"]
             self.progress(
