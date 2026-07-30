@@ -683,7 +683,7 @@ Useful configuration areas include:
 | Matching | Tune fuzzy match thresholds, field weights, and optional orphan reprocessing. |
 | Output | Control default output filename suffixes. |
 | Interaction | Enable terminal review; disabled mode accepts deterministic offers and fails closed when analyst judgement is required. |
-| Normalisation | Strip whitespace, remove empty HTML tags, normalise line endings, deduplicate references, canonicalise CVSS vectors, and reduce matching-only text noise. |
+| Normalisation | Clean cosmetic whitespace outside code, remove empty HTML tags, normalise line endings, repair code blocks, deduplicate references, canonicalise CVSS vectors, and reduce matching-only text noise. |
 | Sensitivity checks | Enable term scanning and configure the terms file. |
 | Web UI | Limit how many API source checks and merge jobs are shown on the home page. |
 | Web access | Restrict browser access by source IP, API key, frame policy, and proxy prefix. |
@@ -736,6 +736,9 @@ extra_fields
 The included `test_data_left.json` and `test_data_right.json` files are useful
 minimal examples.
 
+`references` is plain text containing one URL per line. GhostMerge trims blank
+lines and removes exact duplicates; it does not interpret the field as HTML.
+
 Observation records use the smaller Ghostwriter Observation Template schema:
 
 ```text
@@ -775,6 +778,24 @@ Template `extra_fields` are not changed by the default rule.
 
 When both old and new keys exist, `preserve_existing` keeps the unprefixed key
 and drops the prefixed duplicate.
+
+### Extra-field HTML normalisation
+
+Ghostwriter extra fields can be rich text, single-line text, JSON, Boolean, or
+numeric values. For API-backed inputs, GhostMerge fetches each server's
+`ExtraFieldSpec` metadata and only uses root-level `<code>` as evidence of a
+flattened code block when that extra field is declared as `rich_text`. Known
+non-rich fields retain one-line `<code>` as inline code.
+
+Legacy file inputs do not contain extra-field type metadata. GhostMerge handles
+those conservatively: existing `<pre>` blocks are canonicalised, and flattened
+code is restored only when multiline content, a `<br>` element, or a historical
+block class such as `rich-code` or `language-*` provides strong evidence. A
+one-line root `<code>` element remains inline because its original meaning
+cannot be determined safely without the field specification.
+
+If an older Ghostwriter server or token cannot expose `extraFieldSpec`,
+API-backed input uses the same conservative fallback and logs a warning.
 
 ### Output files
 
@@ -852,6 +873,23 @@ config overrides. It runs as part of string normalisation before matching,
 conflict review, and sensitivity review, so deprecated presentation markup does
 not become a review decision.
 
+Code markup is canonicalised to Ghostwriter's current output:
+
+```html
+<pre spellcheck="false"><code>block code</code></pre>
+```
+
+Inline code remains `<code>inline code</code>`. Historical `<pre>`, TinyMCE
+`rich-code`, and language-qualified code-block forms are converted to the
+canonical structure. GhostMerge also repairs code blocks flattened by older
+GhostMerge releases when block intent remains evident from a top-level
+`<code>` element, multiline content, or a historical block class. Nested
+single-line code without a block signal remains inline.
+
+Whitespace inside complete `<pre>` and `<code>` elements is excluded from
+cosmetic tab and repeated-space cleanup. Whitespace between adjacent inline
+formatting tags is also retained because it may be visible content.
+
 The default rule rewrites legacy yellow highlight spans:
 
 ```html
@@ -897,29 +935,18 @@ and replacement tag:
         "data-color": "#f00",
         "style": "color: #f00"
       }
-    },
-    {
-      "name": "normalise-pre-to-code",
-      "tag": "pre",
-      "attrs": {},
-      "replacement_tag": "code",
-      "replacement_attrs": {
-        "spellcheck": "false"
-      }
-    },
-    {
-      "name": "normalise-code-spellcheck",
-      "action": "set_attrs",
-      "tag": "code",
-      "attrs": {},
-      "drop_attrs": ["data-end", "start"],
-      "replacement_attrs": {
-        "spellcheck": "false"
-      }
     }
   ]
 }
 ```
+
+Code canonicalisation is structural and does not require a configured tag
+replacement rule. Do not add a broad `<pre>` to `<code>` rule: `<pre>` is the
+block boundary Ghostwriter needs to render a code block.
+
+Older GhostMerge output may already have lost repeated spaces or tab
+indentation. Structural repair restores code-block rendering and preserves the
+remaining content, but deleted whitespace cannot be inferred reliably.
 
 This is separate from sensitive terms. Sensitive terms should be used for
 content that needs analyst review, not deterministic HTML formatting rewrites.

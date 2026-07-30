@@ -214,7 +214,11 @@ def load_records_from_json_text(json_text: str) -> list[dict[str, Any]] | dict[s
     raise WebMergeError("JSON input must be a list of finding records or a combined template object.")
 
 
-def parse_findings(records: list[dict[str, Any]]) -> list[Finding]:
+def parse_findings(
+    records: list[dict[str, Any]],
+    *,
+    extra_fields_are_normalised: bool = False,
+) -> list[Finding]:
     """Convert raw dictionaries to Finding objects using the existing model rules."""
     findings: list[Finding] = []
     for index, record in enumerate(records, start=1):
@@ -222,7 +226,11 @@ def parse_findings(records: list[dict[str, Any]]) -> list[Finding]:
             # Web workers have no analyst terminal. Invalid fields must return
             # to the browser as an error rather than opening an invisible TUI
             # correction prompt and blocking the request.
-            finding = Finding.from_dict(record, allow_interactive_correction=False)
+            finding = Finding.from_dict(
+                record,
+                allow_interactive_correction=False,
+                extra_fields_are_normalised=extra_fields_are_normalised,
+            )
         except Exception as exc:
             raise WebMergeError(f"Finding {index} could not be parsed.") from exc
         if finding is not None:
@@ -230,12 +238,19 @@ def parse_findings(records: list[dict[str, Any]]) -> list[Finding]:
     return findings
 
 
-def parse_observations(records: list[dict[str, Any]]) -> list[Observation]:
+def parse_observations(
+    records: list[dict[str, Any]],
+    *,
+    extra_fields_are_normalised: bool = False,
+) -> list[Observation]:
     """Convert raw dictionaries to Observation objects using the observation model rules."""
     observations: list[Observation] = []
     for index, record in enumerate(records, start=1):
         try:
-            observation = Observation.from_dict(record)
+            observation = Observation.from_dict(
+                record,
+                extra_fields_are_normalised=extra_fields_are_normalised,
+            )
         except Exception as exc:
             raise WebMergeError(f"Observation {index} could not be parsed.") from exc
         if observation is not None:
@@ -262,13 +277,26 @@ def create_merge_job(
     input_source_names: Optional[dict[str, str]] = None,
 ) -> MergeJob:
     """Create a merge job and run the existing fuzzy matching rounds."""
+    sources = input_sources or {"left": "file", "right": "file"}
     includes_observations = _input_includes_observations(left_records) or _input_includes_observations(right_records)
     left_templates = split_template_records(left_records)
     right_templates = split_template_records(right_records)
-    findings_left = parse_findings(left_templates["findings"])
-    findings_right = parse_findings(right_templates["findings"])
-    observations_left = parse_observations(left_templates["observations"])
-    observations_right = parse_observations(right_templates["observations"])
+    findings_left = parse_findings(
+        left_templates["findings"],
+        extra_fields_are_normalised=sources.get("left") == "api",
+    )
+    findings_right = parse_findings(
+        right_templates["findings"],
+        extra_fields_are_normalised=sources.get("right") == "api",
+    )
+    observations_left = parse_observations(
+        left_templates["observations"],
+        extra_fields_are_normalised=sources.get("left") == "api",
+    )
+    observations_right = parse_observations(
+        right_templates["observations"],
+        extra_fields_are_normalised=sources.get("right") == "api",
+    )
 
     # Only new Web entry points provide a versioned snapshot. Direct service
     # callers and legacy persisted jobs retain version zero semantics until the
@@ -357,7 +385,7 @@ def create_merge_job(
         unmatched_observations_right=unmatched_observations_right,
         merged_observations_left=[],
         merged_observations_right=[],
-        input_sources=input_sources or {"left": "file", "right": "file"},
+        input_sources=sources,
         input_source_names=dict(input_source_names or {}),
         includes_observations=includes_observations,
         sensitivity_snapshot_version=snapshot_version,
@@ -781,7 +809,11 @@ def initialise_sensitivity_review(
                         continue
                     job.sensitivity_review_stats["fields_scanned"] += 1
                     job.sensitivity_review_stats["hits_found"] += len(
-                        check_for_sensitivities(record.get(field_def.name), terms)
+                        check_for_sensitivities(
+                            record.get(field_def.name),
+                            terms,
+                            field_name=field_def.name,
+                        )
                     )
 
     if job.sensitivity_review_stats["hits_found"]:
@@ -823,7 +855,11 @@ def get_next_sensitivity_item(
                         job.sensitivity_hit_index = 0
                         job.sensitivity_field_index += 1
                         continue
-                    hits = check_for_sensitivities(record.get(field_def.name), terms)
+                    hits = check_for_sensitivities(
+                        record.get(field_def.name),
+                        terms,
+                        field_name=field_def.name,
+                    )
                     if hits and job.sensitivity_hit_index < len(hits):
                         sensitive_term, offered = hits[job.sensitivity_hit_index]
                         # The token binds one browser form to this persisted
@@ -914,7 +950,12 @@ def apply_sensitivity_decision(
     record = records[item.record_index]
     record.set(
         item.field_name,
-        apply_sensitive_replacement(record.get(item.field_name), item.sensitive_term, replacement),
+        apply_sensitive_replacement(
+            record.get(item.field_name),
+            item.sensitive_term,
+            replacement,
+            field_name=item.field_name,
+        ),
     )
     job.sensitivity_hit_index = 0
     job.sensitivity_decision_token = None

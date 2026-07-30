@@ -84,6 +84,10 @@ service, routes, persistence, matching, review, output approval, and outbound-sy
 - [x] Apply matching-only text normalisation for punctuation, case, whitespace, dashes, and quotes
 - [x] Sort normalised tags deterministically
 - [x] Canonicalise configured HTML cleanup output for stable attributes, classes, and styles
+- [x] Restore historical and flattened code blocks to Ghostwriter's canonical
+      `<pre spellcheck="false"><code>…</code></pre>` structure while retaining nested inline code.
+      Code whitespace and spaces between adjacent inline marks are excluded from cosmetic cleanup;
+      ambiguous nested single-line code remains inline.
 - [ ] Normalise evidence placeholders from curly-bracket syntax to the canonical angle-bracket syntax.
       Define the accepted input forms, canonical output, escaping rules, and tests for placeholders
       embedded in plain text and HTML before enabling the transformation.

@@ -14,6 +14,13 @@ from typing import Any, Callable, Optional
 from urllib.parse import urljoin
 from urllib.parse import urlparse
 
+from utils import (
+    KNOWN_EXTRA_FIELD_TYPES,
+    apply_configured_extra_fields_normalisation,
+    apply_extra_fields_key_migrations,
+    log,
+)
+
 
 FINDING_FIELDS = (
     "id",
@@ -145,8 +152,90 @@ class GhostwriterApi:
         self.server = server
         self.client = client or GhostwriterGraphQLClient(server)
         self.progress = progress or (lambda event: None)
+        self._extra_field_specs: Optional[dict[str, dict[str, str]]] = None
+
+    def fetch_extra_field_specs(self) -> dict[str, dict[str, str]]:
+        """Fetch and cache extra-field types for supported template models."""
+        if self._extra_field_specs is not None:
+            return self._extra_field_specs
+
+        query = """
+        query FetchExtraFieldSpecs {
+          extraFieldSpec(
+            where: {
+              targetModel: {
+                _in: ["reporting.Finding", "reporting.Observation"]
+              }
+            }
+            order_by: {id: asc}
+          ) {
+            targetModel
+            internalName
+            type
+          }
+        }
+        """
+        specs: dict[str, dict[str, str]] = {
+            "finding": {},
+            "observation": {},
+        }
+        try:
+            data = self.client.execute(query)
+        except GhostwriterApiError as exc:
+            log(
+                "WARN",
+                f"Could not fetch extra-field specifications from {self.server.name}; "
+                f"using conservative extra-field code repair ({exc}).",
+                prefix="API",
+            )
+            self._extra_field_specs = specs
+            return specs
+
+        target_types = {
+            "reporting.Finding": "finding",
+            "reporting.Observation": "observation",
+        }
+        ambiguous: set[tuple[str, str]] = set()
+        for item in data.get("extraFieldSpec") or []:
+            if not isinstance(item, dict):
+                log("WARN", "Ignored malformed Ghostwriter extra-field specification.", prefix="API")
+                continue
+
+            template_type = target_types.get(str(item.get("targetModel") or ""))
+            internal_name = str(item.get("internalName") or "").strip()
+            field_type = str(item.get("type") or "").strip()
+            if template_type is None or not internal_name or not field_type:
+                log("WARN", "Ignored incomplete Ghostwriter extra-field specification.", prefix="API")
+                continue
+
+            identity = (template_type, internal_name)
+            if identity in ambiguous:
+                continue
+            existing_type = specs[template_type].get(internal_name)
+            if existing_type is not None and existing_type != field_type:
+                specs[template_type].pop(internal_name, None)
+                ambiguous.add(identity)
+                log(
+                    "WARN",
+                    f'Conflicting Ghostwriter types for extra field "{internal_name}" '
+                    f"on {template_type} templates; using conservative code repair.",
+                    prefix="API",
+                )
+                continue
+            if field_type not in KNOWN_EXTRA_FIELD_TYPES:
+                log(
+                    "WARN",
+                    f'Unknown Ghostwriter type "{field_type}" for extra field '
+                    f'"{internal_name}"; using conservative code repair.',
+                    prefix="API",
+                )
+            specs[template_type][internal_name] = field_type
+
+        self._extra_field_specs = specs
+        return specs
 
     def fetch_findings(self) -> list[dict[str, Any]]:
+        field_types = self.fetch_extra_field_specs()["finding"]
         query = """
         query FetchFindings($limit: Int!, $offset: Int!) {
           finding(limit: $limit, offset: $offset, order_by: {id: asc}) {
@@ -178,7 +267,7 @@ class GhostwriterApi:
             if not batch:
                 break
             for item in batch:
-                record = self._api_record_to_ghostmerge(item)
+                record = self._api_record_to_ghostmerge(item, field_types)
                 record["tags"] = ", ".join(self.fetch_tags(int(item["id"])))
                 records.append(record)
                 self.progress(
@@ -203,6 +292,7 @@ class GhostwriterApi:
         }
 
     def fetch_observations(self) -> list[dict[str, Any]]:
+        field_types = self.fetch_extra_field_specs()["observation"]
         query = """
         query FetchObservations($limit: Int!, $offset: Int!) {
           observation(limit: $limit, offset: $offset, order_by: {id: asc}) {
@@ -223,7 +313,7 @@ class GhostwriterApi:
             if not batch:
                 break
             for item in batch:
-                record = self._api_observation_to_ghostmerge(item)
+                record = self._api_observation_to_ghostmerge(item, field_types)
                 record["tags"] = ", ".join(self.fetch_tags(int(item["id"]), model="observation"))
                 records.append(record)
                 self.progress(
@@ -252,8 +342,17 @@ class GhostwriterApi:
     def create_backup(self, backup_root: Path) -> Path:
         raw_findings = self.fetch_raw_findings_with_tags()
         raw_observations = self.fetch_raw_observations_with_tags()
-        normalised_findings = [self._api_record_to_ghostmerge(item["record"]) | {"tags": ", ".join(item["tags"])} for item in raw_findings]
-        normalised_observations = [self._api_observation_to_ghostmerge(item["record"]) | {"tags": ", ".join(item["tags"])} for item in raw_observations]
+        field_specs = self.fetch_extra_field_specs()
+        normalised_findings = [
+            self._api_record_to_ghostmerge(item["record"], field_specs["finding"])
+            | {"tags": ", ".join(item["tags"])}
+            for item in raw_findings
+        ]
+        normalised_observations = [
+            self._api_observation_to_ghostmerge(item["record"], field_specs["observation"])
+            | {"tags": ", ".join(item["tags"])}
+            for item in raw_observations
+        ]
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup_dir = backup_root / self.server.side
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -790,7 +889,19 @@ class GhostwriterApi:
                 seen_ids.add(existing_id)
         return candidates
 
-    def _api_record_to_ghostmerge(self, record: dict[str, Any]) -> dict[str, Any]:
+    def _api_record_to_ghostmerge(
+        self,
+        record: dict[str, Any],
+        field_types: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        extra_fields = apply_configured_extra_fields_normalisation(
+            record.get("extraFields") or {},
+            field_types,
+        )
+        extra_fields = apply_extra_fields_key_migrations(
+            extra_fields,
+            template_type="finding",
+        )
         return {
             "id": str(record.get("id", "")),
             "severity": (record.get("severity") or {}).get("severity"),
@@ -807,16 +918,28 @@ class GhostwriterApi:
             "references": record.get("references") or "",
             "finding_guidance": record.get("findingGuidance") or "",
             "tags": "",
-            "extra_fields": record.get("extraFields") or {},
+            "extra_fields": extra_fields,
         }
 
-    def _api_observation_to_ghostmerge(self, record: dict[str, Any]) -> dict[str, Any]:
+    def _api_observation_to_ghostmerge(
+        self,
+        record: dict[str, Any],
+        field_types: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        extra_fields = apply_configured_extra_fields_normalisation(
+            record.get("extraFields") or {},
+            field_types,
+        )
+        extra_fields = apply_extra_fields_key_migrations(
+            extra_fields,
+            template_type="observation",
+        )
         return {
             "id": str(record.get("id", "")),
             "title": record.get("title") or "",
             "description": record.get("description") or "",
             "tags": "",
-            "extra_fields": record.get("extraFields") or {},
+            "extra_fields": extra_fields,
         }
 
 

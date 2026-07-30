@@ -39,11 +39,14 @@ from sensitivity import (
 )
 from utils import (
     Aborting,
+    apply_configured_extra_fields_normalisation,
+    apply_configured_field_normalisation,
     apply_formatting_cleanup,
     apply_configured_normalisation,
     load_json,
     load_config,
     normalise_cvss_vector,
+    normalise_finding_record,
     normalise_line_endings,
     normalise_references,
     remove_double_spaces_from_string,
@@ -279,6 +282,39 @@ class FindingModelRegressionTests(unittest.TestCase):
         self.assertEqual(serialised["tags"], "api, auth")
         self.assertEqual(json.loads(serialised["extra_fields"]), {"owner": "blue"})
 
+    def test_stringified_extra_fields_with_code_round_trip(self):
+        finding_source = finding(
+            extra_fields={
+                "formatted": '<pre spellcheck="false"><code>if  ready:\n\treturn  1</code></pre>',
+                "historical": '<code class="rich-code">payload</code>',
+            }
+        )
+        observation_source = Observation(
+            id=1,
+            title="Observation",
+            description="Detail",
+            tags=[],
+            extra_fields={
+                "formatted": '<pre spellcheck="false"><code>observation</code></pre>',
+            },
+        )
+
+        parsed_finding = Finding.from_dict(finding_source.to_dict())
+        parsed_observation = Observation.from_dict(observation_source.to_dict())
+
+        self.assertEqual(
+            parsed_finding.extra_fields["formatted"],
+            '<pre spellcheck="false"><code>if  ready:\n\treturn  1</code></pre>',
+        )
+        self.assertEqual(
+            parsed_finding.extra_fields["historical"],
+            '<pre spellcheck="false"><code>payload</code></pre>',
+        )
+        self.assertEqual(
+            parsed_observation.extra_fields["formatted"],
+            '<pre spellcheck="false"><code>observation</code></pre>',
+        )
+
     def test_invalid_severity_aborts_instead_of_silently_accepting(self):
         record = finding(severity="Urgent", references="").to_dict()
 
@@ -328,9 +364,43 @@ class NormalisationRegressionTests(unittest.TestCase):
         self.assertEqual(remove_pointless_html_tags("<p></p><span>  </span><p>kept</p>"), "<p>kept</p>")
 
     def test_references_are_trimmed_and_deduplicated(self):
-        value = " https://example.test/a \n\nhttps://example.test/a\nNote\n Note "
+        value = " https://example.test/a \n\nhttps://example.test/a\n https://example.test/b "
 
-        self.assertEqual(normalise_references(value), "https://example.test/a\nNote")
+        self.assertEqual(
+            normalise_references(value),
+            "https://example.test/a\nhttps://example.test/b",
+        )
+
+    def test_references_are_not_processed_as_html(self):
+        value = '<code spellcheck="false">https://example.test/a</code>'
+
+        self.assertEqual(
+            apply_configured_field_normalisation("references", value),
+            value,
+        )
+
+    def test_reference_normalisation_can_still_be_disabled(self):
+        configure_for_tests(normalise_references=False)
+        value = " https://example.test/a \nhttps://example.test/a "
+
+        self.assertEqual(
+            apply_configured_field_normalisation("references", value),
+            "https://example.test/a \nhttps://example.test/a",
+        )
+
+    def test_block_tag_spacing_is_collapsed_but_inline_spacing_is_preserved(self):
+        self.assertEqual(
+            apply_configured_normalisation("<p>one</p>\n<p>two</p>"),
+            "<p>one</p><p>two</p>",
+        )
+        self.assertEqual(
+            apply_configured_normalisation("<div>\n<section>\n<p>nested</p>\n</section>\n</div>"),
+            "<div><section>nested</section></div>",
+        )
+        self.assertEqual(
+            apply_configured_normalisation("<p><mark>one</mark> <mark>two</mark></p>"),
+            "<p><mark>one</mark> <mark>two</mark></p>",
+        )
 
     def test_cvss_vectors_are_case_and_whitespace_normalised(self):
         self.assertEqual(
@@ -388,96 +458,273 @@ class NormalisationRegressionTests(unittest.TestCase):
         self.assertEqual(apply_formatting_cleanup(highlighted), "<mark>secret</mark>")
         self.assertEqual(apply_formatting_cleanup(standalone), standalone)
 
-    def test_formatting_cleanup_adds_spellcheck_to_code_tags(self):
+    def test_formatting_cleanup_preserves_inline_code_and_removes_editor_attributes(self):
         self.assertEqual(
-            apply_formatting_cleanup("<code>payload</code>"),
-            '<code spellcheck="false">payload</code>',
+            apply_formatting_cleanup(
+                '<p>Use <code data-end="9" spellcheck="false" start="1">x  +  y</code> inline.</p>'
+            ),
+            "<p>Use <code>x  +  y</code> inline.</p>",
         )
         self.assertEqual(
-            apply_formatting_cleanup('<code class="language-python">payload</code>'),
-            '<code class="language-python" spellcheck="false">payload</code>',
-        )
-        self.assertEqual(
-            apply_formatting_cleanup('<code spellcheck="true">payload</code>'),
-            '<code spellcheck="false">payload</code>',
+            apply_formatting_cleanup('<p><code class="product-name">Ghostwriter</code></p>'),
+            '<p><code class="product-name">Ghostwriter</code></p>',
         )
 
-    def test_formatting_cleanup_replaces_pre_tags_with_code_tags(self):
+    def test_formatting_cleanup_canonicalises_historical_code_blocks(self):
         self.assertEqual(
             apply_formatting_cleanup('<pre class="rich-code">payload</pre>'),
-            '<code spellcheck="false">payload</code>',
+            '<pre spellcheck="false"><code>payload</code></pre>',
         )
         self.assertEqual(
             apply_formatting_cleanup("<pre>payload</pre>"),
-            '<code spellcheck="false">payload</code>',
+            '<pre spellcheck="false"><code>payload</code></pre>',
+        )
+        self.assertEqual(
+            apply_formatting_cleanup('<pre class="language-python"><code>payload</code></pre>'),
+            '<pre spellcheck="false"><code>payload</code></pre>',
         )
 
-    def test_formatting_cleanup_collapses_redundant_nested_code_tags(self):
+    def test_formatting_cleanup_preserves_current_code_block_idempotently(self):
+        canonical = '<pre spellcheck="false"><code>if  ready:\n\treturn  1</code></pre>'
+
+        self.assertEqual(apply_formatting_cleanup(canonical), canonical)
+        self.assertEqual(apply_formatting_cleanup(apply_formatting_cleanup(canonical)), canonical)
+
+    def test_formatting_cleanup_overrides_retired_local_code_rules(self):
+        configure_for_tests(
+            formatting_cleanup_rules=[
+                {
+                    "name": "normalise-pre-to-code",
+                    "tag": "pre",
+                    "attrs": {},
+                    "replacement_tag": "code",
+                    "replacement_attrs": {"spellcheck": "false"},
+                },
+                {
+                    "name": "normalise-code-spellcheck",
+                    "action": "set_attrs",
+                    "tag": "code",
+                    "attrs": {},
+                    "replacement_attrs": {"spellcheck": "false"},
+                },
+            ]
+        )
+
+        self.assertEqual(
+            apply_formatting_cleanup("<pre><code>block</code></pre>"),
+            '<pre spellcheck="false"><code>block</code></pre>',
+        )
+        self.assertEqual(
+            apply_formatting_cleanup("<p>Use <code>inline</code>.</p>"),
+            "<p>Use <code>inline</code>.</p>",
+        )
+
+    def test_formatting_cleanup_repairs_flattened_root_code_as_block(self):
+        self.assertEqual(
+            apply_formatting_cleanup('<code spellcheck="false">one line block</code>'),
+            '<pre spellcheck="false"><code>one line block</code></pre>',
+        )
+        self.assertEqual(
+            apply_formatting_cleanup(
+                '<p>Before</p><code class="language-python" spellcheck="false">payload</code><p>After</p>'
+            ),
+            '<p>Before</p><pre spellcheck="false"><code>payload</code></pre><p>After</p>',
+        )
+
+    def test_boolean_code_repair_keyword_remains_backwards_compatible(self):
+        source = '<code spellcheck="false">one line</code>'
+
+        self.assertEqual(
+            apply_configured_normalisation(
+                source,
+                repair_flattened_code_blocks=True,
+            ),
+            '<pre spellcheck="false"><code>one line</code></pre>',
+        )
+        self.assertEqual(
+            apply_configured_normalisation(
+                source,
+                repair_flattened_code_blocks=False,
+            ),
+            "<code>one line</code>",
+        )
+
+    def test_record_normalisation_repairs_blocks_only_in_rich_text_fields(self):
+        data = finding(
+            title='<code spellcheck="false">inline title</code>',
+            description='<code spellcheck="false">flattened block</code>',
+            references="https://example.test/a\nhttps://example.test/a",
+        ).to_dict()
+        data["extra_fields"] = {
+            "nested": {
+                "rich_text": '<code spellcheck="false">extra block</code>',
+            }
+        }
+
+        parsed = Finding.from_dict(data)
+
+        self.assertEqual(parsed.title, "<code>inline title</code>")
+        self.assertEqual(
+            parsed.description,
+            '<pre spellcheck="false"><code>flattened block</code></pre>',
+        )
+        self.assertEqual(
+            parsed.references,
+            "https://example.test/a",
+        )
+        self.assertEqual(
+            parsed.extra_fields["nested"]["rich_text"],
+            "<code>extra block</code>",
+        )
+
+    def test_extra_field_normalisation_uses_types_and_conservative_fallback(self):
+        extra_fields = {
+            "formatted": '<code spellcheck="false">one-line block</code>',
+            "command": '<code spellcheck="false">inline command</code>',
+            "payload": {"example": '<code spellcheck="false">inline JSON</code>'},
+            "ambiguous": '<code spellcheck="false">unknown inline</code>',
+            "historical": '<code class="rich-code">historical block</code>',
+            "multiline": "<code>line one<br>line two</code>",
+            "enabled": True,
+            "attempts": 3,
+        }
+        field_types = {
+            "formatted": "rich_text",
+            "command": "single_line_text",
+            "payload": "json",
+            "enabled": "checkbox",
+            "attempts": "integer",
+        }
+
+        normalised = apply_configured_extra_fields_normalisation(
+            extra_fields,
+            field_types,
+        )
+
+        self.assertEqual(
+            normalised["formatted"],
+            '<pre spellcheck="false"><code>one-line block</code></pre>',
+        )
+        self.assertEqual(normalised["command"], "<code>inline command</code>")
+        self.assertEqual(normalised["payload"]["example"], "<code>inline JSON</code>")
+        self.assertEqual(normalised["ambiguous"], "<code>unknown inline</code>")
+        self.assertEqual(
+            normalised["historical"],
+            '<pre spellcheck="false"><code>historical block</code></pre>',
+        )
+        self.assertEqual(
+            normalised["multiline"],
+            '<pre spellcheck="false"><code>line one<br/>line two</code></pre>',
+        )
+        self.assertIs(normalised["enabled"], True)
+        self.assertEqual(normalised["attempts"], 3)
+        self.assertEqual(
+            apply_configured_extra_fields_normalisation(normalised, field_types),
+            normalised,
+        )
+
+    def test_typed_api_extra_fields_are_not_reclassified_later(self):
+        data = finding().to_dict()
+        data["extra_fields"] = {
+            "command": '<code class="language-python">print(1)</code>',
+            "formatted": '<pre spellcheck="false"><code>block</code></pre>',
+        }
+
+        parsed = Finding.from_dict(data, extra_fields_are_normalised=True)
+        normalise_finding_record(parsed)
+
+        self.assertEqual(
+            parsed.extra_fields["command"],
+            '<code class="language-python">print(1)</code>',
+        )
+        self.assertEqual(
+            parsed.extra_fields["formatted"],
+            '<pre spellcheck="false"><code>block</code></pre>',
+        )
+
+    def test_formatting_cleanup_repairs_redundant_flattened_code_tags(self):
         nested = '<pre><code><mark>&lt;EVIDENCE&gt;</mark></code></pre>'
-        expected = '<code spellcheck="false"><mark>&lt;EVIDENCE&gt;</mark></code>'
+        expected = '<pre spellcheck="false"><code><mark>&lt;EVIDENCE&gt;</mark></code></pre>'
 
         self.assertEqual(apply_formatting_cleanup(nested), expected)
         self.assertEqual(apply_formatting_cleanup(expected), expected)
         self.assertEqual(
-            apply_formatting_cleanup("<code><code><code>payload</code></code></code>"),
-            '<code spellcheck="false">payload</code>',
+            apply_formatting_cleanup(
+                '<code spellcheck="false">\n'
+                '<code class="language-python" data-end="653" start="645">payload</code>\n'
+                '</code>'
+            ),
+            '<pre spellcheck="false"><code>\npayload\n</code></pre>',
         )
 
-    def test_formatting_cleanup_repairs_existing_nested_code_and_preserves_attributes(self):
-        nested = (
-            '<code spellcheck="false">\n'
-            '<code class="language-python" data-end="653" start="645">payload</code>\n'
-            '</code>'
-        )
+    def test_formatting_cleanup_flattens_multiple_code_children_in_pre(self):
+        expected = '<pre spellcheck="false"><code>ab</code></pre>'
 
         self.assertEqual(
-            apply_formatting_cleanup(nested),
-            '<code class="language-python" spellcheck="false">\npayload\n</code>',
+            apply_formatting_cleanup("<pre><code>a</code><code>b</code></pre>"),
+            expected,
         )
+        self.assertEqual(apply_formatting_cleanup(expected), expected)
 
-    def test_formatting_cleanup_keeps_nested_code_with_meaningful_sibling_content(self):
-        nested = '<code>prefix <code>payload</code> suffix</code>'
+    def test_formatting_cleanup_flattens_mixed_code_children_in_pre(self):
+        expected = '<pre spellcheck="false"><code>prefix a suffix</code></pre>'
 
         self.assertEqual(
-            apply_formatting_cleanup(nested),
-            '<code spellcheck="false">prefix <code spellcheck="false">payload</code> suffix</code>',
+            apply_formatting_cleanup("<pre>prefix <code>a</code> suffix</pre>"),
+            expected,
         )
+        self.assertEqual(apply_formatting_cleanup(expected), expected)
 
-    def test_formatting_cleanup_preserves_nested_code_classes(self):
-        nested = '<code class="OuterClass"><code class="inner-class">payload</code></code>'
-
+    def test_formatting_cleanup_flattens_nested_code_inside_pre(self):
         self.assertEqual(
-            apply_formatting_cleanup(nested),
-            '<code class="OuterClass inner-class" spellcheck="false">payload</code>',
+            apply_formatting_cleanup("<pre><code><code>a</code></code></pre>"),
+            '<pre spellcheck="false"><code>a</code></pre>',
         )
 
-    def test_formatting_cleanup_does_not_collapse_malformed_or_multi_child_code(self):
+    def test_formatting_cleanup_uses_multiline_and_historical_class_block_signals(self):
+        self.assertEqual(
+            apply_formatting_cleanup("<div><code>line one\nline two</code></div>"),
+            '<div><pre spellcheck="false"><code>line one\nline two</code></pre></div>',
+        )
+        self.assertEqual(
+            apply_formatting_cleanup('<div><code class="rich-code">payload</code></div>'),
+            '<div><pre spellcheck="false"><code>payload</code></pre></div>',
+        )
+
+    def test_formatting_cleanup_leaves_ambiguous_nested_code_inline(self):
+        self.assertEqual(
+            apply_formatting_cleanup('<div><code spellcheck="false">ambiguous</code></div>'),
+            "<div><code>ambiguous</code></div>",
+        )
+
+    def test_formatting_cleanup_preserves_code_whitespace_and_mark_spacing(self):
+        self.assertEqual(
+            apply_configured_normalisation(
+                '<pre><code>if  ready:\n\treturn  1\n<mark>A</mark> <mark>B</mark></code></pre>'
+            ),
+            '<pre spellcheck="false"><code>if  ready:\n\treturn  1\n<mark>A</mark> <mark>B</mark></code></pre>',
+        )
+        self.assertEqual(
+            apply_configured_normalisation("<p><mark>A</mark> <mark>B</mark></p>"),
+            "<p><mark>A</mark> <mark>B</mark></p>",
+        )
+        self.assertEqual(
+            apply_configured_normalisation(
+                '<pre><span class="highlight" style="background-color: yellow">important</span></pre>'
+            ),
+            '<pre spellcheck="false"><code><mark>important</mark></code></pre>',
+        )
+
+    def test_formatting_cleanup_does_not_repair_malformed_code(self):
         malformed = '<code><code>payload</code>'
-        multiple_children = '<code><code>payload</code><span>note</span></code>'
-
-        self.assertEqual(
-            apply_formatting_cleanup(malformed),
-            '<code spellcheck="false"><code spellcheck="false">payload</code>',
-        )
-        self.assertEqual(
-            apply_formatting_cleanup(multiple_children),
-            '<code spellcheck="false"><code spellcheck="false">payload</code><span>note</span></code>',
-        )
-
-    def test_formatting_cleanup_removes_editor_offsets_from_code_tags(self):
-        self.assertEqual(
-            apply_formatting_cleanup('<code data-end="653" start="645" spellcheck="false">payload</code>'),
-            '<code spellcheck="false">payload</code>',
-        )
-        self.assertEqual(
-            apply_formatting_cleanup('<code class="language-python" data-end="1" start="0">payload</code>'),
-            '<code class="language-python" spellcheck="false">payload</code>',
-        )
+        self.assertEqual(apply_formatting_cleanup(malformed), malformed)
 
     def test_formatting_cleanup_outputs_stable_attributes_and_inline_tags(self):
         self.assertEqual(
-            apply_formatting_cleanup('<code start="0" data-end="1" class="zulu alpha">payload</code>'),
-            '<code class="alpha zulu" spellcheck="false">payload</code>',
+            apply_formatting_cleanup(
+                '<p><code start="0" data-end="1" class="zulu alpha">payload</code></p>'
+            ),
+            '<p><code class="alpha zulu">payload</code></p>',
         )
         self.assertEqual(apply_formatting_cleanup("<b>bold</b> and <i>italic</i>"), "<strong>bold</strong> and <em>italic</em>")
 
@@ -519,7 +766,7 @@ class NormalisationRegressionTests(unittest.TestCase):
 
     def test_nested_code_cleanup_runs_for_finding_and_observation_imports(self):
         value = '<pre><code><mark>&lt;EVIDENCE&gt;</mark></code></pre>'
-        expected = '<code spellcheck="false"><mark>&lt;EVIDENCE&gt;</mark></code>'
+        expected = '<pre spellcheck="false"><code><mark>&lt;EVIDENCE&gt;</mark></code></pre>'
 
         parsed_finding = Finding.from_dict(finding(description=value).to_dict())
         parsed_observation = Observation.from_dict(
@@ -917,6 +1164,25 @@ class SensitivityRegressionTests(unittest.TestCase):
         self.assertEqual(stats["hits_found"], 2)
         self.assertEqual(stats["replacements_applied"], 1)
         self.assertEqual(stats["flag_only_hits_deferred"], 1)
+
+    def test_sensitivity_replacement_preserves_field_specific_code_semantics(self):
+        record = finding(
+            title='<code spellcheck="false">ACME</code>',
+            description='<code spellcheck="false">ACME</code>',
+        )
+
+        stats = apply_pre_match_sensitivity_replacements(
+            [record],
+            {"acme": "[CLIENT]"},
+        )
+
+        self.assertEqual(record.title, "<code>[CLIENT]</code>")
+        self.assertEqual(
+            record.description,
+            '<pre spellcheck="false"><code>[CLIENT]</code></pre>',
+        )
+        self.assertEqual(stats["hits_found"], 2)
+        self.assertEqual(stats["replacements_applied"], 2)
 
     def test_sensitive_terms_digest_is_stable_without_exposing_term_order(self):
         first = sensitive_terms_digest({"secret": None, "acme": "[CLIENT]"})

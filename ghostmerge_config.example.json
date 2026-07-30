@@ -105,45 +105,6 @@
         "xmlns": "http://www.w3.org/1999/xhtml"
       },
       "replacement_tag": "ul"
-    },
-    {
-      "name": "normalise-pre-to-code",
-      "tag": "pre",
-      "attrs": {},
-      "replacement_tag": "code",
-      "replacement_attrs": {
-        "spellcheck": "false"
-      }
-    },
-    {
-      "name": "remove-xhtml-namespace-from-pre",
-      "tag": "pre",
-      "attrs": {
-        "xmlns": "http://www.w3.org/1999/xhtml",
-        "spellcheck": "false"
-      },
-      "replacement_tag": "pre",
-      "replacement_attrs": {
-        "spellcheck": "false"
-      }
-    },
-    {
-      "name": "normalise-language-markup-pre",
-      "tag": "pre",
-      "attrs": {
-        "class": "language-markup"
-      },
-      "replacement_tag": "pre"
-    },
-    {
-      "name": "normalise-code-spellcheck",
-      "action": "set_attrs",
-      "tag": "code",
-      "attrs": {},
-      "drop_attrs": ["data-end", "start"],
-      "replacement_attrs": {
-        "spellcheck": "false"
-      }
     }
   ],
   "auto_accept_single_sided_content": true,

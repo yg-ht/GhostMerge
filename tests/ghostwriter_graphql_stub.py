@@ -62,12 +62,14 @@ class GhostwriterGraphQLStub:
         findings: list[dict[str, Any]] | None = None,
         observations: list[dict[str, Any]] | None = None,
         tags: dict[tuple[str, int], list[str]] | None = None,
+        extra_field_specs: list[dict[str, str]] | None = None,
         fail_on_operation_call: dict[str, int] | None = None,
     ) -> None:
         self.bearer_token = bearer_token
         self.findings = copy.deepcopy(findings or [])
         self.observations = copy.deepcopy(observations or [])
         self.tags = copy.deepcopy(tags or {})
+        self.extra_field_specs = copy.deepcopy(extra_field_specs or [])
         self.requests: list[dict[str, Any]] = []
         self.fail_on_operation_call = dict(fail_on_operation_call or {})
         self.operation_calls: dict[str, int] = {}
@@ -136,6 +138,8 @@ class GhostwriterGraphQLStub:
 
     def execute(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         """Handle the GraphQL operations used by GhostMerge sync."""
+        if "FetchExtraFieldSpecs" in query:
+            return {"extraFieldSpec": copy.deepcopy(self.extra_field_specs)}
         if "SyncPreflight" in query:
             return {
                 "__schema": {

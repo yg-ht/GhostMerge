@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
+from globals import get_config
 from ghostwriter_api import (
     GHOSTMERGE_LAST_SYNCED_AT_FIELD,
     GhostwriterApi,
@@ -67,7 +68,16 @@ def observation_record(**overrides):
 
 
 class FakeGraphQLClient:
-    def __init__(self, missing_query_fields=None, missing_mutation_fields=None, fail_on_tag_call=None):
+    def __init__(
+        self,
+        missing_query_fields=None,
+        missing_mutation_fields=None,
+        fail_on_tag_call=None,
+        extra_field_specs=None,
+        finding_extra_fields=None,
+        observation_extra_fields=None,
+        fail_extra_field_specs=False,
+    ):
         self.calls = []
         self.deleted_ids = []
         self.deleted_observation_ids = []
@@ -78,10 +88,18 @@ class FakeGraphQLClient:
         self.missing_mutation_fields = set(missing_mutation_fields or [])
         self.fail_on_tag_call = fail_on_tag_call
         self.tag_call_count = 0
+        self.extra_field_specs = list(extra_field_specs or [])
+        self.finding_extra_fields = dict(finding_extra_fields or {})
+        self.observation_extra_fields = dict(observation_extra_fields or {})
+        self.fail_extra_field_specs = fail_extra_field_specs
 
     def execute(self, query, variables=None):
         variables = variables or {}
         self.calls.append((query, variables))
+        if "FetchExtraFieldSpecs" in query:
+            if self.fail_extra_field_specs:
+                raise GhostwriterApiError("extraFieldSpec is unavailable")
+            return {"extraFieldSpec": list(self.extra_field_specs)}
         if "SyncPreflight" in query:
             query_fields = {"finding", "findingSeverity", "findingType", "observation", "tags"} - self.missing_query_fields
             mutation_fields = {
@@ -115,7 +133,7 @@ class FakeGraphQLClient:
                         "networkDetectionTechniques": "",
                         "references": "",
                         "findingGuidance": "",
-                        "extraFields": {},
+                        "extraFields": dict(self.finding_extra_fields),
                         "severity": {"id": 3, "severity": "Medium"},
                         "type": {"id": 7, "findingType": "Web"},
                     }
@@ -139,7 +157,7 @@ class FakeGraphQLClient:
                         "networkDetectionTechniques": "",
                         "references": "",
                         "findingGuidance": "",
-                        "extraFields": {},
+                        "extraFields": dict(self.finding_extra_fields),
                         "severity": {"severity": "Medium"},
                         "type": {"findingType": "Web"},
                     }
@@ -154,7 +172,7 @@ class FakeGraphQLClient:
                         "id": 77,
                         "title": "Existing observation",
                         "description": "Existing observation detail",
-                        "extraFields": {},
+                        "extraFields": dict(self.observation_extra_fields),
                     }
                 ]
             }
@@ -167,7 +185,7 @@ class FakeGraphQLClient:
                         "id": 77,
                         "title": "Existing observation",
                         "description": "Existing observation detail",
-                        "extraFields": {},
+                        "extraFields": dict(self.observation_extra_fields),
                     }
                 ]
             }
@@ -215,6 +233,161 @@ class FakeUrlResponse:
 
 
 class GhostwriterApiTests(unittest.TestCase):
+    @patch.dict(
+        get_config(),
+        {
+            "formatting_cleanup_enabled": True,
+            "extra_fields_key_migration_enabled": True,
+            "extra_fields_key_migrations": [
+                {
+                    "template_type": "finding",
+                    "prefix": "extra_",
+                    "collision": "preserve_existing",
+                }
+            ],
+        },
+        clear=False,
+    )
+    def test_api_normalises_typed_extra_field_before_key_migration(self):
+        api = GhostwriterApi(server_config(), client=FakeGraphQLClient())
+
+        converted = api._api_record_to_ghostmerge(
+            {
+                "id": 1,
+                "extraFields": {
+                    "extra_formatted": '<code spellcheck="false">block</code>',
+                },
+            },
+            {"extra_formatted": "rich_text"},
+        )
+
+        self.assertEqual(
+            converted["extra_fields"],
+            {
+                "formatted": '<pre spellcheck="false"><code>block</code></pre>',
+            },
+        )
+
+    @patch.dict(get_config(), {"formatting_cleanup_enabled": True}, clear=False)
+    def test_fetch_uses_cached_extra_field_specs_for_code_semantics(self):
+        client = FakeGraphQLClient(
+            extra_field_specs=[
+                {
+                    "targetModel": "reporting.Finding",
+                    "internalName": "formatted",
+                    "type": "rich_text",
+                },
+                {
+                    "targetModel": "reporting.Finding",
+                    "internalName": "command",
+                    "type": "single_line_text",
+                },
+                {
+                    "targetModel": "reporting.Finding",
+                    "internalName": "payload",
+                    "type": "json",
+                },
+                {
+                    "targetModel": "reporting.Observation",
+                    "internalName": "formatted",
+                    "type": "rich_text",
+                },
+            ],
+            finding_extra_fields={
+                "formatted": '<code spellcheck="false">block</code>',
+                "command": '<code spellcheck="false">inline</code>',
+                "payload": {"example": '<code spellcheck="false">JSON inline</code>'},
+                "legacy": '<code spellcheck="false">ambiguous inline</code>',
+                "multiline": "<code>line one\nline two</code>",
+            },
+            observation_extra_fields={
+                "formatted": '<code spellcheck="false">observation block</code>',
+            },
+        )
+        api = GhostwriterApi(server_config(), client=client)
+
+        first = api.fetch_findings()[0]["extra_fields"]
+        second = api.fetch_findings()[0]["extra_fields"]
+        observation_fields = api.fetch_observations()[0]["extra_fields"]
+
+        self.assertEqual(
+            first["formatted"],
+            '<pre spellcheck="false"><code>block</code></pre>',
+        )
+        self.assertEqual(first["command"], "<code>inline</code>")
+        self.assertEqual(first["payload"]["example"], "<code>JSON inline</code>")
+        self.assertEqual(first["legacy"], "<code>ambiguous inline</code>")
+        self.assertEqual(
+            first["multiline"],
+            '<pre spellcheck="false"><code>line one\nline two</code></pre>',
+        )
+        self.assertEqual(second, first)
+        self.assertEqual(
+            observation_fields["formatted"],
+            '<pre spellcheck="false"><code>observation block</code></pre>',
+        )
+        self.assertEqual(
+            sum("FetchExtraFieldSpecs" in query for query, _ in client.calls),
+            1,
+        )
+
+    @patch.dict(get_config(), {"formatting_cleanup_enabled": True}, clear=False)
+    def test_each_api_source_uses_its_own_extra_field_spec(self):
+        value = {"shared": '<code spellcheck="false">same source markup</code>'}
+        left = GhostwriterApi(
+            server_config(side="left"),
+            client=FakeGraphQLClient(
+                extra_field_specs=[
+                    {
+                        "targetModel": "reporting.Finding",
+                        "internalName": "shared",
+                        "type": "rich_text",
+                    }
+                ],
+                finding_extra_fields=value,
+            ),
+        )
+        right = GhostwriterApi(
+            server_config(side="right"),
+            client=FakeGraphQLClient(
+                extra_field_specs=[
+                    {
+                        "targetModel": "reporting.Finding",
+                        "internalName": "shared",
+                        "type": "single_line_text",
+                    }
+                ],
+                finding_extra_fields=value,
+            ),
+        )
+
+        left_value = left.fetch_findings()[0]["extra_fields"]["shared"]
+        right_value = right.fetch_findings()[0]["extra_fields"]["shared"]
+
+        self.assertEqual(
+            left_value,
+            '<pre spellcheck="false"><code>same source markup</code></pre>',
+        )
+        self.assertEqual(right_value, "<code>same source markup</code>")
+
+    @patch.dict(get_config(), {"formatting_cleanup_enabled": True}, clear=False)
+    def test_fetch_falls_back_conservatively_when_specs_are_unavailable(self):
+        client = FakeGraphQLClient(
+            finding_extra_fields={
+                "ambiguous": '<code spellcheck="false">one line</code>',
+                "classified": '<code class="language-python">print(1)</code>',
+            },
+            fail_extra_field_specs=True,
+        )
+
+        fields = GhostwriterApi(server_config(), client=client).fetch_findings()[0]["extra_fields"]
+
+        self.assertEqual(fields["ambiguous"], "<code>one line</code>")
+        self.assertEqual(
+            fields["classified"],
+            '<pre spellcheck="false"><code>print(1)</code></pre>',
+        )
+
     def test_server_config_requires_enabled_url_and_token(self):
         config = {
             "script_dir": "/tmp",
@@ -649,6 +822,55 @@ class GhostwriterApiTests(unittest.TestCase):
 
 class BilateralGhostwriterSyncIntegrationTests(unittest.TestCase):
     """Exercise both configured sides through the real HTTP GraphQL client."""
+
+    @patch.dict(get_config(), {"formatting_cleanup_enabled": True}, clear=False)
+    def test_api_fetch_applies_server_extra_field_types_over_http(self):
+        source = ghostwriter_finding_record(
+            10,
+            "Typed extra fields",
+            extra_fields={
+                "formatted": '<code spellcheck="false">block</code>',
+                "command": '<code spellcheck="false">inline</code>',
+            },
+        )
+        specs = [
+            {
+                "targetModel": "reporting.Finding",
+                "internalName": "formatted",
+                "type": "rich_text",
+            },
+            {
+                "targetModel": "reporting.Finding",
+                "internalName": "command",
+                "type": "single_line_text",
+            },
+        ]
+        with running_ghostwriter_stub(
+            bearer_token="integration-token",
+            findings=[source],
+            extra_field_specs=specs,
+        ) as server:
+            api = GhostwriterApi(
+                server_config(
+                    graphql_url=server.graphql_url,
+                    bearer_token="integration-token",
+                )
+            )
+
+            fields = api.fetch_findings()[0]["extra_fields"]
+
+        self.assertEqual(
+            fields["formatted"],
+            '<pre spellcheck="false"><code>block</code></pre>',
+        )
+        self.assertEqual(fields["command"], "<code>inline</code>")
+        self.assertEqual(
+            sum(
+                "FetchExtraFieldSpecs" in request["query"]
+                for request in server.requests
+            ),
+            1,
+        )
 
     def test_left_and_right_sync_replace_only_their_target_and_add_timestamps(self):
         left_original = ghostwriter_finding_record(10, "Original left", extra_fields={"owner": "left-original"})
