@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import web_service
-from ghostwriter_api import GHOSTMERGE_LAST_SYNCED_AT_FIELD
+from ghostwriter_api import GHOSTMERGE_LAST_SYNCED_AT_FIELD, GhostwriterApiError
 from ghostwriter_graphql_stub import (
     ghostwriter_finding_record,
     ghostwriter_observation_record,
@@ -3593,6 +3593,81 @@ class FlaskRouteTests(unittest.TestCase):
         )
         self.assertEqual(imported_job.sensitivity_snapshot_version, 1)
         self.assertFalse(imported_job.sensitivity_enabled)
+
+    def test_api_import_worker_identifies_source_when_connection_fails_before_progress(self):
+        config = get_config()
+        for side, name in (("left", "YGHT Ghostwriter"), ("right", "COD Ghostwriter")):
+            config["ghostwriter_api"]["servers"][side].update(
+                {
+                    "enabled": True,
+                    "name": name,
+                    "base_url": f"https://{side}.example",
+                    "bearer_token": f"{side}-token",
+                }
+            )
+
+        class ImmediateFailureApi:
+            failing_side = ""
+
+            def __init__(self, server, progress):
+                self.server = server
+
+            def fetch_template_library(self):
+                if self.server.side == self.failing_side:
+                    raise GhostwriterApiError(
+                        "Ghostwriter connection failed: "
+                        "<urlopen error [Errno -3] Temporary failure in name resolution>"
+                    )
+                return {"findings": [record()], "observations": []}
+
+        jobs_dir = Path(self.tmp_dir.name)
+        expected_sources = {
+            "left": ("YGHT Ghostwriter", 1, 0),
+            "right": ("COD Ghostwriter", 2, 1),
+        }
+        for failing_side, (source_name, source_index, complete) in expected_sources.items():
+            with self.subTest(side=failing_side), patch("web_app.threading.Thread") as thread_class:
+                thread_class.return_value.start.return_value = None
+                response = self.client.post(
+                    "/jobs",
+                    data=self.with_csrf({"left_source": "api", "right_source": "api"}),
+                    content_type="multipart/form-data",
+                    follow_redirects=False,
+                )
+                import_id = response.headers["Location"].rsplit("/", 2)[-2]
+                ImmediateFailureApi.failing_side = failing_side
+
+                with patch("web_app.GhostwriterApi", ImmediateFailureApi):
+                    _import_job_sources(self.app, jobs_dir, import_id)
+
+                state = json.loads(
+                    (jobs_dir / "api_imports" / f"{import_id}.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(state["status"], "error")
+                self.assertEqual(state["stage"], "error")
+                self.assertEqual(state["complete"], complete)
+                self.assertEqual(state["total"], 2)
+                self.assertEqual(state["side"], failing_side)
+                self.assertEqual(state["side_name"], source_name)
+                self.assertEqual(state["side_index"], source_index)
+                self.assertEqual(state["side_total"], 2)
+                self.assertIn(
+                    f"Failed to import {source_name} ({failing_side.title()}, {source_index} / 2)",
+                    state["message"],
+                )
+                self.assertIn("Temporary failure in name resolution", state["message"])
+
+                status_response = self.client.get(response.headers["Location"])
+                self.assertEqual(status_response.status_code, 200)
+                self.assertIn(b"Failed source", status_response.data)
+                self.assertNotIn(b"Current source", status_response.data)
+                self.assertIn(source_name.encode("utf-8"), status_response.data)
+                self.assertIn(failing_side.title().encode("utf-8"), status_response.data)
+
+        history_response = self.client.get("/imports")
+        self.assertEqual(history_response.status_code, 200)
+        self.assertIn(b"Failed to import YGHT Ghostwriter", history_response.data)
+        self.assertIn(b"Failed to import COD Ghostwriter", history_response.data)
 
     def test_home_shows_api_source_check_for_configured_sources(self):
         config = get_config()

@@ -8,7 +8,7 @@
     <dt>Import stage</dt><dd>{{ state.stage|default("queued") }}</dd>
     <dt>Source progress</dt><dd>{{ state.complete|default(0) }} / {{ state.total|default(0) }}</dd>
     {% if state.side_name %}
-    <dt>Current source</dt><dd>{{ state.side_name }} ({{ state.side|title }}, {{ state.side_index|default(0) }} / {{ state.side_total|default(state.total|default(0)) }})</dd>
+    <dt>{% if state.status == "error" %}Failed source{% else %}Current source{% endif %}</dt><dd>{{ state.side_name }} ({{ state.side|title }}, {{ state.side_index|default(0) }} / {{ state.side_total|default(state.total|default(0)) }})</dd>
     {% endif %}
     {% if state.api_stage %}
     <dt>Current API stage</dt><dd>{{ state.api_stage }}</dd>
