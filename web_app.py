@@ -1134,6 +1134,7 @@ def _start_import_thread(app: Flask, jobs_dir: Path, input_sources: dict[str, st
 
 def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
     with app.app_context():
+        failure_source_context: Optional[tuple[str, str, int, int]] = None
         state = {
             "import_id": import_id,
             "operation": "inbound_api_import",
@@ -1152,11 +1153,41 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
             api_estimated_totals = state.get("api_estimated_totals") or {}
             api_sides = [side for side in ("left", "right") if input_sources[side] == "api"]
             for index, side in enumerate(api_sides, start=1):
+                source_name = (state.get("input_source_names") or {}).get(side) or f"{side.title()} Ghostwriter"
+                failure_source_context = (source_name, side, index, len(api_sides))
+                estimate_fields = _api_estimate_state_fields(api_estimated_totals.get(side))
+                state = _load_import_state(jobs_dir, import_id)
+                state.update(
+                    {
+                        "status": "running",
+                        "stage": f"fetch_{side}",
+                        "message": f"Connecting to {source_name}.",
+                        "complete": index - 1,
+                        "total": len(api_sides),
+                        "side": side,
+                        "side_name": source_name,
+                        "side_index": index,
+                        "side_total": len(api_sides),
+                        "api_stage": "connect",
+                        "api_complete": 0,
+                        "api_total": 0,
+                        **estimate_fields,
+                        "api_status": "running",
+                        "worker_pid": os.getpid(),
+                    }
+                )
+                _save_import_state(jobs_dir, import_id, state)
+
                 server = _server_for_side(side)
+                source_name = server.name
+                failure_source_context = (source_name, side, index, len(api_sides))
+                state = _load_import_state(jobs_dir, import_id)
+                state["side_name"] = source_name
+                _save_import_state(jobs_dir, import_id, state)
 
                 def update(event, current_side=side, current_index=index):
                     current = _load_import_state(jobs_dir, import_id)
-                    estimate_fields = _api_estimate_state_fields(api_estimated_totals.get(current_side))
+                    current_estimate_fields = _api_estimate_state_fields(api_estimated_totals.get(current_side))
                     current.update(
                         {
                             "status": event.status if event.status != "done" else "running",
@@ -1171,7 +1202,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                             "api_stage": event.stage,
                             "api_complete": event.complete,
                             "api_total": event.total,
-                            **estimate_fields,
+                            **current_estimate_fields,
                             # A template-library import emits a "done" event for
                             # Findings before Observations begin. Keep that
                             # component event visibly in progress until the
@@ -1184,7 +1215,6 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
 
                 records[side] = _fetch_template_library(GhostwriterApi(server, progress=update))
                 state = _load_import_state(jobs_dir, import_id)
-                estimate_fields = _api_estimate_state_fields(api_estimated_totals.get(side))
                 state.update(
                     {
                         "status": "running",
@@ -1205,6 +1235,7 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                     }
                 )
                 _save_import_state(jobs_dir, import_id, state)
+                failure_source_context = None
             job = create_merge_job(
                 records["left"],
                 records["right"],
@@ -1230,7 +1261,11 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
             state.pop("sensitivity_snapshot", None)
             _save_import_state(jobs_dir, import_id, state)
         except Exception as exc:
-            state.update({"status": "error", "stage": "error", "message": str(exc)})
+            message = str(exc)
+            if failure_source_context is not None:
+                source_name, side, index, side_total = failure_source_context
+                message = f"Failed to import {source_name} ({side.title()}, {index} / {side_total}): {message}"
+            state.update({"status": "error", "stage": "error", "message": message})
             _save_import_state(jobs_dir, import_id, state)
         finally:
             _ACTIVE_API_IMPORTS.discard(import_id)
