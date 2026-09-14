@@ -548,6 +548,114 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(job.matches[0]["left"].description, normalised_markup)
         self.assertEqual(job.matches[0]["right"].description, normalised_markup)
 
+    def test_newer_ghostpiper_timestamp_auto_resolves_whole_web_match_and_persists_audit(self):
+        left_extra = {
+            "ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z", "owner": "left"},
+            GHOSTMERGE_LAST_SYNCED_AT_FIELD: "2026-09-14T09:00:00Z",
+        }
+        right_extra = {
+            "ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00Z", "owner": "right"},
+            GHOSTMERGE_LAST_SYNCED_AT_FIELD: "2026-09-14T09:30:00Z",
+        }
+        job = create_merge_job(
+            [record(title="Shared finding", description="Older left", tags="left", extra_fields=left_extra)],
+            [record(id="2", title="Shared finding", description="Newer right", tags="right", extra_fields=right_extra)],
+            job_id="timestamp123",
+        )
+
+        preview = get_current_match_preview(job)
+        self.assertIsNotNone(preview)
+        self.assertEqual(preview.automatic_resolution["side"], "right")
+        acknowledge_current_preview(job)
+        item = get_next_conflict(job)
+
+        self.assertIsNone(item)
+        self.assertTrue(job.conflict_phase_complete)
+        self.assertEqual(job.merged_left[0].description, "Newer right")
+        self.assertEqual(job.merged_right[0].description, "Newer right")
+        self.assertEqual(job.merged_left[0].tags, ["right"])
+        self.assertEqual(
+            job.merged_left[0].extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD],
+            "2026-09-14T09:00:00Z",
+        )
+        self.assertEqual(
+            job.merged_right[0].extra_fields[GHOSTMERGE_LAST_SYNCED_AT_FIELD],
+            "2026-09-14T09:30:00Z",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_job(job, Path(tmp_dir))
+            loaded = load_job(Path(tmp_dir), "timestamp123")
+
+        self.assertEqual(loaded.matches[0]["automatic_resolution"]["side"], "right")
+        self.assertEqual(
+            loaded.matches[0]["automatic_resolution"]["reason"],
+            "newer_ghostpiper_mapping_updated_at",
+        )
+
+    def test_explicit_preview_choice_overrides_timestamp_authoritative_baseline(self):
+        left_extra = {"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}}
+        right_extra = {"ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00Z"}}
+        job = create_merge_job(
+            [
+                record(
+                    title="Shared finding",
+                    description="Keep older description",
+                    impact="Older impact",
+                    extra_fields=left_extra,
+                )
+            ],
+            [
+                record(
+                    id="2",
+                    title="Shared finding",
+                    description="Newer description",
+                    impact="Newer impact",
+                    extra_fields=right_extra,
+                )
+            ],
+            job_id="timestampoverride123",
+        )
+
+        applied = apply_preview_field_choices(job, {"description": "left"})
+        item = get_next_conflict(job)
+
+        self.assertEqual(applied, 1)
+        self.assertIsNone(item)
+        self.assertEqual(job.merged_left[0].description, "Keep older description")
+        self.assertEqual(job.merged_right[0].description, "Keep older description")
+        self.assertEqual(job.merged_left[0].impact, "Newer impact")
+
+    def test_timestamp_resolution_stops_for_each_match_preview(self):
+        older_extra = {"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}}
+        newer_extra = {"ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00Z"}}
+        job = create_merge_job(
+            [
+                record(id="1", title="Alpha authentication weakness", extra_fields=older_extra),
+                record(id="2", title="Beta encryption weakness", extra_fields=older_extra),
+            ],
+            [
+                record(id="3", title="Alpha authentication weakness", extra_fields=newer_extra),
+                record(id="4", title="Beta encryption weakness", extra_fields=newer_extra),
+            ],
+            job_id="timestampboundaries123",
+        )
+        first_preview = get_current_match_preview(job)
+        acknowledge_current_preview(job)
+
+        next_item = get_next_conflict(job)
+        second_preview = get_current_match_preview(job)
+
+        self.assertEqual(first_preview.match_index, 0)
+        self.assertEqual(job.match_index, 1)
+        self.assertEqual(len(job.merged_left), 1)
+        self.assertIsNotNone(next_item)
+        self.assertEqual(next_item.match_index, 1)
+        self.assertIsNotNone(second_preview)
+        self.assertEqual(second_preview.match_index, 1)
+        self.assertFalse(job.matches[1]["automatic_resolution"]["applied"])
+        self.assertFalse(job.conflict_phase_complete)
+
     def test_preview_selected_offered_values_leave_remaining_fields_for_review(self):
         job = create_merge_job(
             [record(description="Left detail", impact="Left impact")],

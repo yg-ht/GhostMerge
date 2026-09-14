@@ -12,6 +12,17 @@
     <dt>Score</dt><dd>{{ "%.2f"|format(preview.score) }}%</dd>
     <dt>Origin</dt><dd>{{ "Manually selected" if preview.origin == "manual" else "Automatic candidate" }}</dd>
   </dl>
+  {% if preview.automatic_resolution %}
+  {% set resolution = preview.automatic_resolution %}
+  {% set newer_source = source_labels.left if resolution.side == "left" else source_labels.right %}
+  <p role="status">
+    <strong>Automatic newer-side selection:</strong>
+    {{ newer_source }} has the newer GhostPiper update timestamp
+    ({{ resolution.left_updated_at }} versus {{ resolution.right_updated_at }}).
+    Continuing will use that source for every field. You may select individual overrides below or
+    reject the match before continuing.
+  </p>
+  {% endif %}
   <div class="record-preview-scroll">
     <table class="record-table record-preview-table">
       <thead>
@@ -75,7 +86,9 @@
   </div>
   <div class="actions">
     <button type="submit" name="preview_action" value="apply_field_choices">Apply selected field choices</button>
-    <button class="secondary" type="submit" name="preview_action" value="continue" data-shortcut="Enter">Continue to individual field review</button>
+    <button class="secondary" type="submit" name="preview_action" value="continue" data-shortcut="Enter">
+      {% if preview.automatic_resolution %}Apply automatic newer-side selection{% else %}Continue to individual field review{% endif %}
+    </button>
     <button class="secondary" type="submit" name="preview_action" value="accept_offered" data-shortcut=" ">Accept all offered for this match</button>
     <button class="secondary danger" type="submit" name="preview_action" value="reject_match">Reject match</button>
   </div>

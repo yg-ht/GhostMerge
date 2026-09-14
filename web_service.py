@@ -15,11 +15,11 @@ from globals import get_config
 from matching import fuzzy_match_records
 from merge import (
     ResolvedWinner,
+    apply_automatic_resolution,
     build_manual_match,
     get_compliance_reference_placeholder_choice,
-    get_auto_suggest_values,
     get_single_sided_content_choice,
-    normalise_merge_pair,
+    prepare_merge_pair,
     reject_matched_record,
     reprocess_orphan_matches,
     renumber_records,
@@ -176,6 +176,7 @@ class MatchPreviewItem:
     score: float
     origin: str
     rows: list[dict[str, Any]]
+    automatic_resolution: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -354,11 +355,7 @@ def create_merge_job(
             fuzzy_threshold,
         )
         for match in new_matches:
-            normalise_merge_pair(match)
-            auto_value, auto_side = get_auto_suggest_values(match["left"], match["right"])
-            match["auto_value"] = auto_value
-            match["auto_side"] = auto_side
-            normalise_merge_pair(match)
+            prepare_merge_pair(match)
         matches.extend(new_matches)
 
     observation_matches: list[dict[str, Any]] = []
@@ -371,11 +368,7 @@ def create_merge_job(
             fuzzy_threshold,
         )
         for match in new_matches:
-            normalise_merge_pair(match)
-            auto_value, auto_side = get_auto_suggest_values(match["left"], match["right"])
-            match["auto_value"] = auto_value
-            match["auto_side"] = auto_side
-            normalise_merge_pair(match)
+            prepare_merge_pair(match)
         observation_matches.extend(new_matches)
 
     return MergeJob(
@@ -466,6 +459,7 @@ def get_current_match_preview(job: MergeJob) -> Optional[MatchPreviewItem]:
         score=float(match["score"]),
         origin=str(match.get("origin", "automatic")),
         rows=rows,
+        automatic_resolution=match.get("automatic_resolution"),
     )
 
 
@@ -514,13 +508,6 @@ def reprocess_orphans_for_current_kind(job: MergeJob) -> bool:
         _set_orphan_reprocessing_stopped_for_kind(job, kind, True)
         job.manual_matching_token = None
         return False
-
-    for match in new_matches:
-        normalise_merge_pair(match)
-        auto_value, auto_side = get_auto_suggest_values(match["left"], match["right"])
-        match["auto_value"] = auto_value
-        match["auto_side"] = auto_side
-        normalise_merge_pair(match)
 
     _replace_unmatched_for_kind(job, kind, "left", unmatched_left)
     _replace_unmatched_for_kind(job, kind, "right", unmatched_right)
@@ -620,6 +607,7 @@ def accept_offered_for_current_match(job: MergeJob) -> None:
         raise WebMergeError("There is no active match to accept.")
 
     match = _matches_for_kind(job, kind)[_match_index_for_kind(job, kind)]
+    apply_automatic_resolution(match)
     for field_def in _reviewable_field_defs(kind):
         offered_value = match["auto_value"].get(field_def.name)
         set_record_pair_field_values(
@@ -645,6 +633,7 @@ def accept_offered_fields_for_current_match(job: MergeJob, field_names: list[str
         return 0
 
     match = _matches_for_kind(job, kind)[_match_index_for_kind(job, kind)]
+    apply_automatic_resolution(match)
     valid_fields = {field_def.name for field_def in _reviewable_field_defs(kind)}
     applied = 0
     for field_name in selected:
@@ -693,19 +682,25 @@ def apply_preview_field_choices(job: MergeJob, choices: dict[str, str]) -> int:
     valid_fields = {field_def.name for field_def in _reviewable_field_defs(kind)}
     valid_actions = {"left", "right", "offered"}
     match = _matches_for_kind(job, kind)[_match_index_for_kind(job, kind)]
-    applied = 0
+    selected_values: dict[str, Any] = {}
     for field_name, action in choices.items():
         if field_name not in valid_fields:
             raise WebMergeError(f"Unknown field selected: {field_name}")
         if action not in valid_actions:
             raise WebMergeError("Unsupported preview field choice.")
-
         if action == "left":
-            value = getattr(match["left"], field_name)
+            selected_values[field_name] = copy.deepcopy(getattr(match["left"], field_name))
         elif action == "right":
-            value = getattr(match["right"], field_name)
+            selected_values[field_name] = copy.deepcopy(getattr(match["right"], field_name))
         else:
-            value = match["auto_value"].get(field_name)
+            selected_values[field_name] = copy.deepcopy(match["auto_value"].get(field_name))
+
+    # Apply the timestamp-authoritative baseline before any explicit analyst
+    # choices, so a deliberate field override remains the final decision.
+    apply_automatic_resolution(match)
+    applied = 0
+    for field_name, action in choices.items():
+        value = selected_values[field_name]
         if field_name == "extra_fields":
             value = extra_fields_for_comparison(value)
         set_record_pair_field_values(match["left"], match["right"], field_name, value, value)
@@ -1391,6 +1386,7 @@ def job_to_dict(job: MergeJob) -> dict[str, Any]:
             "auto_value": _finding_to_state(match["auto_value"]),
             "auto_side": _winners_to_state(match["auto_side"]),
             "origin": match.get("origin", "automatic"),
+            "automatic_resolution": match.get("automatic_resolution"),
         }
         for match in job.matches
     ]
@@ -1402,6 +1398,7 @@ def job_to_dict(job: MergeJob) -> dict[str, Any]:
             "auto_value": _record_to_state(match["auto_value"]),
             "auto_side": _winners_to_state(match["auto_side"]),
             "origin": match.get("origin", "automatic"),
+            "automatic_resolution": match.get("automatic_resolution"),
         }
         for match in job.observation_matches
     ]
@@ -1432,6 +1429,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
                 "auto_value": _finding_from_state(match["auto_value"]),
                 "auto_side": _winners_from_state(match["auto_side"]),
                 "origin": match.get("origin", "automatic"),
+                "automatic_resolution": match.get("automatic_resolution"),
             }
             for match in data["matches"]
         ],
@@ -1443,6 +1441,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
                 "auto_value": _observation_from_state(match["auto_value"]),
                 "auto_side": _winners_from_state(match["auto_side"]),
                 "origin": match.get("origin", "automatic"),
+                "automatic_resolution": match.get("automatic_resolution"),
             }
             for match in data.get("observation_matches", [])
         ],
@@ -1581,6 +1580,12 @@ def _get_next_conflict_for_kind(job: MergeJob, kind: str) -> Optional[ConflictRe
     matches = _matches_for_kind(job, kind)
     while _match_index_for_kind(job, kind) < len(matches):
         match = matches[_match_index_for_kind(job, kind)]
+        # Each fuzzy or manual pairing remains an analyst decision. Do not
+        # apply a timestamp winner until this specific match preview has been
+        # acknowledged; after completing a match, the flag is reset before the
+        # loop reaches the next candidate.
+        if job.preview_acknowledged:
+            apply_automatic_resolution(match)
         field_defs = list(fields(TEMPLATE_MODELS[kind]))
 
         while _field_index_for_kind(job, kind) < len(field_defs):
