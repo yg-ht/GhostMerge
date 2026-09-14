@@ -480,7 +480,7 @@ prepare_candidate_runtime() {
     printf 'Installing candidate dependencies into %s...\n' "${CANDIDATE_VENV_DIR}"
     run_as_venv_owner_in_dir "${STAGING_DIR}" \
         "${CANDIDATE_VENV_DIR}/bin/python" -m pip install \
-        --disable-pip-version-check -r requirements.txt
+        --disable-pip-version-check --no-cache-dir -r requirements.txt
     run_as_venv_owner "${CANDIDATE_VENV_DIR}/bin/python" -m pip check
     # The archived candidate is intentionally not writable by the virtualenv
     # owner. Keep bytecode in the candidate runtime instead of attempting to
