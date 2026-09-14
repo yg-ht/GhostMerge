@@ -83,6 +83,7 @@ HISTORY_PAGE_SIZE = 25
 _ACTIVE_API_SOURCE_CHECKS: set[str] = set()
 _ACTIVE_API_IMPORTS: set[str] = set()
 SCHEDULER_STATE_VERSION = 1
+DEPLOYMENT_MAINTENANCE_FILENAME = ".deployment-maintenance"
 
 
 class ApiOperationCancelled(RuntimeError):
@@ -124,6 +125,18 @@ def create_app(test_config: dict | None = None) -> Flask:
         if blocked_response is not None:
             return blocked_response
         return _require_get_api_key_authentication()
+
+    @app.before_request
+    def prevent_mutations_during_deployment():
+        if request.method in {"GET", "HEAD", "OPTIONS"} or not _deployment_maintenance_path(jobs_dir).exists():
+            return None
+        return render_template(
+            "error.html",
+            error=(
+                "GhostMerge is in deployment maintenance mode. No changes were made; "
+                "retry after the update has completed."
+            ),
+        ), 503
 
     @app.before_request
     def require_csrf_token():
@@ -1725,6 +1738,11 @@ def _unattended_settings() -> dict[str, Any]:
     return settings if isinstance(settings, dict) else {}
 
 
+def _deployment_maintenance_path(jobs_dir: Path) -> Path:
+    """Return the updater-owned gate that prevents new mutating work."""
+    return jobs_dir / DEPLOYMENT_MAINTENANCE_FILENAME
+
+
 def _unattended_configuration_error(settings: Any = None) -> Optional[str]:
     """Validate values which authorise unattended destructive operations."""
     raw = CONFIG.get("unattended_api_merge") if settings is None else settings
@@ -1914,6 +1932,16 @@ def _scheduler_tick(app: Flask, jobs_dir: Path, *, now: Optional[datetime] = Non
     config = _scheduler_config()
     current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     state = _load_scheduler_state(jobs_dir)
+    if _deployment_maintenance_path(jobs_dir).exists():
+        state.update(
+            {
+                "status": "maintenance",
+                "message": "Scheduled runs are paused while GhostMerge is being updated.",
+                "scheduler_pid": os.getpid(),
+            }
+        )
+        _save_scheduler_state(jobs_dir, state)
+        return state
     if not config.get("valid", False):
         state.update({
             "status": "error",

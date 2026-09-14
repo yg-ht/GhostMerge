@@ -1150,7 +1150,10 @@ moving scheduler ownership and background work to an external durable queue.
 During installation it checks that this account can read the app/config and
 write the project-local job, backup, and log paths used by the current app. The
 installer creates those writable paths for the service user without changing
-ownership of the whole checkout. Use explicit options when needed:
+ownership of the whole checkout. It also records non-secret deployment
+coordinates in `/etc/ghostmerge/ghostmerge-web.json`; the updater uses these to
+preserve the selected service account, virtual environment and bind address.
+Use explicit options when needed:
 
 ```bash
 sudo ./install-systemd-service.sh \
@@ -1174,6 +1177,59 @@ To use an existing non-root Pipenv environment instead of the project-local
 pipenv install -r requirements.txt
 sudo ./install-systemd-service.sh --venv-dir "$(pipenv --venv)"
 ```
+
+#### Updating an installed service
+
+When upgrading an installation created before the updater was introduced,
+first pull this release so the script is present, then let the updater reconcile
+the current checkout, dependencies, unit and new deployment metadata in one go:
+
+```bash
+sudo ./update-systemd-service.sh --repair-current
+```
+
+For later releases, update from the clean installed checkout with:
+
+```bash
+sudo ./update-systemd-service.sh
+```
+
+The updater obtains the configured branch upstream, accepts only a
+fast-forward, stages and syntax-checks the candidate, and refuses to proceed
+while an import, source check, unattended merge or outbound sync is active. It
+then stops the service, updates the existing virtual environment from
+`requirements.txt`, validates imports and configuration, runs the complete
+test suite, refreshes the systemd unit and restarts the service. A local TCP
+readiness check must succeed. If a post-stop step fails, it restores the prior
+Git revision, dependencies, unit and deployment metadata before restarting the
+previous version.
+
+Local `ghostmerge_config.json` and `ghostmerge_config.json.local` files are
+validated but never generated, merged or overwritten. New configuration keys
+continue to come from `ghostmerge_config.example.json` through the existing
+recursive default merge, so an older local override automatically inherits new
+defaults. Invalid local JSON stops the update before the service is changed.
+
+Useful updater modes are:
+
+```bash
+# Read-only installation/configuration preflight (sudo is not required).
+./update-systemd-service.sh --dry-run
+
+# Reinstall dependencies and the unit for the checked-out revision without fetching.
+sudo ./update-systemd-service.sh --repair-current
+
+# Emergency/slow-host option; compile, import and dependency checks still run.
+sudo ./update-systemd-service.sh --skip-tests
+```
+
+Run the updater from the installed checkout. It refuses dirty or detached
+checkouts, a mismatched installed project path, unsafe unit/metadata ownership,
+and non-fast-forward history. The maintenance gate prevents new POST actions
+and scheduled runs during the final active-operation check; ordinary read-only
+pages remain available until the service is stopped. If a stale lock or state
+file prevents an update, inspect and recover the recorded operation rather than
+deleting it without confirming its outcome.
 
 Operational commands:
 

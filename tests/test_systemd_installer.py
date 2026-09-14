@@ -146,6 +146,14 @@ class SystemdInstallerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--port must be between 1 and 65535", result.stderr)
 
+    def test_installer_rejects_unsafe_service_name(self):
+        tmp_dir, project_dir = self.make_project_copy()
+        with tmp_dir:
+            result = self.run_installer(project_dir, "--service-name", "../ghostmerge")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("may contain only", result.stderr)
+
     def test_installer_rejects_root_service_user(self):
         tmp_dir, project_dir = self.make_project_copy()
         with tmp_dir:
