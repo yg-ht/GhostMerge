@@ -564,10 +564,11 @@ class WebServiceTests(unittest.TestCase):
         )
 
         preview = get_current_match_preview(job)
-        item = get_next_conflict(job)
-
         self.assertIsNotNone(preview)
         self.assertEqual(preview.automatic_resolution["side"], "right")
+        acknowledge_current_preview(job)
+        item = get_next_conflict(job)
+
         self.assertIsNone(item)
         self.assertTrue(job.conflict_phase_complete)
         self.assertEqual(job.merged_left[0].description, "Newer right")
@@ -624,6 +625,36 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(job.merged_left[0].description, "Keep older description")
         self.assertEqual(job.merged_right[0].description, "Keep older description")
         self.assertEqual(job.merged_left[0].impact, "Newer impact")
+
+    def test_timestamp_resolution_stops_for_each_match_preview(self):
+        older_extra = {"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}}
+        newer_extra = {"ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00Z"}}
+        job = create_merge_job(
+            [
+                record(id="1", title="Alpha authentication weakness", extra_fields=older_extra),
+                record(id="2", title="Beta encryption weakness", extra_fields=older_extra),
+            ],
+            [
+                record(id="3", title="Alpha authentication weakness", extra_fields=newer_extra),
+                record(id="4", title="Beta encryption weakness", extra_fields=newer_extra),
+            ],
+            job_id="timestampboundaries123",
+        )
+        first_preview = get_current_match_preview(job)
+        acknowledge_current_preview(job)
+
+        next_item = get_next_conflict(job)
+        second_preview = get_current_match_preview(job)
+
+        self.assertEqual(first_preview.match_index, 0)
+        self.assertEqual(job.match_index, 1)
+        self.assertEqual(len(job.merged_left), 1)
+        self.assertIsNotNone(next_item)
+        self.assertEqual(next_item.match_index, 1)
+        self.assertIsNotNone(second_preview)
+        self.assertEqual(second_preview.match_index, 1)
+        self.assertFalse(job.matches[1]["automatic_resolution"]["applied"])
+        self.assertFalse(job.conflict_phase_complete)
 
     def test_preview_selected_offered_values_leave_remaining_fields_for_review(self):
         job = create_merge_job(

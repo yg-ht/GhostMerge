@@ -1580,7 +1580,12 @@ def _get_next_conflict_for_kind(job: MergeJob, kind: str) -> Optional[ConflictRe
     matches = _matches_for_kind(job, kind)
     while _match_index_for_kind(job, kind) < len(matches):
         match = matches[_match_index_for_kind(job, kind)]
-        apply_automatic_resolution(match)
+        # Each fuzzy or manual pairing remains an analyst decision. Do not
+        # apply a timestamp winner until this specific match preview has been
+        # acknowledged; after completing a match, the flag is reset before the
+        # loop reaches the next candidate.
+        if job.preview_acknowledged:
+            apply_automatic_resolution(match)
         field_defs = list(fields(TEMPLATE_MODELS[kind]))
 
         while _field_index_for_kind(job, kind) < len(field_defs):
