@@ -19,17 +19,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 class SystemdUpdaterTests(unittest.TestCase):
     def test_deployment_generated_pip_cache_is_ignored(self):
-        result = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(PROJECT_ROOT),
-                "check-ignore",
-                "--quiet",
-                ".cache/pip/http-v2/example",
-            ],
-            check=False,
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = Path(temp_dir)
+            shutil.copyfile(PROJECT_ROOT / ".gitignore", repository / ".gitignore")
+            subprocess.run(["git", "init", "-q", str(repository)], check=True)
+            result = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "check-ignore",
+                    "--quiet",
+                    ".cache/pip/http-v2/example",
+                ],
+                check=False,
+            )
 
         self.assertEqual(result.returncode, 0)
 
@@ -260,7 +264,7 @@ wait_for_ghostmerge_http
                 [
                     "bash", "-c", harness, "health-harness",
                     str(PROJECT_ROOT / "update-systemd-service.sh"),
-                    str(PROJECT_ROOT / ".venv"),
+                    str(Path(sys.executable).parent.parent),
                     str(server.server_port),
                 ],
                 text=True,
@@ -473,6 +477,17 @@ remove_temporary_files
         (candidate_source / "candidate_module.py").write_text(
             "CANDIDATE_READY = True\n", encoding="utf-8"
         )
+        candidate_tests = candidate_source / "tests"
+        candidate_tests.mkdir()
+        (candidate_tests / "test_updater_environment.py").write_text(
+            "import os\n\n"
+            "def test_updater_private_environment_is_not_exposed():\n"
+            "    assert 'GHOSTMERGE_UPDATE_PROJECT_DIR' not in os.environ\n"
+            "    assert 'GHOSTMERGE_UPDATE_SNAPSHOT' not in os.environ\n"
+            "    assert 'GHOSTMERGE_UPDATE_SNAPSHOT_PATH' not in os.environ\n",
+            encoding="utf-8",
+        )
+        candidate_tests.chmod(0o555)
         candidate_source.chmod(0o555)
         harness = r'''
 source "$1"
@@ -481,13 +496,21 @@ VENV_DIR="$2"
 VENV_OWNER="$(id -un)"
 VENV_OWNER_HOME="$HOME"
 STAGING_DIR="$3"
-RUN_TESTS=0
+RUN_TESTS=1
 prepare_candidate_runtime
 printf '%s\n' "$CANDIDATE_VENV_DIR"
 STAGING_DIR=""
 remove_temporary_files
 '''
         with tmp_dir:
+            candidate_env = os.environ.copy()
+            candidate_env.update(
+                {
+                    "GHOSTMERGE_UPDATE_PROJECT_DIR": "/unexpected/project",
+                    "GHOSTMERGE_UPDATE_SNAPSHOT": "1",
+                    "GHOSTMERGE_UPDATE_SNAPSHOT_PATH": "/tmp/ghostmerge-systemd-update.test",
+                }
+            )
             result = subprocess.run(
                 [
                     "bash", "-c", harness, "candidate-harness",
@@ -498,18 +521,22 @@ remove_temporary_files
                 text=True,
                 capture_output=True,
                 check=False,
+                env=candidate_env,
             )
             candidate_path = Path(result.stdout.strip().splitlines()[-1])
             original_runtime_remained = (project_dir / ".venv" / "bin" / "python").exists()
             candidate_was_removed = not candidate_path.exists()
             source_cache_was_not_created = not (candidate_source / "__pycache__").exists()
+            pytest_cache_was_not_created = not (candidate_source / ".pytest_cache").exists()
             candidate_source.chmod(0o755)
+            candidate_tests.chmod(0o755)
 
         self.assertEqual(result.returncode, 0, f"{result.stderr}\n{result.stdout}")
         self.assertNotEqual(candidate_path, project_dir / ".venv")
         self.assertTrue(original_runtime_remained)
         self.assertTrue(candidate_was_removed)
         self.assertTrue(source_cache_was_not_created)
+        self.assertTrue(pytest_cache_was_not_created)
 
 
 if __name__ == "__main__":
