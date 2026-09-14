@@ -16,6 +16,7 @@ from matching import fuzzy_match_records
 from merge import (
     ResolvedWinner,
     apply_automatic_resolution,
+    append_unmatched_records,
     build_manual_match,
     get_compliance_reference_placeholder_choice,
     get_single_sided_content_choice,
@@ -167,6 +168,8 @@ class MergeJob:
     sensitivity_review_completed_at: Optional[str] = None
     sensitivity_review_stats: dict[str, int] = field(default_factory=empty_sensitivity_review_stats)
     sensitivity_decision_token: Optional[str] = None
+    unattended: dict[str, Any] = field(default_factory=dict)
+    unattended_output: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -395,6 +398,263 @@ def create_merge_job(
         sensitivity_configuration_error=snapshot.get("configuration_error"),
         pre_match_sensitivity_stats=pre_match_stats,
     )
+
+
+def _canonical_automatic_title(record: Finding | Observation) -> str:
+    """Return the conservative identity used for unattended pairing."""
+    return str(record.title or "").strip().casefold()
+
+
+def _title_counts_for_side(job: MergeJob, kind: str, side: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    records = [match[side] for match in _matches_for_kind(job, kind)]
+    records.extend(_unmatched_for_kind(job, kind, side))
+    for record in records:
+        title = _canonical_automatic_title(record)
+        if title:
+            counts[title] = counts.get(title, 0) + 1
+    return counts
+
+
+def _is_safe_unattended_pair(
+    match: dict[str, Any],
+    left_title_counts: dict[str, int],
+    right_title_counts: dict[str, int],
+) -> bool:
+    """Require one unambiguous, exact title identity on both API sources."""
+    left_title = _canonical_automatic_title(match["left"])
+    right_title = _canonical_automatic_title(match["right"])
+    return bool(
+        left_title
+        and left_title == right_title
+        and left_title_counts.get(left_title) == 1
+        and right_title_counts.get(right_title) == 1
+    )
+
+
+def _merge_lossless_extra_fields(
+    left_value: Any,
+    right_value: Any,
+) -> tuple[Any, Any, bool]:
+    """Copy unique extra-field keys while retaining conflicting values per side."""
+    left_comparable = extra_fields_for_comparison(left_value)
+    right_comparable = extra_fields_for_comparison(right_value)
+    if not isinstance(left_comparable, dict) or not isinstance(right_comparable, dict):
+        return left_comparable, right_comparable, left_comparable != right_comparable
+
+    merged_left = copy.deepcopy(left_comparable)
+    merged_right = copy.deepcopy(right_comparable)
+    unresolved = False
+    for key in set(left_comparable) | set(right_comparable):
+        if key not in left_comparable:
+            merged_left[key] = copy.deepcopy(right_comparable[key])
+        elif key not in right_comparable:
+            merged_right[key] = copy.deepcopy(left_comparable[key])
+        elif left_comparable[key] != right_comparable[key]:
+            unresolved = True
+    return merged_left, merged_right, unresolved
+
+
+def _apply_lossless_unattended_fields(match: dict[str, Any]) -> list[str]:
+    """Apply deterministic field choices and return fields still requiring review."""
+    if apply_automatic_resolution(match):
+        return []
+
+    record_class = type(match["left"])
+    unresolved_fields: list[str] = []
+    for field_def in fields(record_class):
+        field_name = field_def.name
+        if field_name in NON_REVIEWABLE_FIELDS:
+            continue
+        left_value = getattr(match["left"], field_name)
+        right_value = getattr(match["right"], field_name)
+        comparable_left = extra_fields_for_comparison(left_value) if field_name == "extra_fields" else left_value
+        comparable_right = extra_fields_for_comparison(right_value) if field_name == "extra_fields" else right_value
+        if comparable_left == comparable_right:
+            continue
+
+        if field_name == "tags":
+            offered = copy.deepcopy(match["auto_value"].get(field_name))
+            set_record_pair_field_values(match["left"], match["right"], field_name, offered, copy.deepcopy(offered))
+            continue
+
+        if field_name == "extra_fields":
+            should_accept_placeholder, _, placeholder_value = get_compliance_reference_placeholder_choice(
+                comparable_left,
+                comparable_right,
+            )
+            if should_accept_placeholder:
+                set_record_pair_field_values(
+                    match["left"],
+                    match["right"],
+                    field_name,
+                    copy.deepcopy(placeholder_value),
+                    copy.deepcopy(placeholder_value),
+                )
+                continue
+            merged_left, merged_right, unresolved = _merge_lossless_extra_fields(left_value, right_value)
+            set_record_pair_field_values(
+                match["left"],
+                match["right"],
+                field_name,
+                merged_left,
+                merged_right,
+            )
+            if unresolved:
+                unresolved_fields.append(field_name)
+            continue
+
+        should_accept, _, populated_value = get_single_sided_content_choice(left_value, right_value)
+        if CONFIG.get("auto_accept_single_sided_content", False) and should_accept:
+            set_record_pair_field_values(
+                match["left"],
+                match["right"],
+                field_name,
+                copy.deepcopy(populated_value),
+                copy.deepcopy(populated_value),
+            )
+            continue
+        unresolved_fields.append(field_name)
+
+    match["unattended_unresolved_fields"] = unresolved_fields
+    return unresolved_fields
+
+
+def _append_unattended_orphans(job: MergeJob, kind: str) -> int:
+    left_records: list[Finding | Observation] = _merged_for_kind(job, kind, "left")
+    right_records: list[Finding | Observation] = _merged_for_kind(job, kind, "right")
+    unmatched_left = _unmatched_for_kind(job, kind, "left")
+    unmatched_right = _unmatched_for_kind(job, kind, "right")
+    appended = append_unmatched_records(
+        left_records,
+        right_records,
+        unmatched_left,
+        unmatched_right,
+    )
+    _replace_unmatched_for_kind(job, kind, "left", [])
+    _replace_unmatched_for_kind(job, kind, "right", [])
+    _set_orphan_reprocessing_stopped_for_kind(job, kind, True)
+    _set_manual_matching_stopped_for_kind(job, kind, True)
+    return appended
+
+
+def build_unattended_output(job: MergeJob) -> MergeResult:
+    """Build complete side-specific libraries while manual pairs remain pending."""
+    left = [copy.deepcopy(record) for record in job.merged_left]
+    right = [copy.deepcopy(record) for record in job.merged_right]
+    for match in job.matches:
+        left.append(copy.deepcopy(match["left"]))
+        right.append(copy.deepcopy(match["right"]))
+
+    observations_left = [copy.deepcopy(record) for record in job.merged_observations_left]
+    observations_right = [copy.deepcopy(record) for record in job.merged_observations_right]
+    for match in job.observation_matches:
+        observations_left.append(copy.deepcopy(match["left"]))
+        observations_right.append(copy.deepcopy(match["right"]))
+
+    left, right = renumber_records(left, right, start_id=1)
+    observations_left, observations_right = renumber_records(
+        observations_left,
+        observations_right,
+        start_id=1,
+    )
+    return MergeResult(
+        left_records=[record.to_dict() for record in left],
+        right_records=[record.to_dict() for record in right],
+        left_observations=[record.to_dict() for record in observations_left],
+        right_observations=[record.to_dict() for record in observations_right],
+    )
+
+
+def _unattended_sensitivity_hits(job: MergeJob, result: MergeResult) -> int:
+    """Count remaining sensitive terms without exposing their values."""
+    if job.sensitivity_configuration_error:
+        return 1
+    if not job.sensitivity_enabled or not job.sensitivity_terms:
+        return 0
+
+    hits = 0
+    collections = (
+        result.left_records,
+        result.right_records,
+        result.left_observations,
+        result.right_observations,
+    )
+    for records in collections:
+        for record in records:
+            for field_name, value in record.items():
+                if field_name == "id" or not value:
+                    continue
+                hits += len(
+                    check_for_sensitivities(
+                        value,
+                        job.sensitivity_terms,
+                        field_name=field_name,
+                    )
+                )
+    return hits
+
+
+def run_unattended_reconciliation(job: MergeJob) -> MergeResult:
+    """Apply safe API-to-API work and retain only genuinely manual pairs."""
+    if job.input_sources != {"left": "api", "right": "api"}:
+        raise WebMergeError("Unattended reconciliation requires two API-backed sources.")
+    if job.unattended.get("status") == "running":
+        raise WebMergeError("This unattended reconciliation is already running.")
+
+    automatic_counts = {"finding": 0, "observation": 0}
+    pending_counts = {"finding": 0, "observation": 0}
+    for kind in TEMPLATE_KINDS:
+        left_title_counts = _title_counts_for_side(job, kind, "left")
+        right_title_counts = _title_counts_for_side(job, kind, "right")
+        pending_matches: list[dict[str, Any]] = []
+        for match in _matches_for_kind(job, kind):
+            if not _is_safe_unattended_pair(match, left_title_counts, right_title_counts):
+                match["unattended_unresolved_fields"] = ["match_identity"]
+                pending_matches.append(match)
+                continue
+            unresolved_fields = _apply_lossless_unattended_fields(match)
+            if unresolved_fields:
+                pending_matches.append(match)
+                continue
+            _merged_for_kind(job, kind, "left").append(match["left"])
+            _merged_for_kind(job, kind, "right").append(match["right"])
+            automatic_counts[kind] += 1
+
+        if kind == "finding":
+            job.matches = pending_matches
+            job.match_index = 0
+            job.field_index = 0
+        else:
+            job.observation_matches = pending_matches
+            job.observation_match_index = 0
+            job.observation_field_index = 0
+        pending_counts[kind] = len(pending_matches)
+
+    orphan_count = sum(_append_unattended_orphans(job, kind) for kind in TEMPLATE_KINDS)
+    has_pending = any(pending_counts.values())
+    job.finding_conflict_phase_complete = not job.matches
+    job.observation_conflict_phase_complete = not job.observation_matches
+    job.conflict_phase_complete = not has_pending
+    job.preview_acknowledged = False
+
+    result = build_unattended_output(job)
+    sensitivity_hits = _unattended_sensitivity_hits(job, result)
+    job.unattended_output = asdict(result)
+    job.unattended = {
+        "enabled": True,
+        "status": "needs_review" if has_pending or sensitivity_hits else "ready_to_sync",
+        "stage": "automatic_merge_complete",
+        "automatic_findings": automatic_counts["finding"],
+        "automatic_observations": automatic_counts["observation"],
+        "pending_findings": pending_counts["finding"],
+        "pending_observations": pending_counts["observation"],
+        "orphans_copied": orphan_count,
+        "sensitivity_hits": sensitivity_hits,
+        "sync_blocked_by_sensitivity": bool(sensitivity_hits),
+        "updated_at": _utc_state_timestamp(),
+    }
+    return result
 
 
 def get_next_conflict(job: MergeJob) -> Optional[ConflictReviewItem]:
@@ -1387,6 +1647,7 @@ def job_to_dict(job: MergeJob) -> dict[str, Any]:
             "auto_side": _winners_to_state(match["auto_side"]),
             "origin": match.get("origin", "automatic"),
             "automatic_resolution": match.get("automatic_resolution"),
+            "unattended_unresolved_fields": match.get("unattended_unresolved_fields"),
         }
         for match in job.matches
     ]
@@ -1399,6 +1660,7 @@ def job_to_dict(job: MergeJob) -> dict[str, Any]:
             "auto_side": _winners_to_state(match["auto_side"]),
             "origin": match.get("origin", "automatic"),
             "automatic_resolution": match.get("automatic_resolution"),
+            "unattended_unresolved_fields": match.get("unattended_unresolved_fields"),
         }
         for match in job.observation_matches
     ]
@@ -1430,6 +1692,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
                 "auto_side": _winners_from_state(match["auto_side"]),
                 "origin": match.get("origin", "automatic"),
                 "automatic_resolution": match.get("automatic_resolution"),
+                "unattended_unresolved_fields": match.get("unattended_unresolved_fields"),
             }
             for match in data["matches"]
         ],
@@ -1442,6 +1705,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
                 "auto_side": _winners_from_state(match["auto_side"]),
                 "origin": match.get("origin", "automatic"),
                 "automatic_resolution": match.get("automatic_resolution"),
+                "unattended_unresolved_fields": match.get("unattended_unresolved_fields"),
             }
             for match in data.get("observation_matches", [])
         ],
@@ -1534,6 +1798,12 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
             **dict(data.get("sensitivity_review_stats") or {}),
         },
         sensitivity_decision_token=data.get("sensitivity_decision_token"),
+        unattended=dict(data.get("unattended") or {}),
+        unattended_output=(
+            dict(data["unattended_output"])
+            if isinstance(data.get("unattended_output"), dict)
+            else None
+        ),
     )
 
 

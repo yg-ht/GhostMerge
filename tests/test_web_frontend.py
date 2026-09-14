@@ -47,6 +47,7 @@ from web_service import (
     parse_findings,
     prepare_output_preview,
     reject_current_match,
+    run_unattended_reconciliation,
     save_job,
     save_outputs,
     stop_orphan_reprocessing_for_current_kind,
@@ -592,6 +593,79 @@ class WebServiceTests(unittest.TestCase):
             loaded.matches[0]["automatic_resolution"]["reason"],
             "newer_ghostpiper_mapping_updated_at",
         )
+
+    def test_unattended_reconciliation_partitions_safe_and_manual_work(self):
+        older_mapping = {"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}}
+        newer_mapping = {"ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00Z"}}
+        job = create_merge_job(
+            [
+                record(title="Automatic finding", description="Older", tags="left", extra_fields=older_mapping),
+                record(id="2", title="Manual finding", description="Left conflict", impact="", tags="left"),
+                record(id="3", title="Left only record", description="Copied to both"),
+            ],
+            [
+                record(id="4", title="Automatic finding", description="Newer", tags="right", extra_fields=newer_mapping),
+                record(id="5", title="Manual finding", description="Right conflict", impact="Shared impact", tags="right"),
+            ],
+            job_id="unattendedpartition123",
+            input_sources={"left": "api", "right": "api"},
+        )
+
+        result = run_unattended_reconciliation(job)
+
+        self.assertEqual(job.unattended["automatic_findings"], 1)
+        self.assertEqual(job.unattended["pending_findings"], 1)
+        self.assertEqual(job.unattended["orphans_copied"], 1)
+        self.assertEqual(job.unattended["status"], "needs_review")
+        self.assertEqual(len(job.matches), 1)
+        self.assertEqual(job.matches[0]["left"].tags, ["left", "right"])
+        self.assertEqual(job.matches[0]["right"].tags, ["left", "right"])
+        self.assertEqual(job.matches[0]["left"].impact, "Shared impact")
+        self.assertEqual(job.matches[0]["right"].impact, "Shared impact")
+        self.assertEqual(job.matches[0]["unattended_unresolved_fields"], ["description"])
+        self.assertEqual(len(result.left_records), 3)
+        self.assertEqual(len(result.right_records), 3)
+        self.assertIn("Left only record", [item["title"] for item in result.right_records])
+        automatic_left = next(item for item in result.left_records if item["title"] == "Automatic finding")
+        automatic_right = next(item for item in result.right_records if item["title"] == "Automatic finding")
+        self.assertEqual(automatic_left["description"], "Newer")
+        self.assertEqual(automatic_right["description"], "Newer")
+
+    def test_unattended_reconciliation_leaves_duplicate_title_matches_manual(self):
+        job = create_merge_job(
+            [record(id="1", title="Duplicate"), record(id="2", title="Duplicate")],
+            [record(id="3", title="Duplicate"), record(id="4", title="Duplicate")],
+            job_id="unattendedduplicates123",
+            input_sources={"left": "api", "right": "api"},
+        )
+
+        run_unattended_reconciliation(job)
+
+        self.assertEqual(job.unattended["automatic_findings"], 0)
+        self.assertEqual(job.unattended["pending_findings"], 2)
+        self.assertTrue(
+            all(match["unattended_unresolved_fields"] == ["match_identity"] for match in job.matches)
+        )
+
+    def test_unattended_reconciliation_blocks_sync_for_remaining_sensitive_terms(self):
+        job = create_merge_job(
+            [record(title="Shared", description="Internal secret")],
+            [record(id="2", title="Shared", description="Internal secret")],
+            job_id="unattendedsensitivity123",
+            input_sources={"left": "api", "right": "api"},
+            sensitivity_snapshot={
+                "version": 1,
+                "enabled": True,
+                "pre_match_enabled": True,
+                "terms": {"internal secret": None},
+            },
+        )
+
+        run_unattended_reconciliation(job)
+
+        self.assertGreater(job.unattended["sensitivity_hits"], 0)
+        self.assertTrue(job.unattended["sync_blocked_by_sensitivity"])
+        self.assertEqual(job.unattended["status"], "needs_review")
 
     def test_explicit_preview_choice_overrides_timestamp_authoritative_baseline(self):
         left_extra = {"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}}
