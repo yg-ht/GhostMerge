@@ -4,6 +4,7 @@
 <section class="panel">
   <dl>
     <dt>Direction</dt><dd>Inbound</dd>
+    <dt>Trigger</dt><dd>{{ "Scheduled unattended" if state.scheduled else ("Manual unattended" if state.unattended else "Manual") }}</dd>
     <dt>Import status</dt><dd>{{ state.status|default("queued") }}</dd>
     <dt>Import stage</dt><dd>{{ state.stage|default("queued") }}</dd>
     <dt>Source progress</dt><dd>{{ state.complete|default(0) }} / {{ state.total|default(0) }}</dd>

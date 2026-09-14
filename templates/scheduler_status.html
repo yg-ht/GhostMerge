@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% macro timestamp(value, fallback) -%}
+{% if value %}<time datetime="{{ value }}" data-local-time>{{ value }} (UTC)</time>{% else %}{{ fallback }}{% endif %}
+{%- endmacro %}
+{% block content %}
+<h1>Unattended API merge scheduler</h1>
+<section class="panel" aria-live="polite">
+  <dl>
+    <dt>Scheduler status</dt><dd>{{ state.status|default("unknown")|replace("_", " ")|title }}</dd>
+    <dt>Configuration</dt><dd>{{ "Valid" if state.configuration_valid else "Invalid" }}</dd>
+    <dt>Interval</dt><dd>{% if state.interval_minutes %}{{ state.interval_minutes }} minute(s) after completion{% else %}Not configured{% endif %}</dd>
+    <dt>First run immediately</dt><dd>{{ "Yes" if state.run_immediately else "No" }}</dd>
+    <dt>Next run</dt><dd>{{ timestamp(state.next_run_at, "Not scheduled") }}</dd>
+    <dt>Last started</dt><dd>{{ timestamp(state.last_started_at, "Never") }}</dd>
+    <dt>Last completed</dt><dd>{{ timestamp(state.last_completed_at, "Never") }}</dd>
+    <dt>Last outcome</dt><dd>{{ state.last_status|default("No scheduled run yet", true)|replace("_", " ")|title }}</dd>
+    <dt>Last scheduler check</dt><dd>{{ timestamp(state.updated_at, "Not available") }}</dd>
+    {% if state.current_import_id %}<dt>Current import</dt><dd>{{ state.current_import_id }} — {{ state.current_import_status|default("running")|replace("_", " ")|title }}</dd>{% endif %}
+    {% if state.current_job_id %}<dt>Current merge job</dt><dd><a href="{{ url_for('unattended_status', job_id=state.current_job_id) }}">{{ state.current_job_id }}</a></dd>{% endif %}
+    {% if state.last_job_id %}<dt>Last merge job</dt><dd><a href="{{ url_for('unattended_status', job_id=state.last_job_id) }}">{{ state.last_job_id }}</a></dd>{% endif %}
+    <dt>Message</dt><dd>{{ state.message|default("No scheduler state is available.") }}</dd>
+    <dt>Left destination</dt><dd>{{ api_servers.left.name }} — {{ "Configured" if api_servers.left.configured else "Not configured" }}</dd>
+    <dt>Right destination</dt><dd>{{ api_servers.right.name }} — {{ "Configured" if api_servers.right.configured else "Not configured" }}</dd>
+  </dl>
+  <p>Scheduling is controlled by the local configuration file and changes take effect after the GhostMerge service restarts.</p>
+  {% if state.configured_enabled %}<meta http-equiv="refresh" content="5">{% endif %}
+</section>
+<script>
+  document.querySelectorAll("[data-local-time]").forEach(function (element) {
+    const instant = new Date(element.getAttribute("datetime"));
+    if (!Number.isNaN(instant.getTime())) {
+      element.textContent = instant.toLocaleString() + " (local)";
+      element.title = element.getAttribute("datetime") + " (UTC)";
+    }
+  });
+</script>
+{% endblock %}

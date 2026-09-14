@@ -133,6 +133,12 @@
   },
   "unattended_api_merge": {
     "enabled": false,
+    "schedule": {
+      "enabled": false,
+      "interval_minutes": 1440,
+      "run_immediately": false,
+      "poll_interval_seconds": 5
+    },
     "webhook": {
       "enabled": false,
       "url": "https://automation.example/ghostmerge",

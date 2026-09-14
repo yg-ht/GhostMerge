@@ -463,6 +463,43 @@ job identifier, source labels, status and stages, counts, and resume URL; record
 content and API credentials are never included. Insecure HTTP is rejected
 unless `allow_insecure_http` is explicitly enabled for local testing.
 
+To run the same workflow periodically, enable `unattended_api_merge.schedule`
+as well as `unattended_api_merge` itself:
+
+```json
+{
+  "unattended_api_merge": {
+    "enabled": true,
+    "schedule": {
+      "enabled": true,
+      "interval_minutes": 1440,
+      "run_immediately": false,
+      "poll_interval_seconds": 5
+    }
+  }
+}
+```
+
+The interval is a fixed delay measured from completion of one scheduled run to
+the start of the next. `interval_minutes` accepts values from 1 to 525600 and
+the scheduler checks its durable state every 1 to 300 seconds. When
+`run_immediately` is false, the first run occurs after one full interval; when
+true, the first run begins when a new schedule is initialised. Subsequent
+service restarts preserve the durable next-run time. Configuration changes
+require a service restart.
+
+Only one scheduler process can hold the cross-process scheduler lock. Scheduled
+and manually started unattended runs share a second start lock, so they cannot
+start simultaneously. If a manual unattended merge is active when a scheduled
+run becomes due, that occurrence is recorded as `skipped_duplicate` and the
+next full interval begins. Scheduler state is stored in
+`ghostmerge_web_jobs/unattended_scheduler.json` and is visible on the Scheduler
+page, including the next UTC run, active import or job, and last outcome.
+Scheduled runs use the same sensitivity checks, backups, bilateral destination
+states, retry paths, unresolved-item retention and webhook notification as a
+manually started unattended run. Enabling the schedule therefore authorises
+recurring backed-up full replacement of both configured API destinations.
+
 ### Merge and API operation states
 
 GhostMerge tracks three distinct parts of the workflow:
