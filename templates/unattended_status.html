@@ -2,6 +2,9 @@
 {% block content %}
 <h1>Unattended API merge status</h1>
 <section class="panel">
+  {% if state.requires_recovery %}
+  <p class="error"><strong>Recovery required:</strong> a destination failed after live replacement began. Scheduled and manual unattended runs remain paused until every failed destination is successfully retried.</p>
+  {% endif %}
   <dl>
     <dt>Status</dt><dd>{{ state.status|default("queued")|replace("_", " ")|title }}</dd>
     <dt>Stage</dt><dd>{{ state.stage|default("queued")|replace("_", " ")|title }}</dd>

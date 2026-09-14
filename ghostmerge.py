@@ -10,7 +10,7 @@ tui = TUI()
 # local module imports
 from utils import load_config, log, load_json, write_json, return_ASCII_art, Aborting
 from model import Finding
-from matching import fuzzy_match_findings
+from matching import fuzzy_match_findings, match_unique_canonical_titles
 from merge import (
     append_unmatched_records,
     build_manual_match,
@@ -148,13 +148,17 @@ def ghostmerge(
                 prefix="CLI",
             )
 
-    matches: List[Dict[str, Any]] = []
-    unmatched_left = findings_left
-    unmatched_right = findings_right
+    matches, unmatched_left, unmatched_right = match_unique_canonical_titles(
+        findings_left,
+        findings_right,
+    )
+    for match in matches:
+        prepare_merge_pair(match)
     for fuzzy_threshold in CONFIG['fuzzy_match_threshold']:
         log('INFO', f'Performing fuzzy matching at {fuzzy_threshold}% match threshold','CLI')
         new_matches, unmatched_left, unmatched_right = fuzzy_match_findings(unmatched_left, unmatched_right, fuzzy_threshold)
         for match in new_matches:
+            match["origin"] = "fuzzy"
             prepare_merge_pair(match)
         log('DEBUG', f'Updating matches dictionary with any new matches', 'CLI')
         matches.extend(new_matches)

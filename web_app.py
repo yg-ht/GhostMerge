@@ -92,7 +92,6 @@ class ApiOperationCancelled(RuntimeError):
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__)
     app.config.update(
-        SECRET_KEY=secrets.token_hex(32),
         MAX_CONTENT_LENGTH=8 * 1024 * 1024,
         GHOSTMERGE_JOBS_DIR=Path("ghostmerge_web_jobs"),
     )
@@ -101,6 +100,17 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     if not CONFIG.get("config_loaded"):
         load_config()
+
+    if not app.config.get("SECRET_KEY"):
+        access_config = _web_access_config()
+        configured_session_secret = str(access_config.get("session_secret") or "")
+        api_key = str(access_config.get("api_key") or "")
+        stable_secret_source = configured_session_secret or api_key
+        app.config["SECRET_KEY"] = (
+            hashlib.sha256(f"ghostmerge-session:{stable_secret_source}".encode("utf-8")).hexdigest()
+            if stable_secret_source
+            else secrets.token_hex(32)
+        )
 
     app.wsgi_app = ConfiguredReverseProxyPrefixMiddleware(app.wsgi_app, _web_access_config)
     _configure_session_cookie_policy(app)
@@ -253,6 +263,9 @@ def create_app(test_config: dict | None = None) -> Flask:
     def create_unattended_job_route():
         try:
             settings = _unattended_settings()
+            configuration_error = _unattended_configuration_error(settings)
+            if configuration_error:
+                raise WebMergeError(configuration_error)
             if not settings.get("enabled", False):
                 raise WebMergeError("Unattended API merge is not enabled in configuration.")
             if request.form.get("confirm_unattended_sync") != "yes":
@@ -260,6 +273,12 @@ def create_app(test_config: dict | None = None) -> Flask:
             for side in ("left", "right"):
                 _server_for_side(side)
             with _unattended_start_lock(jobs_dir):
+                recovery_job = _find_unattended_recovery_job(jobs_dir)
+                if recovery_job:
+                    raise WebMergeError(
+                        "A previous unattended replacement requires recovery before a new run can start: "
+                        f"{recovery_job.job_id}."
+                    )
                 running = next(
                     (state for state in _list_api_imports(jobs_dir) if state.get("unattended") and state.get("status") == "running"),
                     None,
@@ -371,6 +390,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             with _job_state_lock(jobs_dir, job_id):
                 job = load_job(jobs_dir, job_id)
+                _touch_unattended_review_lease(job)
                 initial_conflict_kind, initial_match_index = get_active_conflict_position(job)
                 if not job.preview_acknowledged:
                     preview = get_current_match_preview(job)
@@ -444,6 +464,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             with _job_state_lock(jobs_dir, job_id):
                 job = load_job(jobs_dir, job_id)
+                _touch_unattended_review_lease(job)
                 preview_action = request.form.get("preview_action")
                 if preview_action in {
                     "continue",
@@ -511,6 +532,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             with _job_state_lock(jobs_dir, job_id):
                 job = load_job(jobs_dir, job_id)
+                _touch_unattended_review_lease(job)
                 terms = _sensitivity_terms_for_job(job)
                 if (
                     job.sensitivity_snapshot_version == 0
@@ -556,6 +578,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             with _job_state_lock(jobs_dir, job_id):
                 job = load_job(jobs_dir, job_id)
+                _touch_unattended_review_lease(job)
                 acknowledge_sensitivity_review(job)
                 save_job(job, jobs_dir)
                 return redirect(url_for("complete", job_id=job.job_id))
@@ -573,6 +596,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             with _job_state_lock(jobs_dir, job_id):
                 job = load_job(jobs_dir, job_id)
+                _touch_unattended_review_lease(job)
                 apply_sensitivity_decision(
                     job,
                     request.form.to_dict(),
@@ -828,7 +852,7 @@ def _home_context(jobs_dir: Path) -> dict[str, Any]:
         "previous_jobs_total": len(previous_jobs),
         "running_api_source_checks": _running_api_source_checks_by_side(jobs_dir),
         "api_servers": api_servers,
-        "unattended_available": bool(_unattended_settings().get("enabled", False)) and all(
+        "unattended_available": _unattended_configuration_is_enabled() and all(
             api_servers[side]["configured"] for side in ("left", "right")
         ),
         "abandoned_job": request.args.get("abandoned"),
@@ -1105,7 +1129,10 @@ def _job_state_lock(jobs_dir: Path, job_id: str):
     job_dir = jobs_dir / job_id
     if not job_dir.is_dir():
         raise WebMergeError("Job not found.")
-    lock_path = job_dir / ".review.lock"
+    # Keep the lock outside the directory it protects. Retention can then
+    # remove a superseded job while holding this same inode, without another
+    # process creating a replacement lock inside the newly absent directory.
+    lock_path = jobs_dir / f".{job_id}.review.lock"
     with lock_path.open("a+", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
@@ -1264,7 +1291,7 @@ def _start_import_thread(
             "worker_pid": os.getpid(),
         },
     )
-    thread = threading.Thread(target=_import_job_sources, args=(app, jobs_dir, import_id), daemon=True)
+    thread = threading.Thread(target=_import_job_sources, args=(app, jobs_dir, import_id), daemon=False)
     try:
         thread.start()
     except Exception:
@@ -1425,6 +1452,21 @@ def _import_job_sources(app: Flask, jobs_dir: Path, import_id: str) -> None:
                 source_name, side, index, side_total = failure_source_context
                 message = f"Failed to import {source_name} ({side.title()}, {index} / {side_total}): {message}"
             state.update({"status": "error", "stage": "error", "message": message})
+            if state.get("unattended"):
+                state["webhook"] = _send_configured_webhook(
+                    "ghostmerge.unattended.import_failed",
+                    {
+                        "import_id": import_id,
+                        "status": "failed",
+                        "scheduled": bool(state.get("scheduled")),
+                        "source": {
+                            "side": state.get("side"),
+                            "name": state.get("side_name"),
+                        },
+                        "stage": state.get("api_stage") or state.get("stage"),
+                        "message": "Inbound API import failed.",
+                    },
+                )
             _save_import_state(jobs_dir, import_id, state)
         finally:
             _ACTIVE_API_IMPORTS.discard(import_id)
@@ -1683,8 +1725,59 @@ def _unattended_settings() -> dict[str, Any]:
     return settings if isinstance(settings, dict) else {}
 
 
+def _unattended_configuration_error(settings: Any = None) -> Optional[str]:
+    """Validate values which authorise unattended destructive operations."""
+    raw = CONFIG.get("unattended_api_merge") if settings is None else settings
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        return "Unattended API merge configuration must be an object."
+    if not isinstance(raw.get("enabled", False), bool):
+        return "Unattended API merge enabled must be a boolean."
+    fuzzy_threshold = raw.get("high_confidence_fuzzy_threshold", 90)
+    if isinstance(fuzzy_threshold, bool):
+        return "Unattended high-confidence fuzzy threshold must be a number."
+    try:
+        parsed_threshold = float(fuzzy_threshold)
+    except (TypeError, ValueError):
+        return "Unattended high-confidence fuzzy threshold must be a number."
+    if not math.isfinite(parsed_threshold) or not 80 <= parsed_threshold <= 100:
+        return "Unattended high-confidence fuzzy threshold must be between 80 and 100."
+    review_lease_minutes = raw.get("manual_review_lease_minutes", 1440)
+    if isinstance(review_lease_minutes, bool):
+        return "Unattended manual review lease must be a number."
+    try:
+        parsed_review_lease = float(review_lease_minutes)
+    except (TypeError, ValueError):
+        return "Unattended manual review lease must be a number."
+    if not math.isfinite(parsed_review_lease) or not 5 <= parsed_review_lease <= 10_080:
+        return "Unattended manual_review_lease_minutes must be between 5 and 10080."
+
+    webhook = raw.get("webhook", {})
+    if webhook is None:
+        webhook = {}
+    if not isinstance(webhook, dict):
+        return "Unattended webhook configuration must be an object."
+    for field_name in ("enabled", "allow_insecure_http"):
+        if not isinstance(webhook.get(field_name, False), bool):
+            return f"Unattended webhook {field_name} must be a boolean."
+    return None
+
+
+def _unattended_configuration_is_enabled() -> bool:
+    settings = CONFIG.get("unattended_api_merge")
+    return (
+        _unattended_configuration_error(settings) is None
+        and isinstance(settings, dict)
+        and settings.get("enabled") is True
+    )
+
+
 def _scheduler_config() -> dict[str, Any]:
     unattended = _unattended_settings()
+    unattended_error = _unattended_configuration_error(CONFIG.get("unattended_api_merge"))
+    if unattended_error:
+        return {"enabled": False, "valid": False, "error": unattended_error}
     raw = unattended.get("schedule", {})
     if raw is None:
         raw = {}
@@ -1723,7 +1816,7 @@ def _scheduler_config() -> dict[str, Any]:
         }
     if not math.isfinite(poll_seconds) or not 1 <= poll_seconds <= 300:
         return {"enabled": enabled, "valid": False, "error": "Schedule poll_interval_seconds must be between 1 and 300."}
-    if enabled and not unattended.get("enabled", False):
+    if enabled and unattended.get("enabled") is not True:
         return {"enabled": True, "valid": False, "error": "Enable unattended_api_merge before enabling its schedule."}
     if enabled:
         try:
@@ -1844,6 +1937,25 @@ def _scheduler_tick(app: Flask, jobs_dir: Path, *, now: Optional[datetime] = Non
     schedule_was_enabled = bool(state.get("configured_enabled", False))
     state["configured_enabled"] = True
     state["scheduler_pid"] = os.getpid()
+    recovery_job_id = state.get("recovery_job_id")
+    if recovery_job_id:
+        try:
+            recovery_job = load_job(jobs_dir, recovery_job_id)
+        except WebMergeError:
+            recovery_job = None
+        if recovery_job is not None and _unattended_requires_recovery(recovery_job):
+            state.update({
+                "status": "paused_recovery",
+                "message": (
+                    "Scheduled runs are paused because a previous destructive replacement failed. "
+                    "Retry the failed destination before continuing."
+                ),
+                "next_run_at": None,
+            })
+            _save_scheduler_state(jobs_dir, state)
+            return state
+        state.pop("recovery_job_id", None)
+        state["next_run_at"] = (current_time + interval).isoformat()
     current_import_id = state.get("current_import_id")
     if current_import_id:
         try:
@@ -1861,23 +1973,35 @@ def _scheduler_tick(app: Flask, jobs_dir: Path, *, now: Optional[datetime] = Non
             return state
         result_status = current_import.get("status") or "error"
         job_id = current_import.get("job_id")
+        completed_job = None
         if job_id:
             try:
-                job = load_job(jobs_dir, job_id)
-                result_status = job.unattended.get("status") or result_status
+                with _job_state_lock(jobs_dir, job_id):
+                    _recover_stale_unattended_job(jobs_dir, job_id)
+                    completed_job = load_job(jobs_dir, job_id)
+                result_status = completed_job.unattended.get("status") or result_status
             except WebMergeError:
                 pass
+        requires_recovery = bool(
+            completed_job is not None and _unattended_requires_recovery(completed_job)
+        )
         state.update({
-            "status": "waiting",
-            "message": f"Last scheduled unattended merge finished with status: {result_status}.",
+            "status": "paused_recovery" if requires_recovery else "waiting",
+            "message": (
+                "Scheduled runs are paused because the last destructive replacement requires recovery."
+                if requires_recovery
+                else f"Last scheduled unattended merge finished with status: {result_status}."
+            ),
             "last_completed_at": current_time.isoformat(),
             "last_status": result_status,
             "last_import_id": current_import_id,
             "last_job_id": job_id,
             "current_import_id": None,
             "current_job_id": None,
-            "next_run_at": (current_time + interval).isoformat(),
+            "next_run_at": None if requires_recovery else (current_time + interval).isoformat(),
         })
+        if requires_recovery:
+            state["recovery_job_id"] = job_id
         _save_scheduler_state(jobs_dir, state)
         return state
 
@@ -1919,6 +2043,15 @@ def _scheduler_tick(app: Flask, jobs_dir: Path, *, now: Optional[datetime] = Non
                 scheduled=True,
             )
         except Exception as exc:
+            webhook_state = _send_configured_webhook(
+                "ghostmerge.scheduler.start_failed",
+                {
+                    "status": "start_failed",
+                    "scheduled": True,
+                    "stage": "start",
+                    "message": "Scheduled unattended merge could not start.",
+                },
+            )
             state.update({
                 "status": "waiting",
                 "message": f"Scheduled unattended merge could not start: {exc}",
@@ -1926,6 +2059,7 @@ def _scheduler_tick(app: Flask, jobs_dir: Path, *, now: Optional[datetime] = Non
                 "last_completed_at": current_time.isoformat(),
                 "last_status": "start_failed",
                 "next_run_at": (current_time + interval).isoformat(),
+                "webhook": webhook_state,
             })
             _save_scheduler_state(jobs_dir, state)
             return state
@@ -1993,23 +2127,24 @@ def _start_unattended_scheduler(app: Flask, jobs_dir: Path) -> Optional[threadin
 def _start_sync_thread(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
     lock_path = _sync_lock_path(jobs_dir, job_id, side)
     _acquire_sync_lock(lock_path, side)
-    job = load_job(jobs_dir, job_id)
     try:
-        _require_output_ready(job)
-        _require_api_backed_side(job, side)
-        _require_sync_not_active(job, side)
-        job.sync_results[side] = {
-            "operation": "outbound_api_sync",
-            "direction": "outbound",
-            "side": side,
-            "status": "running",
-            "stage": "queued",
-            "message": "Queued outbound API sync.",
-            "complete": 0,
-            "total": 0,
-        }
-        save_job(job, jobs_dir)
-        thread = threading.Thread(target=_sync_job_side, args=(app, jobs_dir, job_id, side), daemon=True)
+        with _job_state_lock(jobs_dir, job_id):
+            job = load_job(jobs_dir, job_id)
+            _require_output_ready(job)
+            _require_api_backed_side(job, side)
+            _require_sync_not_active(job, side)
+            job.sync_results[side] = {
+                "operation": "outbound_api_sync",
+                "direction": "outbound",
+                "side": side,
+                "status": "running",
+                "stage": "queued",
+                "message": "Queued outbound API sync.",
+                "complete": 0,
+                "total": 0,
+            }
+            save_job(job, jobs_dir)
+        thread = threading.Thread(target=_sync_job_side, args=(app, jobs_dir, job_id, side), daemon=False)
         thread.start()
     except Exception:
         _release_sync_lock(lock_path)
@@ -2128,43 +2263,55 @@ def _run_unattended_job(app: Flask, jobs_dir: Path, job_id: str) -> None:
 
 
 def _finalise_unattended_state(jobs_dir: Path, job_id: str) -> None:
-    job = load_job(jobs_dir, job_id)
-    failed_sides = [
-        side for side in ("left", "right")
-        if (job.sync_results.get(side) or {}).get("status") != "done"
-    ]
-    pending_count = int(job.unattended.get("pending_findings", 0)) + int(
-        job.unattended.get("pending_observations", 0)
-    )
-    if failed_sides:
-        status = "partially_completed" if len(failed_sides) == 1 else "failed"
-        message = f"Unattended sync failed for: {', '.join(failed_sides)}."
-    elif pending_count:
-        status = "needs_review"
-        message = "Automatic work was synchronised; manual merge items remain."
-    else:
-        status = "complete"
-        message = "Unattended API merge and bilateral synchronisation completed."
-    job.unattended.update(
-        {"status": status, "stage": status, "message": message, "updated_at": datetime.now(timezone.utc).isoformat()}
-    )
-    job.unattended.pop("worker_pid", None)
-    save_job(job, jobs_dir)
+    with _job_state_lock(jobs_dir, job_id):
+        job = load_job(jobs_dir, job_id)
+        failed_sides = [
+            side for side in ("left", "right")
+            if (job.sync_results.get(side) or {}).get("status") != "done"
+        ]
+        pending_count = int(job.unattended.get("pending_findings", 0)) + int(
+            job.unattended.get("pending_observations", 0)
+        )
+        if failed_sides:
+            status = "partially_completed" if len(failed_sides) == 1 else "failed"
+            message = f"Unattended sync failed for: {', '.join(failed_sides)}."
+        elif pending_count:
+            status = "needs_review"
+            message = "Automatic work was synchronised; manual merge items remain."
+        else:
+            status = "complete"
+            message = "Unattended API merge and bilateral synchronisation completed."
+        job.unattended.update(
+            {
+                "status": status,
+                "stage": status,
+                "message": message,
+                "requires_recovery": _unattended_requires_recovery(job),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        job.unattended.pop("worker_pid", None)
+        save_job(job, jobs_dir)
 
 
 def _start_unattended_retry_thread(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:
     if side not in {"left", "right"}:
         raise WebMergeError("Unknown sync side.")
     _recover_stale_unattended_job(jobs_dir, job_id)
-    job = load_job(jobs_dir, job_id)
-    if not job.unattended.get("enabled") or not isinstance(job.unattended_output, dict):
-        raise WebMergeError("This job has no unattended output to retry.")
-    if (job.sync_results.get(side) or {}).get("status") != "error":
-        raise WebMergeError(f"{side.title()} unattended sync is not awaiting retry.")
     lock_path = _sync_lock_path(jobs_dir, job_id, side)
     _acquire_sync_lock(lock_path, side)
-    job.unattended.update({"status": "running", "stage": f"retry_{side}", "message": f"Retrying {side} API sync.", "worker_pid": os.getpid()})
-    save_job(job, jobs_dir)
+    try:
+        with _job_state_lock(jobs_dir, job_id):
+            job = load_job(jobs_dir, job_id)
+            if not job.unattended.get("enabled") or not isinstance(job.unattended_output, dict):
+                raise WebMergeError("This job has no unattended output to retry.")
+            if (job.sync_results.get(side) or {}).get("status") != "error":
+                raise WebMergeError(f"{side.title()} unattended sync is not awaiting retry.")
+            job.unattended.update({"status": "running", "stage": f"retry_{side}", "message": f"Retrying {side} API sync.", "worker_pid": os.getpid()})
+            save_job(job, jobs_dir)
+    except Exception:
+        _release_sync_lock(lock_path)
+        raise
 
     def worker() -> None:
         _sync_job_side(app, jobs_dir, job_id, side, unattended=True)
@@ -2172,7 +2319,7 @@ def _start_unattended_retry_thread(app: Flask, jobs_dir: Path, job_id: str, side
         _deliver_unattended_webhook(jobs_dir, job_id)
 
     try:
-        threading.Thread(target=worker, daemon=True).start()
+        threading.Thread(target=worker, daemon=False).start()
     except Exception:
         _release_sync_lock(lock_path)
         _finalise_unattended_state(jobs_dir, job_id)
@@ -2188,12 +2335,16 @@ def _discard_superseded_unattended_jobs(jobs_dir: Path, newest_job_id: str) -> N
         if not pending and not item.unattended.get("sync_blocked_by_sensitivity"):
             continue
         try:
-            _recover_stale_unattended_job(jobs_dir, item.job_id)
-            old_job = load_job(jobs_dir, item.job_id)
-            _require_no_running_live_sync(jobs_dir, old_job)
+            with _job_state_lock(jobs_dir, item.job_id):
+                _recover_stale_unattended_job(jobs_dir, item.job_id)
+                old_job = load_job(jobs_dir, item.job_id)
+                _require_no_running_live_sync(jobs_dir, old_job)
+                lease_until = _parse_utc_timestamp(old_job.unattended.get("review_lease_until"))
+                if lease_until and lease_until > datetime.now(timezone.utc):
+                    continue
+                _delete_job_directory(jobs_dir, item.job_id)
         except WebMergeError:
             continue
-        _delete_job_directory(jobs_dir, item.job_id)
         imports_dir = jobs_dir / "api_imports"
         for import_path in imports_dir.glob("*.json") if imports_dir.exists() else ():
             try:
@@ -2202,6 +2353,45 @@ def _discard_superseded_unattended_jobs(jobs_dir: Path, newest_job_id: str) -> N
                 continue
             if import_state.get("job_id") == item.job_id and import_state.get("unattended"):
                 import_path.unlink(missing_ok=True)
+
+
+def _touch_unattended_review_lease(job) -> None:
+    """Protect a manually opened unattended review from scheduled retention."""
+    if not job.unattended.get("enabled"):
+        return
+    pending = int(job.unattended.get("pending_findings", 0)) + int(
+        job.unattended.get("pending_observations", 0)
+    )
+    if not pending and not job.unattended.get("sync_blocked_by_sensitivity"):
+        return
+    minutes = float(_unattended_settings().get("manual_review_lease_minutes", 1440))
+    job.unattended["review_lease_until"] = (
+        datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    ).isoformat()
+
+
+def _unattended_requires_recovery(job) -> bool:
+    """Return whether an API side failed after destructive replacement began."""
+    return any(
+        bool((job.sync_results.get(side) or {}).get("destructive_failure"))
+        and (job.sync_results.get(side) or {}).get("status") != "done"
+        for side in ("left", "right")
+    )
+
+
+def _find_unattended_recovery_job(jobs_dir: Path):
+    for item in list_previous_jobs(jobs_dir):
+        if not item.unattended.get("enabled"):
+            continue
+        try:
+            with _job_state_lock(jobs_dir, item.job_id):
+                _recover_stale_unattended_job(jobs_dir, item.job_id)
+                job = load_job(jobs_dir, item.job_id)
+        except WebMergeError:
+            continue
+        if _unattended_requires_recovery(job):
+            return job
+    return None
 
 
 def _recover_stale_unattended_job(jobs_dir: Path, job_id: str) -> None:
@@ -2217,12 +2407,15 @@ def _recover_stale_unattended_job(jobs_dir: Path, job_id: str) -> None:
     for side in ("left", "right"):
         state = job.sync_results.get(side) or {}
         if state.get("status") != "done":
+            failed_stage = str(state.get("stage") or "interrupted")
             state.update({
                 "operation": "unattended_outbound_sync",
                 "direction": "outbound",
                 "side": side,
                 "status": "error",
                 "stage": "interrupted",
+                "failed_stage": failed_stage,
+                "destructive_failure": failed_stage in {"delete", "create", "replace"},
                 "message": "The unattended worker stopped before this API sync completed; retry is available.",
             })
             job.sync_results[side] = state
@@ -2232,6 +2425,7 @@ def _recover_stale_unattended_job(jobs_dir: Path, job_id: str) -> None:
         "status": "failed",
         "stage": "interrupted",
         "message": "The unattended worker was interrupted; failed API sides can be retried.",
+        "requires_recovery": _unattended_requires_recovery(job),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
     save_job(job, jobs_dir)
@@ -2241,27 +2435,13 @@ def _deliver_unattended_webhook(jobs_dir: Path, job_id: str) -> None:
     settings = _unattended_settings().get("webhook") or {}
     if not isinstance(settings, dict) or not settings.get("enabled", False):
         return
-    url = str(settings.get("url") or "").strip()
-    secret = str(settings.get("secret") or "")
-    parsed = urllib.parse.urlsplit(url)
-    allow_http = bool(settings.get("allow_insecure_http", False))
     job = load_job(jobs_dir, job_id)
-    if not url or not secret or parsed.scheme not in ({"https", "http"} if allow_http else {"https"}):
-        _persist_unattended_webhook_state(jobs_dir, job_id, {
-            "status": "failed",
-            "error": "Webhook requires an HTTPS URL and a non-empty secret.",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
-        return
     fingerprint = f"{job.unattended.get('status')}:{','.join(str((job.sync_results.get(s) or {}).get('status')) for s in ('left', 'right'))}"
     previous = job.unattended.get("webhook") or {}
     if previous.get("fingerprint") == fingerprint and previous.get("status") == "delivered":
         return
-    event_id = uuid.uuid4().hex
     base_url = str(settings.get("public_base_url") or "").rstrip("/")
     payload = {
-        "event": "ghostmerge.unattended.completed",
-        "event_id": event_id,
         "job_id": job.job_id,
         "status": job.unattended.get("status"),
         "counts": {key: int(job.unattended.get(key, 0)) for key in ("automatic_findings", "automatic_observations", "pending_findings", "pending_observations", "orphans_copied")},
@@ -2269,18 +2449,41 @@ def _deliver_unattended_webhook(jobs_dir: Path, job_id: str) -> None:
         "sync": {side: {"status": (job.sync_results.get(side) or {}).get("status"), "stage": (job.sync_results.get(side) or {}).get("stage")} for side in ("left", "right")},
         "resume_url": f"{base_url}/jobs/{job.job_id}/summary" if base_url else f"/jobs/{job.job_id}/summary",
     }
+    delivery_state = _send_configured_webhook("ghostmerge.unattended.completed", payload)
+    delivery_state["fingerprint"] = fingerprint
+    _persist_unattended_webhook_state(jobs_dir, job_id, delivery_state)
+
+
+def _send_configured_webhook(event: str, payload_fields: dict[str, Any]) -> dict[str, Any]:
+    """Send one signed, content-minimised unattended operational event."""
+    settings = _unattended_settings().get("webhook") or {}
+    updated_at = datetime.now(timezone.utc).isoformat()
+    if not isinstance(settings, dict) or settings.get("enabled") is not True:
+        return {"status": "disabled", "updated_at": updated_at}
+    url = str(settings.get("url") or "").strip()
+    secret = str(settings.get("secret") or "")
+    parsed = urllib.parse.urlsplit(url)
+    allow_http = settings.get("allow_insecure_http") is True
+    allowed_schemes = {"https", "http"} if allow_http else {"https"}
+    if not url or not secret or parsed.scheme not in allowed_schemes:
+        return {
+            "status": "failed",
+            "error": "Webhook requires an allowed URL scheme and a non-empty secret.",
+            "updated_at": updated_at,
+        }
+    event_id = uuid.uuid4().hex
+    payload = {"event": event, "event_id": event_id, **payload_fields}
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     signature = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     try:
         attempts = max(1, min(int(settings.get("max_attempts", 3)), 5))
         timeout = max(1.0, min(float(settings.get("timeout_seconds", 5)), 30.0))
     except (TypeError, ValueError):
-        _persist_unattended_webhook_state(jobs_dir, job_id, {
+        return {
             "status": "failed",
             "error": "Webhook timeout and attempt settings are invalid.",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
-        return
+            "updated_at": updated_at,
+        }
     error = None
     delivered = False
     for attempt in range(1, attempts + 1):
@@ -2301,14 +2504,13 @@ def _deliver_unattended_webhook(jobs_dir: Path, job_id: str) -> None:
             break
         if attempt < attempts:
             time.sleep(min(attempt, 2))
-    _persist_unattended_webhook_state(jobs_dir, job_id, {
+    return {
         "status": "delivered" if delivered else "failed",
         "event_id": event_id,
-        "fingerprint": fingerprint,
         "attempts": attempt,
         "error": None if delivered else error,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-    })
+    }
 
 
 def _persist_unattended_webhook_state(jobs_dir: Path, job_id: str, state: dict[str, Any]) -> None:
@@ -2330,25 +2532,26 @@ def _sync_job_side(
         operation = "unattended_outbound_sync" if unattended else "outbound_api_sync"
 
         def update(event):
-            current = load_job(jobs_dir, job_id)
-            previous_state = dict(current.sync_results.get(side) or {})
-            next_state = {
-                "operation": operation,
-                "direction": "outbound",
-                "side": side,
-                # Fetch and backup helpers report their own local completion.  The outbound
-                # operation is complete only after the final replacement event succeeds.
-                "status": "done" if event.stage == "complete" and event.status == "done" else "running",
-                "stage": event.stage,
-                "message": event.message,
-                "complete": event.complete,
-                "total": event.total,
-            }
-            backup_path = event.backup_path or previous_state.get("backup_path")
-            if backup_path:
-                next_state["backup_path"] = backup_path
-            current.sync_results[side] = next_state
-            save_job(current, jobs_dir)
+            with _job_state_lock(jobs_dir, job_id):
+                current = load_job(jobs_dir, job_id)
+                previous_state = dict(current.sync_results.get(side) or {})
+                next_state = {
+                    "operation": operation,
+                    "direction": "outbound",
+                    "side": side,
+                    # Fetch and backup helpers report their own local completion.  The outbound
+                    # operation is complete only after the final replacement event succeeds.
+                    "status": "done" if event.stage == "complete" and event.status == "done" else "running",
+                    "stage": event.stage,
+                    "message": event.message,
+                    "complete": event.complete,
+                    "total": event.total,
+                }
+                backup_path = event.backup_path or previous_state.get("backup_path")
+                if backup_path:
+                    next_state["backup_path"] = backup_path
+                current.sync_results[side] = next_state
+                save_job(current, jobs_dir)
 
         try:
             job = load_job(jobs_dir, job_id)
@@ -2371,37 +2574,42 @@ def _sync_job_side(
             ) if job.includes_observations else None
             api = GhostwriterApi(_server_for_side(side), progress=update)
             backup_path = api.replace_all_findings(records, backup_root_from_config(CONFIG), observations=observations)
-            job = load_job(jobs_dir, job_id)
-            observation_count = 0 if observations is None else len(observations)
-            job.sync_results[side] = {
-                "operation": operation,
-                "direction": "outbound",
-                "side": side,
-                "status": "done",
-                "stage": "complete",
-                "message": "Outbound API sync complete.",
-                "complete": len(records) + observation_count,
-                "total": len(records) + observation_count,
-                "backup_path": str(backup_path),
-            }
-            save_job(job, jobs_dir)
-        except Exception as exc:
-            job = load_job(jobs_dir, job_id)
-            failed_state = dict(job.sync_results.get(side) or {})
-            failed_state.update(
-                {
+            with _job_state_lock(jobs_dir, job_id):
+                job = load_job(jobs_dir, job_id)
+                observation_count = 0 if observations is None else len(observations)
+                job.sync_results[side] = {
                     "operation": operation,
                     "direction": "outbound",
                     "side": side,
-                    "status": "error",
-                    "stage": "error",
-                    "message": str(exc),
+                    "status": "done",
+                    "stage": "complete",
+                    "message": "Outbound API sync complete.",
+                    "complete": len(records) + observation_count,
+                    "total": len(records) + observation_count,
+                    "backup_path": str(backup_path),
                 }
-            )
-            failed_state.setdefault("complete", 0)
-            failed_state.setdefault("total", 0)
-            job.sync_results[side] = failed_state
-            save_job(job, jobs_dir)
+                save_job(job, jobs_dir)
+        except Exception as exc:
+            with _job_state_lock(jobs_dir, job_id):
+                job = load_job(jobs_dir, job_id)
+                failed_state = dict(job.sync_results.get(side) or {})
+                failed_stage = str(failed_state.get("stage") or "unknown")
+                failed_state.update(
+                    {
+                        "operation": operation,
+                        "direction": "outbound",
+                        "side": side,
+                        "status": "error",
+                        "stage": "error",
+                        "failed_stage": failed_stage,
+                        "destructive_failure": failed_stage in {"delete", "create", "replace"},
+                        "message": str(exc),
+                    }
+                )
+                failed_state.setdefault("complete", 0)
+                failed_state.setdefault("total", 0)
+                job.sync_results[side] = failed_state
+                save_job(job, jobs_dir)
         finally:
             _release_sync_lock(_sync_lock_path(jobs_dir, job_id, side))
 

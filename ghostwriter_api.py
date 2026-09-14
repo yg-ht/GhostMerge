@@ -705,6 +705,14 @@ class GhostwriterApi:
         existing_observation_ids = self.fetch_observation_ids() if replace_observations else []
         deleted = 0
         delete_total = len(existing_ids) + len(existing_observation_ids)
+        self.progress(
+            SyncEvent(
+                "delete",
+                f"Starting replacement deletion on {self.server.name}",
+                0,
+                delete_total,
+            )
+        )
         for finding_ids in _batches(existing_ids, self.server.sync_batch_size):
             self.delete_findings(finding_ids)
             deleted += len(finding_ids)
@@ -730,6 +738,14 @@ class GhostwriterApi:
                 )
         created = 0
         create_total = len(prepared_records) + len(prepared_observations)
+        self.progress(
+            SyncEvent(
+                "create",
+                f"Starting replacement creation on {self.server.name}",
+                0,
+                create_total,
+            )
+        )
         for prepared_batch in _batches(prepared_records, self.server.sync_batch_size):
             created_ids = self.create_prepared_findings(
                 [prepared["api_record"] for prepared in prepared_batch]

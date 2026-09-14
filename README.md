@@ -95,6 +95,7 @@ written around these dependencies:
 - readchar
 - pytest, for the regression suite
 - Flask, for the optional web frontend
+- Gunicorn, for the packaged production web service
 
 The project includes `requirements.txt`. Keep dependencies isolated in a virtual
 environment rather than installing them into the system Python.
@@ -390,10 +391,15 @@ default to enabled; if the block, allowed IP list, or API key is missing, the
 application fails closed.
 
 Set `allowed_source_ips` to the direct client IPs or CIDR ranges that may reach
-Flask, and set `api_key` to a deployment-specific secret. The key is supplied on
+GhostMerge, and set `api_key` to a deployment-specific secret. The key is supplied on
 the first GET request with the configured query parameter, for example
 `/?api_key=...`; after a valid GET, the Flask session stays authenticated for
 later navigation and CSRF-protected form posts.
+
+Set `session_secret` to a separate, stable deployment secret so authenticated
+sessions and CSRF tokens remain valid across service restarts. When it is empty,
+GhostMerge derives a stable session signing key from `api_key` for backwards
+compatibility; changing that API key will then invalidate existing sessions.
 
 The source IP check defaults to Flask's direct `request.remote_addr` value. Set
 `source_ip_mode` to control which client address source is checked:
@@ -447,15 +453,22 @@ the other side.
 Set `unattended_api_merge.enabled` to `true` to show an unattended API-to-API
 merge action. The action requires explicit confirmation because it takes a
 backup and then fully replaces both configured Ghostwriter template libraries.
-It automatically accepts only uniquely paired, exactly normalised titles and
-lossless field choices. Unresolved Findings and Observations remain stored in
-the newest unattended job for later manual review; unmatched templates are
-copied to both outputs. A failed destination can be retried from the live status
-page. A later manually approved output may still be synchronised even when the
-preliminary unattended sync succeeded.
+It pairs unique, exactly normalised titles before ordinary fuzzy matching. It
+can also automatically reconcile a fuzzy pair when its score meets
+`high_confidence_fuzzy_threshold` (90 by default) and each record is the unique
+best candidate for the other. Lower-confidence or ambiguous pairs remain for
+manual review. This canonical-first ordering also applies to normal Web and CLI
+runs, so an exact title counterpart cannot be consumed by an earlier fuzzy
+candidate. Unresolved Findings and Observations remain stored in the newest
+unattended job for later manual review; unmatched templates are copied to both
+outputs. Opening an unresolved review protects it from scheduled supersession
+for `manual_review_lease_minutes` (1440 by default). A failed destination can be
+retried from the live status page. A later manually approved output may still be
+synchronised even when the preliminary unattended sync succeeded.
 
 The optional `unattended_api_merge.webhook` sends an event for complete,
-partially completed, failed, or review-required outcomes. Configure an HTTPS
+partially completed, failed, or review-required outcomes, as well as import and
+scheduled-start failures that occur before a merge job exists. Configure an HTTPS
 `url`, a non-empty `secret`, and optionally `public_base_url`, timeout, and a
 maximum of one to five attempts. The exact JSON body is signed with HMAC-SHA256
 in `X-GhostMerge-Signature` as `sha256=<hex digest>`. Payloads contain only the
@@ -470,6 +483,8 @@ as well as `unattended_api_merge` itself:
 {
   "unattended_api_merge": {
     "enabled": true,
+    "high_confidence_fuzzy_threshold": 90,
+    "manual_review_lease_minutes": 1440,
     "schedule": {
       "enabled": true,
       "interval_minutes": 1440,
@@ -499,6 +514,10 @@ Scheduled runs use the same sensitivity checks, backups, bilateral destination
 states, retry paths, unresolved-item retention and webhook notification as a
 manually started unattended run. Enabling the schedule therefore authorises
 recurring backed-up full replacement of both configured API destinations.
+If either replacement fails after live deletion or creation begins, subsequent
+scheduled and manually started unattended runs pause. Retry the failed side;
+the scheduler resumes with a fresh full interval once the recovery state has
+cleared. Failures before destructive replacement do not create this pause.
 
 ### Merge and API operation states
 
@@ -1086,7 +1105,8 @@ output-approval, or output-ready state fields.
 ### Systemd web service
 
 The repository includes a systemd unit template and installer for running the
-Flask web frontend as a system service. Prepare a local config file first:
+Web frontend and unattended scheduler as a system service. Prepare a local
+config file first:
 
 ```bash
 printf '{}\n' > ghostmerge_config.json
@@ -1100,8 +1120,8 @@ in local config files.
 
 The installer uses `PROJECT_DIR/.venv` when it already exists. If it does not
 exist, the installer tries to discover a Pipenv virtualenv for the project. If
-neither contains Flask, a normal installation creates `PROJECT_DIR/.venv` and
-installs `requirements.txt` automatically.
+neither contains Flask and Gunicorn, a normal installation creates
+`PROJECT_DIR/.venv` and installs `requirements.txt` automatically.
 
 Inspect the generated service without writing to systemd:
 
@@ -1115,10 +1135,17 @@ Install the service:
 sudo ./install-systemd-service.sh
 ```
 
-By default the service binds Flask to `127.0.0.1:5000`, enables the unit at boot,
+By default the service binds a single Gunicorn worker to `127.0.0.1:5000`, enables the unit at boot,
 does not start it immediately, and runs as a dedicated locked `ghostmerge`
 system user/group. If the account does not already exist, the installer creates
 it without an interactive shell and without creating a home directory.
+
+The worker uses eight request threads so progress pages remain responsive while
+an operation runs. A single process owns the in-process scheduler and operation
+registry deterministically. Import and sync threads are non-daemon work, and the
+unit allows up to five minutes for graceful worker shutdown before systemd's
+final stop timeout. Avoid increasing the Gunicorn worker count without first
+moving scheduler ownership and background work to an external durable queue.
 
 During installation it checks that this account can read the app/config and
 write the project-local job, backup, and log paths used by the current app. The

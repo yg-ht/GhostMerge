@@ -126,6 +126,7 @@
     "api_key_auth_enabled": true,
     "api_key_query_param": "api_key",
     "api_key": "",
+    "session_secret": "",
     "allow_framing": true,
     "frame_ancestors": ["*"],
     "session_cookie_samesite": "None",
@@ -133,6 +134,8 @@
   },
   "unattended_api_merge": {
     "enabled": false,
+    "high_confidence_fuzzy_threshold": 90,
+    "manual_review_lease_minutes": 1440,
     "schedule": {
       "enabled": false,
       "interval_minutes": 1440,

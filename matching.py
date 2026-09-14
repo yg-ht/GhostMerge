@@ -27,6 +27,56 @@ def _normalise_records_before_matching(*record_lists: List[MergeRecord]) -> None
         for record in record_list:
             normalise_finding_record(record)
 
+
+def match_unique_canonical_titles(
+    list_left: List[MergeRecord],
+    list_right: List[MergeRecord],
+) -> Tuple[List[Dict[str, MergeRecord | float | str]], List[MergeRecord], List[MergeRecord]]:
+    """Pair unambiguous equal titles before any similarity-based selection.
+
+    Title identity is deliberately stricter than fuzzy similarity.  Resolving
+    these pairs first prevents a content-heavy near match from consuming an
+    exact counterpart and ensures timestamp authority is available even when
+    the remainder of the records differs too much to meet a fuzzy threshold.
+    Duplicate or blank titles remain untouched for later review.
+    """
+    _normalise_records_before_matching(list_left, list_right)
+    left_by_title: dict[str, list[int]] = {}
+    right_by_title: dict[str, list[int]] = {}
+    for index, record in enumerate(list_left):
+        title = normalise_text_for_matching(record.title)
+        if title:
+            left_by_title.setdefault(title, []).append(index)
+    for index, record in enumerate(list_right):
+        title = normalise_text_for_matching(record.title)
+        if title:
+            right_by_title.setdefault(title, []).append(index)
+
+    matched_left: set[int] = set()
+    matched_right: set[int] = set()
+    matches: List[Dict[str, MergeRecord | float | str]] = []
+    for left_index, left_record in enumerate(list_left):
+        title = normalise_text_for_matching(left_record.title)
+        left_indices = left_by_title.get(title, [])
+        right_indices = right_by_title.get(title, [])
+        if len(left_indices) != 1 or len(right_indices) != 1:
+            continue
+        right_index = right_indices[0]
+        matches.append(
+            {
+                "left": left_record,
+                "right": list_right[right_index],
+                "score": score_record_similarity(left_record, list_right[right_index]),
+                "origin": "canonical_title",
+            }
+        )
+        matched_left.add(left_index)
+        matched_right.add(right_index)
+
+    unmatched_left = [record for index, record in enumerate(list_left) if index not in matched_left]
+    unmatched_right = [record for index, record in enumerate(list_right) if index not in matched_right]
+    return matches, unmatched_left, unmatched_right
+
 def score_finding_similarity(finding_left: Finding, finding_right: Finding) -> float:
     """
     Computes a similarity score between two findings.
@@ -302,9 +352,18 @@ def fuzzy_match_records(
     # Findings and observations share the same recursive normalisation boundary.
     _normalise_records_before_matching(list_left, list_right)
 
-    matches: List[Dict[str, MergeRecord | float]] = []
+    matches: List[Dict[str, MergeRecord | float | bool]] = []
     unmatched_left: List[MergeRecord] = []
     matched_indices_right = set()
+
+    # Retain the complete score matrix so unattended reconciliation can
+    # distinguish a genuinely mutual best match from a high score produced by
+    # an ambiguous cluster of similarly named records.  Interactive matching
+    # still receives the same greedy candidate set as before.
+    score_matrix = [
+        [score_record_similarity(left, right) for right in list_right]
+        for left in list_left
+    ]
 
     for idx_left, record_left in enumerate(list_left):
         best_match = None
@@ -315,14 +374,38 @@ def fuzzy_match_records(
             if idx_right in matched_indices_right:
                 continue
 
-            score = score_record_similarity(record_left, record_right)
+            score = score_matrix[idx_left][idx_right]
             if score > best_score:
                 best_score = score
                 best_match = record_right
                 best_idx_right = idx_right
 
         if best_score >= threshold and best_match:
-            matches.append({"left": record_left, "right": best_match, "score": best_score})
+            left_scores = score_matrix[idx_left]
+            left_best_score = max(left_scores, default=0)
+            left_best_indices = {
+                index
+                for index, score in enumerate(left_scores)
+                if score == left_best_score
+            }
+            right_scores = [row[best_idx_right] for row in score_matrix]
+            right_best_score = max(right_scores, default=0)
+            right_best_indices = {
+                index
+                for index, score in enumerate(right_scores)
+                if score == right_best_score
+            }
+            matches.append(
+                {
+                    "left": record_left,
+                    "right": best_match,
+                    "score": best_score,
+                    "unattended_unambiguous": (
+                        left_best_indices == {best_idx_right}
+                        and right_best_indices == {idx_left}
+                    ),
+                }
+            )
             matched_indices_right.add(best_idx_right)
         else:
             unmatched_left.append(record_left)

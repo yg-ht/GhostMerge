@@ -22,7 +22,7 @@ TEMPLATE_PATH="${PROJECT_DIR}/packaging/systemd/ghostmerge-web.service"
 
 usage() {
     cat <<'USAGE'
-Install GhostMerge's Flask web frontend as a systemd system service.
+Install GhostMerge's production web frontend as a systemd system service.
 
 Usage:
   ./install-systemd-service.sh [options]
@@ -39,8 +39,8 @@ Options:
   --no-check-access       Skip service-user filesystem access checks.
   --install-deps          Create PROJECT_DIR/.venv and install requirements if no venv is usable. This is the default.
   --no-install-deps       Refuse to install Python dependencies automatically.
-  --host ADDRESS          Flask bind address. Defaults to 127.0.0.1.
-  --port PORT             Flask bind port. Defaults to 5000.
+  --host ADDRESS          Web bind address. Defaults to 127.0.0.1.
+  --port PORT             Web bind port. Defaults to 5000.
   --enable                Enable the service at boot. This is the default.
   --no-enable             Do not enable the service at boot.
   --start                 Start or restart the service after installation.
@@ -187,10 +187,10 @@ parse_args() {
     done
 }
 
-venv_has_flask() {
+venv_has_runtime() {
     local venv_dir="$1"
 
-    [[ -n "${venv_dir}" && -x "${venv_dir}/bin/flask" ]]
+    [[ -n "${venv_dir}" && -x "${venv_dir}/bin/flask" && -x "${venv_dir}/bin/gunicorn" ]]
 }
 
 discover_pipenv_venv() {
@@ -206,7 +206,7 @@ discover_pipenv_venv() {
         printf 'Ignoring Pipenv virtualenv under /root because the dedicated service user should not depend on root-owned private environments: %s\n' "${discovered}" >&2
         return 1
     fi
-    venv_has_flask "${discovered}" || return 1
+    venv_has_runtime "${discovered}" || return 1
 
     printf '%s\n' "${discovered}"
 }
@@ -216,17 +216,17 @@ install_project_venv() {
 
     (( INSTALL_DEPS == 1 )) || return 1
     (( DRY_RUN == 0 )) || return 1
-    [[ -f "${PROJECT_DIR}/requirements.txt" ]] || fail "No usable Flask executable found and requirements.txt is missing."
+    [[ -f "${PROJECT_DIR}/requirements.txt" ]] || fail "No usable web runtime found and requirements.txt is missing."
 
     if command -v python3 >/dev/null 2>&1; then
         python_bin="python3"
     elif command -v python >/dev/null 2>&1; then
         python_bin="python"
     else
-        fail "No usable Flask executable found and neither python3 nor python is available to create ${PROJECT_DIR}/.venv."
+        fail "No usable web runtime found and neither python3 nor python is available to create ${PROJECT_DIR}/.venv."
     fi
 
-    printf 'No usable Flask executable found. Creating project virtualenv at %s/.venv\n' "${PROJECT_DIR}" >&2
+    printf 'No usable web runtime found. Creating project virtualenv at %s/.venv\n' "${PROJECT_DIR}" >&2
     "${python_bin}" -m venv "${PROJECT_DIR}/.venv" || fail "Could not create ${PROJECT_DIR}/.venv. Install the Python venv package for ${python_bin}, or provide --venv-dir."
     "${PROJECT_DIR}/.venv/bin/python" -m pip install --upgrade pip || fail "Could not upgrade pip in ${PROJECT_DIR}/.venv."
     "${PROJECT_DIR}/.venv/bin/python" -m pip install -r "${PROJECT_DIR}/requirements.txt" || fail "Could not install requirements.txt into ${PROJECT_DIR}/.venv."
@@ -237,11 +237,11 @@ resolve_venv_dir() {
     local discovered
 
     if (( VENV_DIR_EXPLICIT == 1 )); then
-        venv_has_flask "${VENV_DIR}" || fail "Flask executable not found or not executable: ${VENV_DIR}/bin/flask"
+        venv_has_runtime "${VENV_DIR}" || fail "Flask and Gunicorn executables are required in ${VENV_DIR}/bin"
         return
     fi
 
-    if venv_has_flask "${PROJECT_DIR}/.venv"; then
+    if venv_has_runtime "${PROJECT_DIR}/.venv"; then
         VENV_DIR="${PROJECT_DIR}/.venv"
         return
     fi
@@ -251,8 +251,8 @@ resolve_venv_dir() {
         return
     fi
 
-    install_project_venv || fail "Flask executable not found or not executable. Create ${PROJECT_DIR}/.venv, run pipenv install without sudo and pass --venv-dir \"\$(pipenv --venv)\", or re-run with --install-deps."
-    venv_has_flask "${VENV_DIR}" || fail "Dependency installation completed but Flask executable is still missing: ${VENV_DIR}/bin/flask"
+    install_project_venv || fail "Flask and Gunicorn executables were not found. Create ${PROJECT_DIR}/.venv, run pipenv install without sudo and pass --venv-dir \"\$(pipenv --venv)\", or re-run with --install-deps."
+    venv_has_runtime "${VENV_DIR}" || fail "Dependency installation completed but the Flask/Gunicorn runtime is still incomplete: ${VENV_DIR}/bin"
 }
 
 validate_inputs() {
@@ -340,6 +340,7 @@ check_service_account_access() {
         test -r "$1/web_app.py"
         test -r "$1/ghostmerge_config.json"
         test -x "$2/bin/flask"
+        test -x "$2/bin/gunicorn"
         test -w "$1/ghostmerge_web_jobs"
         test -w "$1/ghostmerge_api_backups"
         test -w "$1/ghostmerge.log"

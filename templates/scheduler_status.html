@@ -18,6 +18,7 @@
     {% if state.current_import_id %}<dt>Current import</dt><dd>{{ state.current_import_id }} — {{ state.current_import_status|default("running")|replace("_", " ")|title }}</dd>{% endif %}
     {% if state.current_job_id %}<dt>Current merge job</dt><dd><a href="{{ url_for('unattended_status', job_id=state.current_job_id) }}">{{ state.current_job_id }}</a></dd>{% endif %}
     {% if state.last_job_id %}<dt>Last merge job</dt><dd><a href="{{ url_for('unattended_status', job_id=state.last_job_id) }}">{{ state.last_job_id }}</a></dd>{% endif %}
+    {% if state.recovery_job_id %}<dt>Recovery job</dt><dd><a href="{{ url_for('unattended_status', job_id=state.recovery_job_id) }}">{{ state.recovery_job_id }}</a></dd>{% endif %}
     <dt>Message</dt><dd>{{ state.message|default("No scheduler state is available.") }}</dd>
     <dt>Left destination</dt><dd>{{ api_servers.left.name }} — {{ "Configured" if api_servers.left.configured else "Not configured" }}</dd>
     <dt>Right destination</dt><dd>{{ api_servers.right.name }} — {{ "Configured" if api_servers.right.configured else "Not configured" }}</dd>
