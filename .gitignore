@@ -1,5 +1,8 @@
 /.venv/
 /.ghostmerge-*-venv.*/
+/.lesshst
+/Pipfile
+/Pipfile.lock
 .codex-tmp/
 .idea/
 __pycache__/

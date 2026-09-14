@@ -445,6 +445,10 @@ remove_temporary_files
         candidate_source = Path(tmp_dir.name) / "candidate-source"
         candidate_source.mkdir()
         (candidate_source / "requirements.txt").write_text("", encoding="utf-8")
+        (candidate_source / "candidate_module.py").write_text(
+            "CANDIDATE_READY = True\n", encoding="utf-8"
+        )
+        candidate_source.chmod(0o555)
         harness = r'''
 source "$1"
 SERVICE_NAME="ghostmerge-web"
@@ -473,11 +477,14 @@ remove_temporary_files
             candidate_path = Path(result.stdout.strip().splitlines()[-1])
             original_runtime_remained = (project_dir / ".venv" / "bin" / "python").exists()
             candidate_was_removed = not candidate_path.exists()
+            source_cache_was_not_created = not (candidate_source / "__pycache__").exists()
+            candidate_source.chmod(0o755)
 
         self.assertEqual(result.returncode, 0, f"{result.stderr}\n{result.stdout}")
         self.assertNotEqual(candidate_path, project_dir / ".venv")
         self.assertTrue(original_runtime_remained)
         self.assertTrue(candidate_was_removed)
+        self.assertTrue(source_cache_was_not_created)
 
 
 if __name__ == "__main__":
