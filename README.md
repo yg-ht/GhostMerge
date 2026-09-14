@@ -1090,8 +1090,8 @@ be run without pytest when needed:
 
 The suite covers CLI-critical behaviours, model coercion, normalisation,
 matching, merge helpers, sensitivity helpers, config loading, systemd installer
-behaviour, web access controls, API backup handling, and Ghostwriter API sync
-safety checks. Its end-to-end workflow matrix also compares sensitivity-enabled
+and updater behaviour, web access controls, API backup handling, and Ghostwriter
+API sync safety checks. Its end-to-end workflow matrix also compares sensitivity-enabled
 CLI and Web outputs through pre-match replacement, conflict resolution,
 unmatched-record copying, post-merge sensitivity review, resequencing, and final
 preview approval through durable serialisation. Failure regressions require
@@ -1150,7 +1150,10 @@ moving scheduler ownership and background work to an external durable queue.
 During installation it checks that this account can read the app/config and
 write the project-local job, backup, and log paths used by the current app. The
 installer creates those writable paths for the service user without changing
-ownership of the whole checkout. Use explicit options when needed:
+ownership of the whole checkout. It also records non-secret deployment
+coordinates in `/etc/ghostmerge/ghostmerge-web.json`; the updater uses these to
+preserve the selected service account, virtual environment and bind address.
+Use explicit options when needed:
 
 ```bash
 sudo ./install-systemd-service.sh \
@@ -1174,6 +1177,68 @@ To use an existing non-root Pipenv environment instead of the project-local
 pipenv install -r requirements.txt
 sudo ./install-systemd-service.sh --venv-dir "$(pipenv --venv)"
 ```
+
+#### Updating an installed service
+
+When upgrading an installation created before the updater was introduced,
+first pull this release so the script is present, then let the updater reconcile
+the current checkout, dependencies, unit and new deployment metadata in one go:
+
+```bash
+sudo ./update-systemd-service.sh --repair-current
+```
+
+For later releases, update from the clean installed checkout with:
+
+```bash
+sudo ./update-systemd-service.sh
+```
+
+The updater obtains the configured branch upstream, accepts only a
+fast-forward, stages and syntax-checks the candidate, and refuses to proceed
+while an import, source check, unattended merge or outbound sync is active. It
+builds a separate versioned virtual environment from the candidate
+`requirements.txt` and runs the complete test suite while the current service
+remains available. It then gates new work, stops the service, updates the
+checkout, refreshes the systemd unit to use the candidate environment and
+restarts the service. An authenticated-page-compatible GhostMerge HTTP
+readiness check must succeed. If a post-stop step fails, it restores the prior
+Git revision, unit and deployment metadata, switches back to the untouched
+prior virtual environment and restarts the previous version.
+
+Local `ghostmerge_config.json` and `ghostmerge_config.json.local` files are
+validated but never generated, merged or overwritten. New configuration keys
+continue to come from `ghostmerge_config.example.json` through the existing
+recursive default merge, so an older local override automatically inherits new
+defaults. Invalid local JSON stops the update before the service is changed.
+
+Useful updater modes are:
+
+```bash
+# Read-only local installation/configuration/state preflight (sudo is not required).
+./update-systemd-service.sh --dry-run
+
+# Reinstall dependencies and the unit for the checked-out revision without fetching.
+sudo ./update-systemd-service.sh --repair-current
+
+# Emergency/slow-host option; compile, import and dependency checks still run.
+sudo ./update-systemd-service.sh --skip-tests
+```
+
+`--dry-run` does not contact the Git remote or exercise mutating update and
+rollback steps. Run the updater from the installed checkout. It refuses dirty
+or detached checkouts, a mismatched installed project path, unsafe unit/metadata
+ownership, an unreadable operation-state directory, and non-fast-forward
+history. The maintenance gate prevents new POST actions and scheduled runs
+during the final active-operation check; ordinary read-only pages remain
+available until the service is stopped. If a stale lock or state file prevents
+an update, inspect and recover the recorded operation rather than deleting it
+without confirming its outcome.
+
+Successful updates retain earlier virtual environments so the active unit is
+never dependent on an environment modified in place. They can be removed later
+after the updated service has been observed in normal operation; never remove
+the environment currently recorded in `/etc/ghostmerge/ghostmerge-web.json`.
 
 Operational commands:
 

@@ -18,6 +18,7 @@ CREATE_SERVICE_USER=1
 CHECK_SERVICE_ACCESS=1
 INSTALL_DEPS=1
 UNIT_DIR="/etc/systemd/system"
+METADATA_DIR="${GHOSTMERGE_METADATA_DIR:-/etc/ghostmerge}"
 TEMPLATE_PATH="${PROJECT_DIR}/packaging/systemd/ghostmerge-web.service"
 
 usage() {
@@ -82,6 +83,12 @@ validate_plain_token() {
     # Keep fields passed to systemd as simple argv tokens so they cannot smuggle extra arguments.
     [[ -n "${value}" ]] || fail "${label} cannot be empty."
     [[ "${value}" != *[[:space:]]* ]] || fail "${label} must not contain whitespace."
+}
+
+validate_service_name() {
+    [[ "${SERVICE_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]*$ ]] || \
+        fail "--service-name may contain only letters, numbers, dots, underscores, @ and hyphens, and must start with a letter or number."
+    [[ "${SERVICE_NAME}" != *.service ]] || fail "--service-name should not include the .service suffix."
 }
 
 validate_port() {
@@ -274,7 +281,7 @@ validate_inputs() {
     [[ "${VENV_DIR}" != *[[:space:]]* ]] || fail "Virtualenv directory must not contain whitespace because systemd ExecStart paths are not shell-expanded."
 
     validate_plain_token "--service-name" "${SERVICE_NAME}"
-    [[ "${SERVICE_NAME}" != *.service ]] || fail "--service-name should not include the .service suffix."
+    validate_service_name
     validate_plain_token "--user" "${SERVICE_USER}"
     validate_plain_token "--group" "${SERVICE_GROUP}"
     [[ "${SERVICE_USER}" != "root" ]] || fail "The service must not run as root. Choose a dedicated unprivileged user."
@@ -378,6 +385,30 @@ render_unit() {
         "${TEMPLATE_PATH}"
 }
 
+write_deployment_metadata() {
+    local metadata_path="${METADATA_DIR}/${SERVICE_NAME}.json"
+    local temp_file
+
+    install -d -m 0755 -o root -g root "${METADATA_DIR}"
+    temp_file="$(mktemp)"
+    "${VENV_DIR}/bin/python" -c '
+import json
+import pathlib
+import sys
+
+keys = ("service_name", "project_dir", "venv_dir", "service_user", "service_group", "host", "port")
+pathlib.Path(sys.argv[1]).write_text(
+    json.dumps(dict(zip(keys, sys.argv[2:], strict=True)), indent=2) + "\n",
+    encoding="utf-8",
+)
+' "${temp_file}" "${SERVICE_NAME}" "${PROJECT_DIR}" "${VENV_DIR}" \
+        "${SERVICE_USER}" "${SERVICE_GROUP}" "${HOST}" "${PORT}"
+    # Deployment coordinates contain no credentials and remain readable so
+    # operators can run the updater's non-mutating --dry-run preflight.
+    install -m 0644 -o root -g root "${temp_file}" "${metadata_path}"
+    rm -f "${temp_file}"
+}
+
 install_unit() {
     local service_file="${UNIT_DIR}/${SERVICE_NAME}.service"
     local temp_file
@@ -390,6 +421,7 @@ install_unit() {
     render_unit > "${temp_file}"
     install -m 0644 "${temp_file}" "${service_file}"
     rm -f "${temp_file}"
+    write_deployment_metadata
 
     systemctl daemon-reload
     if (( ENABLE_SERVICE == 1 )); then

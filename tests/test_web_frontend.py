@@ -1610,6 +1610,23 @@ class FlaskRouteTests(unittest.TestCase):
         submitted["_csrf_token"] = self.csrf_token()
         return submitted
 
+    def test_deployment_maintenance_allows_reads_but_blocks_mutations(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        maintenance_path = jobs_dir / ".deployment-maintenance"
+        maintenance_path.touch()
+
+        page = self.client.get("/")
+        blocked = self.client.post("/jobs", data=self.with_csrf())
+
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(blocked.status_code, 503)
+        self.assertIn(b"deployment maintenance mode", blocked.data)
+        self.assertEqual(list(jobs_dir.glob("*/job.json")), [])
+
+        maintenance_path.unlink()
+        unblocked = self.client.post("/jobs", data=self.with_csrf())
+        self.assertNotEqual(unblocked.status_code, 503)
+
     def test_configured_session_secret_is_stable_across_app_instances(self):
         config = get_config()
         config["web_access"] = web_access_enabled(session_secret="stable-session-secret")
@@ -3586,6 +3603,22 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(before_due["status"], "waiting")
         due_start.assert_called_once()
         self.assertEqual(due["current_import_id"], "dueimport123")
+
+    def test_scheduler_does_not_start_work_during_deployment_maintenance(self):
+        self.enable_unattended_schedule(run_immediately=True)
+        jobs_dir = Path(self.tmp_dir.name)
+        (jobs_dir / ".deployment-maintenance").touch()
+
+        with patch("web_app._start_import_thread") as start:
+            state = _scheduler_tick(
+                self.app,
+                jobs_dir,
+                now=datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc),
+            )
+
+        start.assert_not_called()
+        self.assertEqual(state["status"], "maintenance")
+        self.assertIn("paused", state["message"])
 
     def test_scheduler_starts_due_unattended_import_with_scheduled_provenance(self):
         self.enable_unattended_schedule(run_immediately=True)
