@@ -20,17 +20,17 @@ class SystemdInstallerTests(unittest.TestCase):
             ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__", ".pytest_cache"),
         )
         if create_venv:
-            self.write_fake_flask(project_dir / ".venv")
+            self.write_fake_runtime(project_dir / ".venv")
         shutil.copyfile(project_dir / "ghostmerge_config.example.json", project_dir / "ghostmerge_config.json")
         return tmp_dir, project_dir
 
-    def write_fake_flask(self, venv_dir):
+    def write_fake_runtime(self, venv_dir):
         venv_bin = venv_dir / "bin"
         venv_bin.mkdir(parents=True)
-        flask_path = venv_bin / "flask"
-        flask_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        flask_path.chmod(flask_path.stat().st_mode | stat.S_IXUSR)
-        return flask_path
+        for executable in ("flask", "gunicorn"):
+            path = venv_bin / executable
+            path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
     def write_fake_pipenv(self, bin_dir, venv_dir):
         bin_dir.mkdir(parents=True)
@@ -64,13 +64,14 @@ class SystemdInstallerTests(unittest.TestCase):
             result = self.run_installer(project_dir)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Description=GhostMerge Flask web frontend", result.stdout)
+        self.assertIn("Description=GhostMerge web frontend and unattended worker", result.stdout)
         self.assertIn("User=ghostmerge", result.stdout)
         self.assertIn("Group=ghostmerge", result.stdout)
         self.assertIn(f"Documentation=file://{project_dir}/README.md", result.stdout)
         self.assertIn(f"WorkingDirectory={project_dir}", result.stdout)
         self.assertIn(
-            f"ExecStart={project_dir}/.venv/bin/flask --app web_app:create_app run --host 127.0.0.1 --port 5000",
+            f"ExecStart={project_dir}/.venv/bin/gunicorn --bind 127.0.0.1:5000 --workers 1 "
+            "--worker-class gthread --threads 8 --timeout 120 --graceful-timeout 300 web_app:create_app()",
             result.stdout,
         )
         self.assertIn(f"ReadWritePaths={project_dir}", result.stdout)
@@ -81,14 +82,14 @@ class SystemdInstallerTests(unittest.TestCase):
             result = self.run_installer(project_dir, "--host", "0.0.0.0", "--port", "8080")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("--host 0.0.0.0 --port 8080", result.stdout)
+        self.assertIn("--bind 0.0.0.0:8080", result.stdout)
 
     def test_dry_run_uses_pipenv_virtualenv_when_project_venv_is_missing(self):
         tmp_dir, project_dir = self.make_project_copy(create_venv=False)
         with tmp_dir:
             pipenv_venv = Path(tmp_dir.name) / "pipenv-venv"
             fake_bin = Path(tmp_dir.name) / "bin"
-            self.write_fake_flask(pipenv_venv)
+            self.write_fake_runtime(pipenv_venv)
             self.write_fake_pipenv(fake_bin, pipenv_venv)
             result = self.run_installer(
                 project_dir,
@@ -97,7 +98,8 @@ class SystemdInstallerTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(
-            f"ExecStart={pipenv_venv}/bin/flask --app web_app:create_app run --host 127.0.0.1 --port 5000",
+            f"ExecStart={pipenv_venv}/bin/gunicorn --bind 127.0.0.1:5000 --workers 1 "
+            "--worker-class gthread --threads 8 --timeout 120 --graceful-timeout 300 web_app:create_app()",
             result.stdout,
         )
 
@@ -111,7 +113,7 @@ class SystemdInstallerTests(unittest.TestCase):
             result = self.run_installer(project_dir, "--no-install-deps")
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Flask executable not found or not executable", result.stderr)
+        self.assertIn("Flask and Gunicorn executables were not found", result.stderr)
 
     def test_dry_run_ignores_root_pipenv_virtualenv(self):
         tmp_dir, project_dir = self.make_project_copy(create_venv=False)

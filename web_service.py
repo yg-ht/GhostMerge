@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from diffing import DiffLine, FieldDiff, build_semantic_diff, split_field_diff_for_display
 from globals import get_config
-from matching import fuzzy_match_records
+from matching import fuzzy_match_records, match_unique_canonical_titles
 from merge import (
     ResolvedWinner,
     apply_automatic_resolution,
@@ -350,9 +350,12 @@ def create_merge_job(
             sensitivity_terms,
         )
 
-    matches: list[dict[str, Any]] = []
-    unmatched_left = findings_left
-    unmatched_right = findings_right
+    matches, unmatched_left, unmatched_right = match_unique_canonical_titles(
+        findings_left,
+        findings_right,
+    )
+    for match in matches:
+        prepare_merge_pair(match)
     for fuzzy_threshold in CONFIG["fuzzy_match_threshold"]:
         new_matches, unmatched_left, unmatched_right = fuzzy_match_records(
             unmatched_left,
@@ -360,12 +363,15 @@ def create_merge_job(
             fuzzy_threshold,
         )
         for match in new_matches:
+            match["origin"] = "fuzzy"
             prepare_merge_pair(match)
         matches.extend(new_matches)
 
-    observation_matches: list[dict[str, Any]] = []
-    unmatched_observations_left = observations_left
-    unmatched_observations_right = observations_right
+    observation_matches, unmatched_observations_left, unmatched_observations_right = (
+        match_unique_canonical_titles(observations_left, observations_right)
+    )
+    for match in observation_matches:
+        prepare_merge_pair(match)
     for fuzzy_threshold in CONFIG["fuzzy_match_threshold"]:
         new_matches, unmatched_observations_left, unmatched_observations_right = fuzzy_match_records(
             unmatched_observations_left,
@@ -373,6 +379,7 @@ def create_merge_job(
             fuzzy_threshold,
         )
         for match in new_matches:
+            match["origin"] = "fuzzy"
             prepare_merge_pair(match)
         observation_matches.extend(new_matches)
 
@@ -423,14 +430,33 @@ def _is_safe_unattended_pair(
     left_title_counts: dict[str, int],
     right_title_counts: dict[str, int],
 ) -> bool:
-    """Require one unambiguous, exact title identity on both API sources."""
+    """Require an unambiguous canonical identity or a high-confidence fuzzy pair."""
     left_title = _canonical_automatic_title(match["left"])
     right_title = _canonical_automatic_title(match["right"])
-    return bool(
+    titles_are_unique = bool(
         left_title
-        and left_title == right_title
         and left_title_counts.get(left_title) == 1
         and right_title_counts.get(right_title) == 1
+    )
+    if not titles_are_unique:
+        return False
+    if left_title == right_title:
+        return True
+    return _is_high_confidence_fuzzy_match(match)
+
+
+def _is_high_confidence_fuzzy_match(match: dict[str, Any]) -> bool:
+    """Return whether a prepared fuzzy pair crosses the unattended boundary."""
+    threshold = float(
+        (CONFIG.get("unattended_api_merge") or {}).get(
+            "high_confidence_fuzzy_threshold",
+            90,
+        )
+    )
+    return (
+        match.get("origin") == "fuzzy"
+        and match.get("unattended_unambiguous") is True
+        and float(match.get("score", 0)) >= threshold
     )
 
 
@@ -473,6 +499,17 @@ def _apply_lossless_unattended_fields(match: dict[str, Any]) -> list[str]:
         comparable_left = extra_fields_for_comparison(left_value) if field_name == "extra_fields" else left_value
         comparable_right = extra_fields_for_comparison(right_value) if field_name == "extra_fields" else right_value
         if comparable_left == comparable_right:
+            continue
+
+        if field_name == "title" and _is_high_confidence_fuzzy_match(match):
+            offered = copy.deepcopy(match["auto_value"].get(field_name))
+            set_record_pair_field_values(
+                match["left"],
+                match["right"],
+                field_name,
+                offered,
+                copy.deepcopy(offered),
+            )
             continue
 
         if field_name == "tags":
@@ -1650,6 +1687,7 @@ def job_to_dict(job: MergeJob) -> dict[str, Any]:
             "auto_value": _finding_to_state(match["auto_value"]),
             "auto_side": _winners_to_state(match["auto_side"]),
             "origin": match.get("origin", "automatic"),
+            "unattended_unambiguous": match.get("unattended_unambiguous", False),
             "automatic_resolution": match.get("automatic_resolution"),
             "unattended_unresolved_fields": match.get("unattended_unresolved_fields"),
         }
@@ -1663,6 +1701,7 @@ def job_to_dict(job: MergeJob) -> dict[str, Any]:
             "auto_value": _record_to_state(match["auto_value"]),
             "auto_side": _winners_to_state(match["auto_side"]),
             "origin": match.get("origin", "automatic"),
+            "unattended_unambiguous": match.get("unattended_unambiguous", False),
             "automatic_resolution": match.get("automatic_resolution"),
             "unattended_unresolved_fields": match.get("unattended_unresolved_fields"),
         }
@@ -1695,6 +1734,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
                 "auto_value": _finding_from_state(match["auto_value"]),
                 "auto_side": _winners_from_state(match["auto_side"]),
                 "origin": match.get("origin", "automatic"),
+                "unattended_unambiguous": bool(match.get("unattended_unambiguous", False)),
                 "automatic_resolution": match.get("automatic_resolution"),
                 "unattended_unresolved_fields": match.get("unattended_unresolved_fields"),
             }
@@ -1708,6 +1748,7 @@ def job_from_dict(data: dict[str, Any]) -> MergeJob:
                 "auto_value": _observation_from_state(match["auto_value"]),
                 "auto_side": _winners_from_state(match["auto_side"]),
                 "origin": match.get("origin", "automatic"),
+                "unattended_unambiguous": bool(match.get("unattended_unambiguous", False)),
                 "automatic_resolution": match.get("automatic_resolution"),
                 "unattended_unresolved_fields": match.get("unattended_unresolved_fields"),
             }

@@ -643,6 +643,107 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(automatic_left["description"], "Newer")
         self.assertEqual(automatic_right["description"], "Newer")
 
+    def test_canonical_title_pairing_precedes_fuzzy_threshold_and_applies_newer_timestamp(self):
+        older_mapping = {"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}}
+        newer_mapping = {"ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00Z"}}
+        job = create_merge_job(
+            [record(
+                title="Shared canonical title",
+                description="",
+                impact="",
+                mitigation="",
+                replication_steps="",
+                tags="",
+                extra_fields=older_mapping,
+            )],
+            [record(
+                id="2",
+                title="Shared canonical title",
+                description="Newer populated description",
+                impact="Newer impact",
+                mitigation="Newer mitigation",
+                replication_steps="Newer steps",
+                tags="newer",
+                extra_fields=newer_mapping,
+            )],
+            input_sources={"left": "api", "right": "api"},
+        )
+
+        self.assertEqual(len(job.matches), 1)
+        self.assertEqual(job.matches[0]["origin"], "canonical_title")
+        self.assertLess(job.matches[0]["score"], 70)
+
+        result = run_unattended_reconciliation(job)
+
+        self.assertEqual(job.unattended["pending_findings"], 0)
+        self.assertEqual(len(result.left_records), 1)
+        self.assertEqual(len(result.right_records), 1)
+        self.assertEqual(result.left_records[0]["description"], "Newer populated description")
+
+    def test_high_confidence_fuzzy_pair_can_be_reconciled_unattended(self):
+        job = create_merge_job(
+            [record(title="Cross-site scripting in customer login")],
+            [record(id="2", title="Customer login cross-site scripting")],
+            input_sources={"left": "api", "right": "api"},
+        )
+
+        self.assertEqual(len(job.matches), 1)
+        self.assertEqual(job.matches[0]["origin"], "fuzzy")
+        self.assertGreaterEqual(job.matches[0]["score"], 90)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_job(job, Path(tmp_dir))
+            job = load_job(Path(tmp_dir), job.job_id)
+        self.assertTrue(job.matches[0]["unattended_unambiguous"])
+
+        run_unattended_reconciliation(job)
+
+        self.assertEqual(job.unattended["automatic_findings"], 1)
+        self.assertEqual(job.unattended["pending_findings"], 0)
+
+    def test_lower_confidence_fuzzy_pair_still_requires_manual_review(self):
+        get_config()["unattended_api_merge"]["high_confidence_fuzzy_threshold"] = 100
+        job = create_merge_job(
+            [record(title="Cross-site scripting in login", description="Left detail")],
+            [record(id="2", title="Login cross-site scripting", description="Right detail")],
+            input_sources={"left": "api", "right": "api"},
+        )
+
+        self.assertEqual(len(job.matches), 1)
+        self.assertEqual(job.matches[0]["origin"], "fuzzy")
+
+        run_unattended_reconciliation(job)
+
+        self.assertEqual(job.unattended["automatic_findings"], 0)
+        self.assertEqual(job.unattended["pending_findings"], 1)
+
+    def test_high_scoring_but_ambiguous_fuzzy_pair_requires_manual_review(self):
+        scores = {
+            ("Left candidate alpha", "Right candidate"): 95,
+            ("Left candidate beta", "Right candidate"): 95,
+        }
+
+        def score_pair(left, right):
+            return scores[(left.title, right.title)]
+
+        with patch("matching.score_record_similarity", side_effect=score_pair):
+            job = create_merge_job(
+                [
+                    record(title="Left candidate alpha"),
+                    record(id="2", title="Left candidate beta"),
+                ],
+                [record(id="3", title="Right candidate")],
+                input_sources={"left": "api", "right": "api"},
+            )
+
+        self.assertEqual(len(job.matches), 1)
+        self.assertFalse(job.matches[0]["unattended_unambiguous"])
+
+        run_unattended_reconciliation(job)
+
+        self.assertEqual(job.unattended["automatic_findings"], 0)
+        self.assertEqual(job.unattended["pending_findings"], 1)
+
     def test_unattended_reconciliation_leaves_duplicate_title_matches_manual(self):
         job = create_merge_job(
             [record(id="1", title="Duplicate"), record(id="2", title="Duplicate")],
@@ -1508,6 +1609,30 @@ class FlaskRouteTests(unittest.TestCase):
         submitted = dict(data or {})
         submitted["_csrf_token"] = self.csrf_token()
         return submitted
+
+    def test_configured_session_secret_is_stable_across_app_instances(self):
+        config = get_config()
+        config["web_access"] = web_access_enabled(session_secret="stable-session-secret")
+        first_dir = Path(self.tmp_dir.name) / "first"
+        second_dir = Path(self.tmp_dir.name) / "second"
+
+        first = create_app(
+            {
+                "TESTING": True,
+                "GHOSTMERGE_JOBS_DIR": first_dir,
+                "GHOSTMERGE_START_SCHEDULER": False,
+            }
+        )
+        second = create_app(
+            {
+                "TESTING": True,
+                "GHOSTMERGE_JOBS_DIR": second_dir,
+                "GHOSTMERGE_START_SCHEDULER": False,
+            }
+        )
+
+        self.assertEqual(first.config["SECRET_KEY"], second.config["SECRET_KEY"])
+        self.assertNotEqual(first.config["SECRET_KEY"], "stable-session-secret")
 
     def with_review_action(self, job_id, data=None):
         page = self.client.get(f"/jobs/{job_id}/conflicts")
@@ -3214,6 +3339,32 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertTrue((jobs_dir / ordinary.job_id).exists())
         self.assertTrue((jobs_dir / newest.job_id).exists())
 
+    def test_unattended_retention_preserves_an_active_manual_review_lease(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        older = create_merge_job(
+            [record(title="Leased conflict", description="left")],
+            [record(id="2", title="Leased conflict", description="right")],
+            job_id="leasedunattended123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        run_unattended_reconciliation(older)
+        older.unattended["review_lease_until"] = (
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        ).isoformat()
+        save_job(older, jobs_dir)
+        newest = create_merge_job(
+            [record(title="New conflict", description="left")],
+            [record(id="3", title="New conflict", description="right")],
+            job_id="newerleasedjob123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        run_unattended_reconciliation(newest)
+        save_job(newest, jobs_dir)
+
+        _discard_superseded_unattended_jobs(jobs_dir, newest.job_id)
+
+        self.assertTrue((jobs_dir / older.job_id).exists())
+
     def test_unattended_webhook_is_signed_and_contains_no_record_content(self):
         jobs_dir = Path(self.tmp_dir.name)
         job = create_merge_job(
@@ -3257,6 +3408,59 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(request_object.headers["X-ghostmerge-signature"], f"sha256={expected}")
         self.assertEqual(load_job(jobs_dir, job.job_id).unattended["webhook"]["status"], "delivered")
 
+    def test_unattended_import_failure_sends_pre_job_webhook(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        import_id = "failedprejobimport123"
+        imports_dir = jobs_dir / "api_imports"
+        imports_dir.mkdir()
+        (imports_dir / f"{import_id}.json").write_text(
+            json.dumps(
+                {
+                    "import_id": import_id,
+                    "input_sources": {"left": "api", "right": "api"},
+                    "input_source_names": {
+                        "left": "Left test API",
+                        "right": "Right test API",
+                    },
+                    "file_records": {},
+                    "api_estimated_totals": {},
+                    "sensitivity_snapshot": {},
+                    "status": "running",
+                    "stage": "queued",
+                    "unattended": True,
+                    "scheduled": True,
+                    "job_id": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+        for side in ("left", "right"):
+            get_config()["ghostwriter_api"]["servers"][side].update(
+                {
+                    "enabled": True,
+                    "name": f"{side.title()} test API",
+                    "base_url": f"https://{side}.example",
+                    "bearer_token": f"{side}-token",
+                }
+            )
+
+        with patch(
+            "web_app._fetch_template_library",
+            side_effect=GhostwriterApiError("Sensitive transport detail"),
+        ), patch(
+            "web_app._send_configured_webhook",
+            return_value={"status": "delivered"},
+        ) as webhook:
+            _import_job_sources(self.app, jobs_dir, import_id)
+
+        event, payload = webhook.call_args.args
+        saved_state = json.loads((imports_dir / f"{import_id}.json").read_text(encoding="utf-8"))
+        self.assertEqual(event, "ghostmerge.unattended.import_failed")
+        self.assertEqual(payload["source"]["side"], "left")
+        self.assertEqual(payload["message"], "Inbound API import failed.")
+        self.assertNotIn("Sensitive transport detail", json.dumps(payload))
+        self.assertEqual(saved_state["webhook"]["status"], "delivered")
+
     def test_final_sync_is_allowed_after_completed_unattended_preliminary_sync(self):
         job = create_merge_job([record()], [], input_sources={"left": "api", "right": "file"})
         job.sync_results["left"] = {"operation": "unattended_outbound_sync", "status": "done"}
@@ -3286,6 +3490,14 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(confirmed.status_code, 302)
         self.assertIn("/imports/import123/status", confirmed.location)
         self.assertTrue(start.call_args.kwargs["unattended"])
+
+    def test_unattended_launch_rejects_string_boolean_authorisation(self):
+        get_config()["unattended_api_merge"]["enabled"] = "false"
+
+        response = self.client.post("/jobs/unattended", data=self.with_csrf())
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"enabled must be a boolean", response.data)
 
     def test_unattended_status_page_refreshes_and_offers_manual_resume(self):
         jobs_dir = Path(self.tmp_dir.name)
@@ -3329,6 +3541,8 @@ class FlaskRouteTests(unittest.TestCase):
         recovered = load_job(jobs_dir, job.job_id)
         self.assertEqual(recovered.unattended["status"], "failed")
         self.assertEqual(recovered.sync_results["left"]["status"], "error")
+        self.assertTrue(recovered.sync_results["left"]["destructive_failure"])
+        self.assertTrue(recovered.unattended["requires_recovery"])
         self.assertFalse(lock_path.exists())
 
     def enable_unattended_schedule(self, **schedule_overrides):
@@ -3389,13 +3603,92 @@ class FlaskRouteTests(unittest.TestCase):
         self.enable_unattended_schedule(run_immediately=True)
         now = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
 
-        with patch("web_app._start_import_thread", side_effect=GhostwriterApiError("Test connection failure")):
+        class Response:
+            status = 204
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        get_config()["unattended_api_merge"]["webhook"].update(
+            {
+                "enabled": True,
+                "url": "https://hooks.example/ghostmerge",
+                "secret": "failure-secret",
+            }
+        )
+
+        with patch(
+            "web_app._start_import_thread",
+            side_effect=GhostwriterApiError("Test connection failure"),
+        ), patch("web_app.urllib.request.urlopen", return_value=Response()) as send:
             state = _scheduler_tick(self.app, Path(self.tmp_dir.name), now=now)
 
         self.assertEqual(state["status"], "waiting")
         self.assertEqual(state["last_status"], "start_failed")
         self.assertIn("Test connection failure", state["message"])
         self.assertEqual(datetime.fromisoformat(state["next_run_at"]), now + timedelta(hours=1))
+        payload = json.loads(send.call_args.args[0].data)
+        self.assertEqual(payload["event"], "ghostmerge.scheduler.start_failed")
+        self.assertEqual(state["webhook"]["status"], "delivered")
+
+    def test_scheduler_pauses_after_destructive_failure_until_recovery(self):
+        self.enable_unattended_schedule()
+        jobs_dir = Path(self.tmp_dir.name)
+        now = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+        job = create_merge_job(
+            [record(title="Shared")],
+            [record(id="2", title="Shared")],
+            job_id="destructiverecovery123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        run_unattended_reconciliation(job)
+        job.unattended["status"] = "partially_completed"
+        job.sync_results = {
+            "left": {
+                "status": "error",
+                "failed_stage": "delete",
+                "destructive_failure": True,
+            },
+            "right": {"status": "done", "stage": "complete"},
+        }
+        save_job(job, jobs_dir)
+        (jobs_dir / "api_imports").mkdir()
+        (jobs_dir / "api_imports" / "destructiveimport123.json").write_text(
+            json.dumps({
+                "import_id": "destructiveimport123",
+                "status": "done",
+                "scheduled": True,
+                "unattended": True,
+                "job_id": job.job_id,
+            }),
+            encoding="utf-8",
+        )
+        (jobs_dir / "unattended_scheduler.json").write_text(
+            json.dumps({"current_import_id": "destructiveimport123", "status": "running"}),
+            encoding="utf-8",
+        )
+
+        paused = _scheduler_tick(self.app, jobs_dir, now=now)
+
+        self.assertEqual(paused["status"], "paused_recovery")
+        self.assertEqual(paused["recovery_job_id"], job.job_id)
+        self.assertIsNone(paused["next_run_at"])
+
+        recovered = load_job(jobs_dir, job.job_id)
+        recovered.sync_results["left"] = {"status": "done", "stage": "complete"}
+        recovered.unattended["status"] = "complete"
+        save_job(recovered, jobs_dir)
+        resumed = _scheduler_tick(self.app, jobs_dir, now=now + timedelta(minutes=5))
+
+        self.assertEqual(resumed["status"], "waiting")
+        self.assertNotIn("recovery_job_id", resumed)
+        self.assertEqual(
+            datetime.fromisoformat(resumed["next_run_at"]),
+            now + timedelta(minutes=65),
+        )
 
     def test_scheduler_uses_fixed_delay_after_run_completion(self):
         self.enable_unattended_schedule()
