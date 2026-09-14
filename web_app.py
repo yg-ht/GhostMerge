@@ -282,7 +282,9 @@ def create_app(test_config: dict | None = None) -> Flask:
             if not settings.get("enabled", False):
                 raise WebMergeError("Unattended API merge is not enabled in configuration.")
             if request.form.get("confirm_unattended_sync") != "yes":
-                raise WebMergeError("Confirm the backed-up full replacement of both API destinations.")
+                raise WebMergeError(
+                    "Confirm that GhostMerge may automatically back up, then fully replace both API destinations."
+                )
             for side in ("left", "right"):
                 _server_for_side(side)
             with _unattended_start_lock(jobs_dir):
