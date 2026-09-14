@@ -18,6 +18,31 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class SystemdUpdaterTests(unittest.TestCase):
+    def test_deployment_generated_pip_cache_is_ignored(self):
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(PROJECT_ROOT),
+                "check-ignore",
+                "--quiet",
+                ".cache/pip/http-v2/example",
+            ],
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0)
+
+    def test_candidate_dependency_install_disables_pip_cache(self):
+        updater = (PROJECT_ROOT / "update-systemd-service.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "--disable-pip-version-check --no-cache-dir -r requirements.txt",
+            updater,
+        )
+
     def make_deployment(self):
         tmp_dir = tempfile.TemporaryDirectory()
         root = Path(tmp_dir.name)

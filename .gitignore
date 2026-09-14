@@ -1,5 +1,6 @@
 /.venv/
 /.ghostmerge-*-venv.*/
+/.cache/
 /.lesshst
 /Pipfile
 /Pipfile.lock
