@@ -270,10 +270,11 @@ service, routes, persistence, matching, review, output approval, and outbound-sy
 - [ ] Confirm whether findings and observations expose a reliable created/updated timestamp in the
       Ghostwriter API and internal data structures. Document its source, timezone, precision, and
       suitability for conflict detection before using it in matching or sync decisions.
-- [ ] Design a scheduled job for unattended API operations.
-      Define which fetch, merge, backup, or sync action should run; the scheduling mechanism;
-      locking and duplicate-run behaviour; credentials handling; retries; logging; and failure alerts
-      before implementation.
+- [x] Add a scheduled job for unattended API operations.
+      The configurable fixed-delay scheduler reuses the unattended fetch, merge, sensitivity,
+      backup, bilateral sync, retry, retention, and webhook workflow. Durable state, cross-process
+      singleton/start locks, duplicate-run suppression, and a status page make autonomous runs
+      observable and restart-safe without storing credentials outside local configuration.
 - [x] Apply configured rate limiting to all Ghostwriter GraphQL requests, including outbound sync.
       Fetch, backup, validation, deletion, creation, tagging, and restore use the same rate-limited
       GraphQL client transport.

@@ -1,11 +1,13 @@
 import io
 import hashlib
 import hmac
+import fcntl
 import json
 import os
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,6 +26,9 @@ from web_app import (
     _discard_superseded_unattended_jobs,
     _import_job_sources,
     _run_unattended_job,
+    _scheduler_config,
+    _scheduler_tick,
+    _start_unattended_scheduler,
     _require_sync_not_active,
     _recover_stale_unattended_job,
     _sync_job_side,
@@ -3325,6 +3330,194 @@ class FlaskRouteTests(unittest.TestCase):
         self.assertEqual(recovered.unattended["status"], "failed")
         self.assertEqual(recovered.sync_results["left"]["status"], "error")
         self.assertFalse(lock_path.exists())
+
+    def enable_unattended_schedule(self, **schedule_overrides):
+        config = get_config()
+        config["unattended_api_merge"]["enabled"] = True
+        config["unattended_api_merge"]["schedule"].update(
+            {"enabled": True, "interval_minutes": 60, "run_immediately": False, **schedule_overrides}
+        )
+        for side in ("left", "right"):
+            config["ghostwriter_api"]["servers"][side].update(
+                {"enabled": True, "base_url": f"https://{side}.example", "bearer_token": f"{side}-token"}
+            )
+        return config
+
+    def test_scheduler_rejects_invalid_or_unsafe_configuration(self):
+        config = self.enable_unattended_schedule(interval_minutes=0)
+        invalid_interval = _scheduler_config()
+        self.assertFalse(invalid_interval["valid"])
+        self.assertIn("between 1", invalid_interval["error"])
+
+        config["unattended_api_merge"]["schedule"]["interval_minutes"] = 60
+        config["unattended_api_merge"]["enabled"] = False
+        missing_authorisation = _scheduler_config()
+        self.assertFalse(missing_authorisation["valid"])
+        self.assertIn("Enable unattended_api_merge", missing_authorisation["error"])
+
+    def test_scheduler_waits_one_interval_before_first_default_run(self):
+        self.enable_unattended_schedule()
+        now = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+
+        with patch("web_app._start_import_thread") as start:
+            state = _scheduler_tick(self.app, Path(self.tmp_dir.name), now=now)
+
+        start.assert_not_called()
+        self.assertEqual(state["status"], "waiting")
+        self.assertEqual(datetime.fromisoformat(state["next_run_at"]), now + timedelta(hours=1))
+
+        with patch("web_app._start_import_thread", return_value="dueimport123") as due_start:
+            before_due = _scheduler_tick(self.app, Path(self.tmp_dir.name), now=now + timedelta(minutes=59))
+            due = _scheduler_tick(self.app, Path(self.tmp_dir.name), now=now + timedelta(hours=1))
+        self.assertEqual(before_due["status"], "waiting")
+        due_start.assert_called_once()
+        self.assertEqual(due["current_import_id"], "dueimport123")
+
+    def test_scheduler_starts_due_unattended_import_with_scheduled_provenance(self):
+        self.enable_unattended_schedule(run_immediately=True)
+        now = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+
+        with patch("web_app._start_import_thread", return_value="scheduledimport123") as start:
+            state = _scheduler_tick(self.app, Path(self.tmp_dir.name), now=now)
+
+        self.assertEqual(state["status"], "running")
+        self.assertEqual(state["current_import_id"], "scheduledimport123")
+        self.assertEqual(start.call_args.kwargs, {"unattended": True, "scheduled": True})
+        self.assertEqual(start.call_args.args[2], {"left": "api", "right": "api"})
+
+    def test_scheduler_start_failure_is_recorded_and_retried_after_full_interval(self):
+        self.enable_unattended_schedule(run_immediately=True)
+        now = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+
+        with patch("web_app._start_import_thread", side_effect=GhostwriterApiError("Test connection failure")):
+            state = _scheduler_tick(self.app, Path(self.tmp_dir.name), now=now)
+
+        self.assertEqual(state["status"], "waiting")
+        self.assertEqual(state["last_status"], "start_failed")
+        self.assertIn("Test connection failure", state["message"])
+        self.assertEqual(datetime.fromisoformat(state["next_run_at"]), now + timedelta(hours=1))
+
+    def test_scheduler_uses_fixed_delay_after_run_completion(self):
+        self.enable_unattended_schedule()
+        jobs_dir = Path(self.tmp_dir.name)
+        now = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+        (jobs_dir / "api_imports").mkdir()
+        (jobs_dir / "api_imports" / "scheduleddone123.json").write_text(
+            json.dumps({
+                "import_id": "scheduleddone123",
+                "status": "done",
+                "stage": "complete",
+                "scheduled": True,
+                "unattended": True,
+                "job_id": None,
+            }),
+            encoding="utf-8",
+        )
+        (jobs_dir / "unattended_scheduler.json").write_text(
+            json.dumps({"current_import_id": "scheduleddone123", "status": "running"}),
+            encoding="utf-8",
+        )
+
+        state = _scheduler_tick(self.app, jobs_dir, now=now)
+
+        self.assertEqual(state["status"], "waiting")
+        self.assertEqual(state["last_status"], "done")
+        self.assertEqual(datetime.fromisoformat(state["next_run_at"]), now + timedelta(hours=1))
+
+    def test_scheduler_records_the_unattended_job_outcome(self):
+        self.enable_unattended_schedule()
+        jobs_dir = Path(self.tmp_dir.name)
+        now = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+        job = create_merge_job(
+            [record(title="Conflict", description="left")],
+            [record(id="2", title="Conflict", description="right")],
+            job_id="scheduledoutcome123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        run_unattended_reconciliation(job)
+        job.unattended["status"] = "needs_review"
+        save_job(job, jobs_dir)
+        (jobs_dir / "api_imports").mkdir()
+        (jobs_dir / "api_imports" / "scheduledoutcomeimport.json").write_text(
+            json.dumps({
+                "import_id": "scheduledoutcomeimport",
+                "status": "done",
+                "scheduled": True,
+                "unattended": True,
+                "job_id": job.job_id,
+            }),
+            encoding="utf-8",
+        )
+        (jobs_dir / "unattended_scheduler.json").write_text(
+            json.dumps({"current_import_id": "scheduledoutcomeimport", "status": "running"}),
+            encoding="utf-8",
+        )
+
+        state = _scheduler_tick(self.app, jobs_dir, now=now)
+
+        self.assertEqual(state["last_status"], "needs_review")
+        self.assertEqual(state["last_job_id"], job.job_id)
+
+    def test_scheduler_recovers_interrupted_import_after_service_restart(self):
+        self.enable_unattended_schedule()
+        jobs_dir = Path(self.tmp_dir.name)
+        now = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+        (jobs_dir / "api_imports").mkdir()
+        (jobs_dir / "api_imports" / "interruptedimport123.json").write_text(
+            json.dumps({
+                "import_id": "interruptedimport123",
+                "status": "running",
+                "scheduled": True,
+                "unattended": True,
+                "worker_pid": -1,
+            }),
+            encoding="utf-8",
+        )
+        (jobs_dir / "unattended_scheduler.json").write_text(
+            json.dumps({"current_import_id": "interruptedimport123", "status": "running"}),
+            encoding="utf-8",
+        )
+
+        state = _scheduler_tick(self.app, jobs_dir, now=now)
+
+        self.assertEqual(state["last_status"], "stale")
+        self.assertIsNone(state["current_import_id"])
+        self.assertEqual(datetime.fromisoformat(state["next_run_at"]), now + timedelta(hours=1))
+
+    def test_scheduler_skips_due_run_when_manual_unattended_import_is_active(self):
+        self.enable_unattended_schedule(run_immediately=True)
+        now = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+        running = {"import_id": "manual123", "unattended": True, "scheduled": False, "status": "running"}
+
+        with patch("web_app._list_api_imports", return_value=[running]), patch("web_app._start_import_thread") as start:
+            state = _scheduler_tick(self.app, Path(self.tmp_dir.name), now=now)
+
+        start.assert_not_called()
+        self.assertEqual(state["last_status"], "skipped_duplicate")
+        self.assertEqual(datetime.fromisoformat(state["next_run_at"]), now + timedelta(hours=1))
+
+    def test_only_one_scheduler_process_can_hold_the_scheduler_lock(self):
+        self.enable_unattended_schedule()
+        jobs_dir = Path(self.tmp_dir.name)
+        lock_path = jobs_dir / ".unattended-scheduler.lock"
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                self.assertIsNone(_start_unattended_scheduler(self.app, jobs_dir))
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def test_scheduler_status_page_exposes_timing_and_destination_state(self):
+        self.enable_unattended_schedule()
+        now = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+        _scheduler_tick(self.app, Path(self.tmp_dir.name), now=now)
+
+        response = self.client.get("/scheduler")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Waiting", response.data)
+        self.assertIn(b"2026-09-14T13:00:00+00:00", response.data)
+        self.assertIn(b"Left Ghostwriter", response.data)
 
     def test_live_sync_rejects_duplicate_running_or_completed_sync_for_both_sides(self):
         jobs_dir = Path(self.tmp_dir.name)

@@ -4,6 +4,7 @@ import json
 import hashlib
 import hmac
 import ipaddress
+import math
 import os
 import secrets
 import shutil
@@ -14,7 +15,7 @@ import urllib.request
 import uuid
 import fcntl
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -81,6 +82,7 @@ HOME_MERGE_JOB_LIMIT = 3
 HISTORY_PAGE_SIZE = 25
 _ACTIVE_API_SOURCE_CHECKS: set[str] = set()
 _ACTIVE_API_IMPORTS: set[str] = set()
+SCHEDULER_STATE_VERSION = 1
 
 
 class ApiOperationCancelled(RuntimeError):
@@ -190,6 +192,21 @@ def create_app(test_config: dict | None = None) -> Flask:
             label="Inbound API import history pages",
         )
         return render_template("api_imports.html", api_imports=imports, pagination=pagination)
+
+    @app.get("/scheduler")
+    def scheduler_status():
+        try:
+            api_servers = configured_server_summary(CONFIG)
+        except (GhostwriterApiError, TypeError, ValueError, AttributeError):
+            api_servers = {
+                side: {"name": f"{side.title()} Ghostwriter", "configured": False}
+                for side in ("left", "right")
+            }
+        return render_template(
+            "scheduler_status.html",
+            state=_scheduler_status(jobs_dir),
+            api_servers=api_servers,
+        )
 
     @app.get("/jobs")
     def jobs_history():
@@ -761,6 +778,8 @@ def create_app(test_config: dict | None = None) -> Flask:
             return redirect(url_for("complete", job_id=job_id))
         return send_file(path, as_attachment=True, download_name=f"ghostmerge-{side}.json")
 
+    if app.config.get("GHOSTMERGE_START_SCHEDULER", True):
+        _start_unattended_scheduler(app, jobs_dir)
     return app
 
 
@@ -1207,6 +1226,7 @@ def _start_import_thread(
     files,
     *,
     unattended: bool = False,
+    scheduled: bool = False,
 ) -> str:
     import_id = uuid.uuid4().hex
     input_source_names = _input_source_names(input_sources, files)
@@ -1240,6 +1260,7 @@ def _start_import_thread(
             "sensitivity_snapshot": sensitivity_snapshot,
             "job_id": None,
             "unattended": unattended,
+            "scheduled": scheduled,
             "worker_pid": os.getpid(),
         },
     )
@@ -1616,7 +1637,11 @@ def _operation_state_with_liveness(
         return state
     worker_pid = state.get("worker_pid")
     operation_id = state.get("check_id") or state.get("import_id")
-    if _worker_pid_is_alive(worker_pid) and operation_id in active_operation_ids:
+    # An operation owned by another live WSGI worker cannot appear in this
+    # process-local registry, but it is still active and must suppress duplicates.
+    if _worker_pid_is_alive(worker_pid) and (
+        int(worker_pid) != os.getpid() or operation_id in active_operation_ids
+    ):
         return state
     stale_state = dict(state)
     stale_state.update(
@@ -1656,6 +1681,313 @@ def _server_for_side(side: str):
 def _unattended_settings() -> dict[str, Any]:
     settings = CONFIG.get("unattended_api_merge") or {}
     return settings if isinstance(settings, dict) else {}
+
+
+def _scheduler_config() -> dict[str, Any]:
+    unattended = _unattended_settings()
+    raw = unattended.get("schedule", {})
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        return {
+            "enabled": False,
+            "valid": False,
+            "error": "Unattended schedule configuration must be an object.",
+        }
+    enabled = raw.get("enabled", False)
+    run_immediately = raw.get("run_immediately", False)
+    if not isinstance(enabled, bool) or not isinstance(run_immediately, bool):
+        return {
+            "enabled": False,
+            "valid": False,
+            "error": "Schedule enabled and run_immediately values must be booleans.",
+        }
+    if isinstance(raw.get("interval_minutes", 1440), bool) or isinstance(
+        raw.get("poll_interval_seconds", 5), bool
+    ):
+        return {
+            "enabled": enabled,
+            "valid": False,
+            "error": "Schedule interval values must be numbers, not booleans.",
+        }
+    try:
+        interval_minutes = float(raw.get("interval_minutes", 1440))
+        poll_seconds = float(raw.get("poll_interval_seconds", 5))
+    except (TypeError, ValueError):
+        return {"enabled": enabled, "valid": False, "error": "Schedule interval values must be numbers."}
+    if not math.isfinite(interval_minutes) or not 1 <= interval_minutes <= 525_600:
+        return {
+            "enabled": enabled,
+            "valid": False,
+            "error": "Schedule interval_minutes must be between 1 and 525600.",
+        }
+    if not math.isfinite(poll_seconds) or not 1 <= poll_seconds <= 300:
+        return {"enabled": enabled, "valid": False, "error": "Schedule poll_interval_seconds must be between 1 and 300."}
+    if enabled and not unattended.get("enabled", False):
+        return {"enabled": True, "valid": False, "error": "Enable unattended_api_merge before enabling its schedule."}
+    if enabled:
+        try:
+            for side in ("left", "right"):
+                _server_for_side(side)
+        except (GhostwriterApiError, TypeError, ValueError, AttributeError) as exc:
+            return {"enabled": True, "valid": False, "error": str(exc)}
+    return {
+        "enabled": enabled,
+        "valid": True,
+        "interval_minutes": interval_minutes,
+        "poll_interval_seconds": poll_seconds,
+        "run_immediately": run_immediately,
+    }
+
+
+def _scheduler_state_path(jobs_dir: Path) -> Path:
+    return jobs_dir / "unattended_scheduler.json"
+
+
+def _save_scheduler_state(jobs_dir: Path, state: dict[str, Any]) -> None:
+    path = _scheduler_state_path(jobs_dir)
+    state = dict(state)
+    state["version"] = SCHEDULER_STATE_VERSION
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _load_scheduler_state(jobs_dir: Path) -> dict[str, Any]:
+    path = _scheduler_state_path(jobs_dir)
+    if not path.exists():
+        return {"version": SCHEDULER_STATE_VERSION}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "version": SCHEDULER_STATE_VERSION,
+            "status": "error",
+            "message": f"Scheduler state could not be read: {exc}",
+        }
+    if isinstance(state, dict):
+        return state
+    return {
+        "version": SCHEDULER_STATE_VERSION,
+        "status": "error",
+        "message": "Scheduler state is invalid.",
+    }
+
+
+def _parse_utc_timestamp(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _scheduler_status(jobs_dir: Path) -> dict[str, Any]:
+    config = _scheduler_config()
+    state = _load_scheduler_state(jobs_dir)
+    state.update({
+        "configured_enabled": config.get("enabled", False),
+        "configuration_valid": config.get("valid", False),
+        "interval_minutes": config.get("interval_minutes"),
+        "run_immediately": config.get("run_immediately", False),
+    })
+    if not config.get("valid", False):
+        state.update({"status": "error", "message": config.get("error")})
+    elif not config.get("enabled", False):
+        state.update({"status": "disabled", "message": "Scheduled unattended API merges are disabled."})
+    elif state.get("scheduler_pid") and not _worker_pid_is_alive(state.get("scheduler_pid")):
+        state.update({
+            "status": "stale",
+            "message": "The scheduler owner process is no longer active; restart the GhostMerge service.",
+        })
+    current_import_id = state.get("current_import_id")
+    if current_import_id:
+        try:
+            current = _load_import_state(jobs_dir, current_import_id)
+            state["current_import_status"] = current.get("status")
+            state["current_job_id"] = current.get("job_id") or state.get("current_job_id")
+        except WebMergeError:
+            state["current_import_status"] = "missing"
+    return state
+
+
+def _scheduler_tick(app: Flask, jobs_dir: Path, *, now: Optional[datetime] = None) -> dict[str, Any]:
+    """Advance the durable schedule once; the loop supplies repeated ticks."""
+    config = _scheduler_config()
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    state = _load_scheduler_state(jobs_dir)
+    if not config.get("valid", False):
+        state.update({
+            "status": "error",
+            "message": config.get("error"),
+            "next_run_at": None,
+            "configured_enabled": False,
+        })
+        _save_scheduler_state(jobs_dir, state)
+        return state
+    if not config.get("enabled", False):
+        state.update({
+            "status": "disabled",
+            "message": "Scheduled unattended API merges are disabled.",
+            "next_run_at": None,
+            "configured_enabled": False,
+        })
+        _save_scheduler_state(jobs_dir, state)
+        return state
+
+    interval = timedelta(minutes=float(config["interval_minutes"]))
+    schedule_was_enabled = bool(state.get("configured_enabled", False))
+    state["configured_enabled"] = True
+    state["scheduler_pid"] = os.getpid()
+    current_import_id = state.get("current_import_id")
+    if current_import_id:
+        try:
+            current_import = _load_import_state(jobs_dir, current_import_id)
+        except WebMergeError as exc:
+            current_import = {"status": "error", "message": str(exc)}
+        if current_import.get("status") in RUNNING_OPERATION_STATUSES:
+            state.update({
+                "status": "running",
+                "message": current_import.get("message") or "Scheduled unattended API merge is running.",
+                "current_job_id": current_import.get("job_id") or state.get("current_job_id"),
+                "next_run_at": None,
+            })
+            _save_scheduler_state(jobs_dir, state)
+            return state
+        result_status = current_import.get("status") or "error"
+        job_id = current_import.get("job_id")
+        if job_id:
+            try:
+                job = load_job(jobs_dir, job_id)
+                result_status = job.unattended.get("status") or result_status
+            except WebMergeError:
+                pass
+        state.update({
+            "status": "waiting",
+            "message": f"Last scheduled unattended merge finished with status: {result_status}.",
+            "last_completed_at": current_time.isoformat(),
+            "last_status": result_status,
+            "last_import_id": current_import_id,
+            "last_job_id": job_id,
+            "current_import_id": None,
+            "current_job_id": None,
+            "next_run_at": (current_time + interval).isoformat(),
+        })
+        _save_scheduler_state(jobs_dir, state)
+        return state
+
+    next_run = _parse_utc_timestamp(state.get("next_run_at"))
+    if next_run is None:
+        first_run_is_immediate = config.get("run_immediately") and not schedule_was_enabled
+        next_run = current_time if first_run_is_immediate else current_time + interval
+    if current_time < next_run:
+        state.update({
+            "status": "waiting",
+            "message": "Waiting for the next scheduled unattended API merge.",
+            "next_run_at": next_run.isoformat(),
+        })
+        _save_scheduler_state(jobs_dir, state)
+        return state
+
+    with _unattended_start_lock(jobs_dir):
+        running = next(
+            (item for item in _list_api_imports(jobs_dir) if item.get("unattended") and item.get("status") in RUNNING_OPERATION_STATUSES),
+            None,
+        )
+        if running:
+            state.update({
+                "status": "waiting",
+                "message": "A manual unattended merge is already running; this scheduled occurrence was skipped.",
+                "last_status": "skipped_duplicate",
+                "last_completed_at": current_time.isoformat(),
+                "next_run_at": (current_time + interval).isoformat(),
+            })
+            _save_scheduler_state(jobs_dir, state)
+            return state
+        try:
+            import_id = _start_import_thread(
+                app,
+                jobs_dir,
+                {"left": "api", "right": "api"},
+                {},
+                unattended=True,
+                scheduled=True,
+            )
+        except Exception as exc:
+            state.update({
+                "status": "waiting",
+                "message": f"Scheduled unattended merge could not start: {exc}",
+                "last_started_at": current_time.isoformat(),
+                "last_completed_at": current_time.isoformat(),
+                "last_status": "start_failed",
+                "next_run_at": (current_time + interval).isoformat(),
+            })
+            _save_scheduler_state(jobs_dir, state)
+            return state
+    state.update({
+        "status": "running",
+        "message": "Scheduled unattended API merge started.",
+        "last_started_at": current_time.isoformat(),
+        "current_import_id": import_id,
+        "current_job_id": None,
+        "next_run_at": None,
+        "scheduler_pid": os.getpid(),
+    })
+    _save_scheduler_state(jobs_dir, state)
+    return state
+
+
+def _scheduler_loop(app: Flask, jobs_dir: Path, lock_file) -> None:
+    try:
+        while True:
+            try:
+                with app.app_context():
+                    _scheduler_tick(app, jobs_dir)
+            except Exception as exc:
+                state = _load_scheduler_state(jobs_dir)
+                state.update({"status": "error", "message": f"Scheduler loop failed: {exc}"})
+                _save_scheduler_state(jobs_dir, state)
+            config = _scheduler_config()
+            if not config.get("enabled", False) or not config.get("valid", False):
+                return
+            time.sleep(float(config["poll_interval_seconds"]))
+    finally:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
+
+
+def _start_unattended_scheduler(app: Flask, jobs_dir: Path) -> Optional[threading.Thread]:
+    config = _scheduler_config()
+    if not config.get("valid", False) or not config.get("enabled", False):
+        _scheduler_tick(app, jobs_dir)
+        return None
+    lock_path = jobs_dir / ".unattended-scheduler.lock"
+    lock_file = lock_path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        return None
+    thread = threading.Thread(
+        target=_scheduler_loop,
+        args=(app, jobs_dir, lock_file),
+        name="ghostmerge-unattended-scheduler",
+        daemon=True,
+    )
+    try:
+        thread.start()
+    except Exception:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+        raise
+    return thread
 
 
 def _start_sync_thread(app: Flask, jobs_dir: Path, job_id: str, side: str) -> None:

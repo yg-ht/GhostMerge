@@ -8,6 +8,7 @@
       <tr>
         <th>Import</th>
         <th>Last updated</th>
+        <th>Trigger</th>
         <th>Status</th>
         <th>Message</th>
         <th>Actions</th>
@@ -18,6 +19,7 @@
       <tr>
         <td>{{ import_state.import_id }}</td>
         <td>{{ import_state.updated_at }}</td>
+        <td>{{ "Scheduled unattended" if import_state.scheduled else ("Manual unattended" if import_state.unattended else "Manual") }}</td>
         <td>{{ import_state.status|default("queued") }}</td>
         <td>{{ import_state.message|default("Queued") }}</td>
         <td class="actions">
