@@ -25,11 +25,13 @@
         {{ previous.error }}
         {% else %}
         Matched pairs reviewed: {{ previous.completed_matches }} of {{ previous.matches }}
+        {% if previous.unattended.enabled %}<br>Unattended: {{ previous.unattended.status|default("queued")|replace("_", " ")|title }}{% endif %}
         {% endif %}
       </td>
       <td class="actions">
         {% if not previous.error %}
         <a class="button secondary" href="{{ url_for('summary', job_id=previous.job_id) }}">Open</a>
+        {% if previous.unattended.enabled %}<a class="button secondary" href="{{ url_for('unattended_status', job_id=previous.job_id) }}">Unattended status</a>{% endif %}
         {% endif %}
         {% if previous.has_left_output %}
         <a class="button secondary" href="{{ url_for('download', job_id=previous.job_id, side='left') }}">{{ left_label }} output</a>

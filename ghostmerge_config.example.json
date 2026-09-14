@@ -131,6 +131,18 @@
     "session_cookie_samesite": "None",
     "session_cookie_secure": true
   },
+  "unattended_api_merge": {
+    "enabled": false,
+    "webhook": {
+      "enabled": false,
+      "url": "https://automation.example/ghostmerge",
+      "secret": "",
+      "public_base_url": "https://ghostmerge.example/merge",
+      "timeout_seconds": 5,
+      "max_attempts": 3,
+      "allow_insecure_http": false
+    }
+  },
   "ghostwriter_api": {
     "backup_dir": "ghostmerge_api_backups",
     "default_rate_limit_per_second": 0.2,

@@ -1,4 +1,6 @@
 import io
+import hashlib
+import hmac
 import json
 import os
 import tempfile
@@ -18,7 +20,12 @@ from globals import get_config
 from web_app import (
     _build_sensitivity_snapshot,
     _check_api_source,
+    _deliver_unattended_webhook,
+    _discard_superseded_unattended_jobs,
     _import_job_sources,
+    _run_unattended_job,
+    _require_sync_not_active,
+    _recover_stale_unattended_job,
     _sync_job_side,
     create_app,
 )
@@ -646,6 +653,19 @@ class WebServiceTests(unittest.TestCase):
         self.assertTrue(
             all(match["unattended_unresolved_fields"] == ["match_identity"] for match in job.matches)
         )
+
+    def test_unattended_reconciliation_uses_configured_title_normalisation(self):
+        job = create_merge_job(
+            [record(title="Access–Control")],
+            [record(id="2", title="access-control")],
+            input_sources={"left": "api", "right": "api"},
+        )
+
+        run_unattended_reconciliation(job)
+
+        self.assertEqual(job.unattended["automatic_findings"], 0)
+        self.assertEqual(job.unattended["pending_findings"], 1)
+        self.assertEqual(job.matches[0]["unattended_unresolved_fields"], ["title"])
 
     def test_unattended_reconciliation_blocks_sync_for_remaining_sensitive_terms(self):
         job = create_merge_job(
@@ -3072,6 +3092,239 @@ class FlaskRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"final output approval", response.data)
+
+    def test_unattended_worker_syncs_hybrid_outputs_and_retains_manual_pairs(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        older_mapping = {"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}}
+        newer_mapping = {"ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00Z"}}
+        job = create_merge_job(
+            [
+                record(title="Automatic finding", description="Older", extra_fields=older_mapping),
+                record(id="2", title="Manual finding", description="Left conflict"),
+            ],
+            [
+                record(id="3", title="Automatic finding", description="Newer", extra_fields=newer_mapping),
+                record(id="4", title="Manual finding", description="Right conflict"),
+            ],
+            job_id="unattendedworker123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        save_job(job, jobs_dir)
+        config = get_config()
+        for side in ("left", "right"):
+            config["ghostwriter_api"]["servers"][side].update(
+                {
+                    "enabled": True,
+                    "base_url": f"https://{side}.example",
+                    "bearer_token": f"{side}-token",
+                }
+            )
+        captured: dict[str, list[dict]] = {}
+
+        class CaptureSyncApi:
+            def __init__(self, server, progress):
+                self.server = server
+
+            def replace_all_findings(self, records, backup_root, observations=None):
+                captured[self.server.side] = records
+                return backup_root / self.server.side / "unattended-backup.json"
+
+        with patch("web_app.GhostwriterApi", CaptureSyncApi):
+            _run_unattended_job(self.app, jobs_dir, job.job_id)
+
+        reloaded = load_job(jobs_dir, job.job_id)
+        self.assertEqual(reloaded.unattended["status"], "needs_review")
+        self.assertEqual(reloaded.unattended["pending_findings"], 1)
+        self.assertEqual(reloaded.sync_results["left"]["status"], "done")
+        self.assertEqual(reloaded.sync_results["right"]["status"], "done")
+        left_manual = next(item for item in captured["left"] if item["title"] == "Manual finding")
+        right_manual = next(item for item in captured["right"] if item["title"] == "Manual finding")
+        self.assertEqual(left_manual["description"], "Left conflict")
+        self.assertEqual(right_manual["description"], "Right conflict")
+        self.assertEqual(
+            next(item for item in captured["left"] if item["title"] == "Automatic finding")["description"],
+            "Newer",
+        )
+
+    def test_unattended_worker_records_partial_bilateral_failure(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record(title="Shared finding")],
+            [record(id="2", title="Shared finding")],
+            job_id="unattendedpartial123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        save_job(job, jobs_dir)
+        config = get_config()
+        for side in ("left", "right"):
+            config["ghostwriter_api"]["servers"][side].update(
+                {
+                    "enabled": True,
+                    "base_url": f"https://{side}.example",
+                    "bearer_token": f"{side}-token",
+                }
+            )
+
+        class PartialSyncApi:
+            def __init__(self, server, progress):
+                self.server = server
+
+            def replace_all_findings(self, records, backup_root, observations=None):
+                if self.server.side == "left":
+                    raise GhostwriterApiError("Left test failure")
+                return backup_root / self.server.side / "unattended-backup.json"
+
+        with patch("web_app.GhostwriterApi", PartialSyncApi):
+            _run_unattended_job(self.app, jobs_dir, job.job_id)
+
+        reloaded = load_job(jobs_dir, job.job_id)
+        self.assertEqual(reloaded.unattended["status"], "partially_completed")
+        self.assertEqual(reloaded.sync_results["left"]["status"], "error")
+        self.assertEqual(reloaded.sync_results["right"]["status"], "done")
+
+    def test_unattended_retention_removes_only_older_unresolved_unattended_jobs(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        older = create_merge_job(
+            [record(title="Conflict", description="left")],
+            [record(id="2", title="Conflict", description="right")],
+            job_id="olderunattended123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        run_unattended_reconciliation(older)
+        save_job(older, jobs_dir)
+        ordinary = create_merge_job([record(title="Ordinary")], [], job_id="ordinarymanual123")
+        save_job(ordinary, jobs_dir)
+        newest = create_merge_job(
+            [record(title="New conflict", description="left")],
+            [record(id="3", title="New conflict", description="right")],
+            job_id="newestunattended123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        run_unattended_reconciliation(newest)
+        save_job(newest, jobs_dir)
+
+        _discard_superseded_unattended_jobs(jobs_dir, newest.job_id)
+
+        self.assertFalse((jobs_dir / older.job_id).exists())
+        self.assertTrue((jobs_dir / ordinary.job_id).exists())
+        self.assertTrue((jobs_dir / newest.job_id).exists())
+
+    def test_unattended_webhook_is_signed_and_contains_no_record_content(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record(title="Secret record title")],
+            [record(id="2", title="Secret record title")],
+            job_id="webhookjob123",
+            input_sources={"left": "api", "right": "api"},
+            input_source_names={"left": "Left API", "right": "Right API"},
+        )
+        run_unattended_reconciliation(job)
+        job.unattended.update({"status": "complete", "stage": "complete"})
+        job.sync_results = {side: {"status": "done", "stage": "complete"} for side in ("left", "right")}
+        save_job(job, jobs_dir)
+        get_config()["unattended_api_merge"] = {
+            "enabled": True,
+            "webhook": {
+                "enabled": True,
+                "url": "https://hooks.example/ghostmerge",
+                "secret": "webhook-secret",
+                "public_base_url": "https://merge.example/merge",
+            },
+        }
+
+        class Response:
+            status = 204
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch("web_app.urllib.request.urlopen", return_value=Response()) as send:
+            _deliver_unattended_webhook(jobs_dir, job.job_id)
+
+        request_object = send.call_args.args[0]
+        body = request_object.data
+        self.assertNotIn(b"Secret record title", body)
+        self.assertIn(b'"status":"complete"', body)
+        expected = hmac.new(b"webhook-secret", body, hashlib.sha256).hexdigest()
+        self.assertEqual(request_object.headers["X-ghostmerge-signature"], f"sha256={expected}")
+        self.assertEqual(load_job(jobs_dir, job.job_id).unattended["webhook"]["status"], "delivered")
+
+    def test_final_sync_is_allowed_after_completed_unattended_preliminary_sync(self):
+        job = create_merge_job([record()], [], input_sources={"left": "api", "right": "file"})
+        job.sync_results["left"] = {"operation": "unattended_outbound_sync", "status": "done"}
+
+        _require_sync_not_active(job, "left")
+
+    def test_unattended_launch_requires_configuration_and_explicit_confirmation(self):
+        disabled = self.client.post("/jobs/unattended", data=self.with_csrf())
+        self.assertEqual(disabled.status_code, 400)
+        self.assertIn(b"not enabled", disabled.data)
+
+        config = get_config()
+        config["unattended_api_merge"]["enabled"] = True
+        for side in ("left", "right"):
+            config["ghostwriter_api"]["servers"][side].update(
+                {"enabled": True, "base_url": f"https://{side}.example", "bearer_token": f"{side}-token"}
+            )
+        unconfirmed = self.client.post("/jobs/unattended", data=self.with_csrf())
+        self.assertEqual(unconfirmed.status_code, 400)
+        self.assertIn(b"Confirm the backed-up full replacement", unconfirmed.data)
+
+        with patch("web_app._start_import_thread", return_value="import123") as start:
+            confirmed = self.client.post(
+                "/jobs/unattended",
+                data=self.with_csrf({"confirm_unattended_sync": "yes"}),
+            )
+        self.assertEqual(confirmed.status_code, 302)
+        self.assertIn("/imports/import123/status", confirmed.location)
+        self.assertTrue(start.call_args.kwargs["unattended"])
+
+    def test_unattended_status_page_refreshes_and_offers_manual_resume(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record(title="Conflict", description="left")],
+            [record(id="2", title="Conflict", description="right")],
+            job_id="unattendedstatus123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        run_unattended_reconciliation(job)
+        job.unattended.update({"status": "running", "stage": "sync_left", "worker_pid": os.getpid()})
+        save_job(job, jobs_dir)
+
+        running = self.client.get(f"/jobs/{job.job_id}/unattended/status")
+        self.assertEqual(running.status_code, 200)
+        self.assertIn(b'http-equiv="refresh" content="1"', running.data)
+
+        job = load_job(jobs_dir, job.job_id)
+        job.unattended.update({"status": "needs_review", "stage": "needs_review"})
+        save_job(job, jobs_dir)
+        review = self.client.get(f"/jobs/{job.job_id}/unattended/status")
+        self.assertIn(b"Resume manual review", review.data)
+
+    def test_interrupted_unattended_sync_becomes_retryable(self):
+        jobs_dir = Path(self.tmp_dir.name)
+        job = create_merge_job(
+            [record(title="Shared")],
+            [record(id="2", title="Shared")],
+            job_id="interruptedunattended123",
+            input_sources={"left": "api", "right": "api"},
+        )
+        run_unattended_reconciliation(job)
+        job.unattended.update({"status": "running", "worker_pid": -1})
+        job.sync_results["left"] = {"status": "running", "stage": "replace"}
+        save_job(job, jobs_dir)
+        lock_path = jobs_dir / job.job_id / "sync-left.lock"
+        lock_path.write_text("running\n", encoding="utf-8")
+
+        _recover_stale_unattended_job(jobs_dir, job.job_id)
+
+        recovered = load_job(jobs_dir, job.job_id)
+        self.assertEqual(recovered.unattended["status"], "failed")
+        self.assertEqual(recovered.sync_results["left"]["status"], "error")
+        self.assertFalse(lock_path.exists())
 
     def test_live_sync_rejects_duplicate_running_or_completed_sync_for_both_sides(self):
         jobs_dir = Path(self.tmp_dir.name)

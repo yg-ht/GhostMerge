@@ -442,6 +442,27 @@ side uses its own configured endpoint, bearer token, reviewed output, backup
 directory, lock, and status. Synchronising one side does not contact or modify
 the other side.
 
+### Unattended API merges
+
+Set `unattended_api_merge.enabled` to `true` to show an unattended API-to-API
+merge action. The action requires explicit confirmation because it takes a
+backup and then fully replaces both configured Ghostwriter template libraries.
+It automatically accepts only uniquely paired, exactly normalised titles and
+lossless field choices. Unresolved Findings and Observations remain stored in
+the newest unattended job for later manual review; unmatched templates are
+copied to both outputs. A failed destination can be retried from the live status
+page. A later manually approved output may still be synchronised even when the
+preliminary unattended sync succeeded.
+
+The optional `unattended_api_merge.webhook` sends an event for complete,
+partially completed, failed, or review-required outcomes. Configure an HTTPS
+`url`, a non-empty `secret`, and optionally `public_base_url`, timeout, and a
+maximum of one to five attempts. The exact JSON body is signed with HMAC-SHA256
+in `X-GhostMerge-Signature` as `sha256=<hex digest>`. Payloads contain only the
+job identifier, source labels, status and stages, counts, and resume URL; record
+content and API credentials are never included. Insecure HTTP is rejected
+unless `allow_insecure_http` is explicitly enabled for local testing.
+
 ### Merge and API operation states
 
 GhostMerge tracks three distinct parts of the workflow:

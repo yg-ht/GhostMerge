@@ -37,6 +37,7 @@ from utils import (
     blank_for_type,
     extra_fields_for_comparison,
     normalise_finding_record,
+    normalise_text_for_matching,
     stringify_field,
     wrap_string,
 )
@@ -194,6 +195,7 @@ class PreviousJobItem:
     input_sources: dict[str, str] = field(default_factory=dict)
     input_source_names: dict[str, str] = field(default_factory=dict)
     sync_results: dict[str, Any] = field(default_factory=dict)
+    unattended: dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
 
 
@@ -402,7 +404,7 @@ def create_merge_job(
 
 def _canonical_automatic_title(record: Finding | Observation) -> str:
     """Return the conservative identity used for unattended pairing."""
-    return str(record.title or "").strip().casefold()
+    return normalise_text_for_matching(record.title)
 
 
 def _title_counts_for_side(job: MergeJob, kind: str, side: str) -> dict[str, int]:
@@ -1419,6 +1421,7 @@ def list_previous_jobs(jobs_dir: Path) -> list[PreviousJobItem]:
                 input_sources=job.input_sources,
                 input_source_names=job.input_source_names,
                 sync_results=job.sync_results,
+                unattended=job.unattended,
             )
         )
     return jobs
@@ -1492,6 +1495,7 @@ def job_summary(job: MergeJob) -> dict[str, Any]:
         "output_approved_at": job.output_approved_at,
         "output_phase_complete": job.output_phase_complete,
         "sync_results": job.sync_results,
+        "unattended": dict(job.unattended),
     })
     return summary
 

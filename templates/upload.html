@@ -37,6 +37,20 @@
   </div>
   <p><button type="submit" form="create_merge_form">Create merge job</button></p>
 </section>
+{% if unattended_available %}
+<section class="panel">
+  <h2>Unattended API merge</h2>
+  <p>Automatically reconcile safe items, retain unresolved items for later review, and replace both API template libraries from backed-up hybrid outputs.</p>
+  <form action="{{ url_for('create_unattended_job_route') }}" method="post" data-busy-message="Starting unattended API merge…">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <label>
+      <input type="checkbox" name="confirm_unattended_sync" value="yes" required>
+      I confirm full backed-up replacement of {{ api_servers.left.name }} and {{ api_servers.right.name }}.
+    </label>
+    <p><button type="submit">Run unattended API merge</button></p>
+  </form>
+</section>
+{% endif %}
 <section class="panel">
   <h2>Merge jobs</h2>
   {% if previous_jobs %}
