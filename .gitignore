@@ -1,4 +1,5 @@
 /.venv/
+/.ghostmerge-*-venv.*/
 .codex-tmp/
 .idea/
 __pycache__/

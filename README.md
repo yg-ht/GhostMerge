@@ -1090,8 +1090,8 @@ be run without pytest when needed:
 
 The suite covers CLI-critical behaviours, model coercion, normalisation,
 matching, merge helpers, sensitivity helpers, config loading, systemd installer
-behaviour, web access controls, API backup handling, and Ghostwriter API sync
-safety checks. Its end-to-end workflow matrix also compares sensitivity-enabled
+and updater behaviour, web access controls, API backup handling, and Ghostwriter
+API sync safety checks. Its end-to-end workflow matrix also compares sensitivity-enabled
 CLI and Web outputs through pre-match replacement, conflict resolution,
 unmatched-record copying, post-merge sensitivity review, resequencing, and final
 preview approval through durable serialisation. Failure regressions require
@@ -1197,12 +1197,14 @@ sudo ./update-systemd-service.sh
 The updater obtains the configured branch upstream, accepts only a
 fast-forward, stages and syntax-checks the candidate, and refuses to proceed
 while an import, source check, unattended merge or outbound sync is active. It
-then stops the service, updates the existing virtual environment from
-`requirements.txt`, validates imports and configuration, runs the complete
-test suite, refreshes the systemd unit and restarts the service. A local TCP
+builds a separate versioned virtual environment from the candidate
+`requirements.txt` and runs the complete test suite while the current service
+remains available. It then gates new work, stops the service, updates the
+checkout, refreshes the systemd unit to use the candidate environment and
+restarts the service. An authenticated-page-compatible GhostMerge HTTP
 readiness check must succeed. If a post-stop step fails, it restores the prior
-Git revision, dependencies, unit and deployment metadata before restarting the
-previous version.
+Git revision, unit and deployment metadata, switches back to the untouched
+prior virtual environment and restarts the previous version.
 
 Local `ghostmerge_config.json` and `ghostmerge_config.json.local` files are
 validated but never generated, merged or overwritten. New configuration keys
@@ -1213,7 +1215,7 @@ defaults. Invalid local JSON stops the update before the service is changed.
 Useful updater modes are:
 
 ```bash
-# Read-only installation/configuration preflight (sudo is not required).
+# Read-only local installation/configuration/state preflight (sudo is not required).
 ./update-systemd-service.sh --dry-run
 
 # Reinstall dependencies and the unit for the checked-out revision without fetching.
@@ -1223,13 +1225,20 @@ sudo ./update-systemd-service.sh --repair-current
 sudo ./update-systemd-service.sh --skip-tests
 ```
 
-Run the updater from the installed checkout. It refuses dirty or detached
-checkouts, a mismatched installed project path, unsafe unit/metadata ownership,
-and non-fast-forward history. The maintenance gate prevents new POST actions
-and scheduled runs during the final active-operation check; ordinary read-only
-pages remain available until the service is stopped. If a stale lock or state
-file prevents an update, inspect and recover the recorded operation rather than
-deleting it without confirming its outcome.
+`--dry-run` does not contact the Git remote or exercise mutating update and
+rollback steps. Run the updater from the installed checkout. It refuses dirty
+or detached checkouts, a mismatched installed project path, unsafe unit/metadata
+ownership, an unreadable operation-state directory, and non-fast-forward
+history. The maintenance gate prevents new POST actions and scheduled runs
+during the final active-operation check; ordinary read-only pages remain
+available until the service is stopped. If a stale lock or state file prevents
+an update, inspect and recover the recorded operation rather than deleting it
+without confirming its outcome.
+
+Successful updates retain earlier virtual environments so the active unit is
+never dependent on an environment modified in place. They can be removed later
+after the updated service has been observed in normal operation; never remove
+the environment currently recorded in `/etc/ghostmerge/ghostmerge-web.json`.
 
 Operational commands:
 

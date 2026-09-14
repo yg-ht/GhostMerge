@@ -16,18 +16,21 @@ METADATA_DIR="${GHOSTMERGE_METADATA_DIR:-/etc/ghostmerge}"
 SNAPSHOT_PATH="${GHOSTMERGE_UPDATE_SNAPSHOT_PATH:-}"
 
 MAINTENANCE_PATH=""
+MAINTENANCE_CREATED=0
 STAGING_DIR=""
+CANDIDATE_VENV_DIR=""
+CANDIDATE_VENV_KEEP=0
 UNIT_BACKUP=""
 METADATA_BACKUP=""
 UNIT_PATH=""
 METADATA_PATH=""
 PREVIOUS_REVISION=""
+TARGET_REVISION=""
 SERVICE_WAS_STOPPED=0
 UPDATE_STARTED=0
 UPDATE_COMPLETED=0
 HAD_METADATA=0
 CHECKOUT_CHANGED=0
-DEPENDENCIES_TOUCHED=0
 
 usage() {
     cat <<'USAGE'
@@ -135,10 +138,16 @@ create_private_snapshot() {
 
 remove_temporary_files() {
     if [[ -n "${MAINTENANCE_PATH}" && -f "${MAINTENANCE_PATH}" ]]; then
-        rm -f -- "${MAINTENANCE_PATH}"
+        if [[ "${MAINTENANCE_CREATED}" -eq 1 ]]; then
+            rm -f -- "${MAINTENANCE_PATH}"
+        fi
     fi
     if [[ -n "${STAGING_DIR}" && -d "${STAGING_DIR}" ]]; then
         rm -rf -- "${STAGING_DIR}"
+    fi
+    if [[ "${CANDIDATE_VENV_KEEP}" -eq 0 && -n "${CANDIDATE_VENV_DIR}" && \
+        -d "${CANDIDATE_VENV_DIR}" && "${CANDIDATE_VENV_DIR}" == */.${SERVICE_NAME}-venv.* ]]; then
+        rm -rf -- "${CANDIDATE_VENV_DIR}"
     fi
     if [[ -n "${UNIT_BACKUP}" && -f "${UNIT_BACKUP}" ]]; then
         rm -f -- "${UNIT_BACKUP}"
@@ -151,15 +160,45 @@ remove_temporary_files() {
     fi
 }
 
-run_as_owner() {
-    if [[ "${APP_OWNER}" == "$(id -un)" ]]; then
-        env HOME="${APP_OWNER_HOME}" USER="${APP_OWNER}" LOGNAME="${APP_OWNER}" \
+run_as_identity() {
+    local identity="$1"
+    local identity_home="$2"
+    shift 2
+    if [[ "${identity}" == "$(id -un)" ]]; then
+        env HOME="${identity_home}" USER="${identity}" LOGNAME="${identity}" \
             GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never "$@"
     else
-        runuser --user "${APP_OWNER}" -- env \
-            HOME="${APP_OWNER_HOME}" USER="${APP_OWNER}" LOGNAME="${APP_OWNER}" \
+        runuser --user "${identity}" -- env \
+            HOME="${identity_home}" USER="${identity}" LOGNAME="${identity}" \
             GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never "$@"
     fi
+}
+
+run_as_identity_in_dir() {
+    local identity="$1"
+    local identity_home="$2"
+    local working_dir="$3"
+    shift 3
+    run_as_identity "${identity}" "${identity_home}" sh -c \
+        'cd "$1" && shift && exec "$@"' sh "${working_dir}" "$@"
+}
+
+run_as_owner() {
+    run_as_identity "${APP_OWNER}" "${APP_OWNER_HOME}" "$@"
+}
+
+run_as_service() {
+    run_as_identity "${SERVICE_USER}" "${SERVICE_USER_HOME}" "$@"
+}
+
+run_as_venv_owner() {
+    run_as_identity "${VENV_OWNER}" "${VENV_OWNER_HOME}" "$@"
+}
+
+run_as_venv_owner_in_dir() {
+    local working_dir="$1"
+    shift
+    run_as_identity_in_dir "${VENV_OWNER}" "${VENV_OWNER_HOME}" "${working_dir}" "$@"
 }
 
 validate_installed_unit() {
@@ -173,17 +212,24 @@ validate_installed_unit() {
 
 restore_previous_installation() {
     local rollback_failed=0
+    local current_revision=""
     set +e
     printf '\nUpdate validation failed; restoring the previous GhostMerge installation.\n' >&2
     if [[ "${SERVICE_WAS_STOPPED}" -eq 1 ]]; then
         systemctl stop "${SERVICE_NAME}.service" || rollback_failed=1
     fi
     if [[ "${CHECKOUT_CHANGED}" -eq 1 && -n "${PREVIOUS_REVISION}" ]]; then
-        run_as_owner git -C "${PROJECT_DIR}" reset --hard "${PREVIOUS_REVISION}" || rollback_failed=1
-    fi
-    if [[ "${DEPENDENCIES_TOUCHED}" -eq 1 && -n "${PREVIOUS_REVISION}" ]]; then
-        run_as_owner "${VENV_DIR}/bin/python" -m pip install \
-            --disable-pip-version-check -r "${PROJECT_DIR}/requirements.txt" || rollback_failed=1
+        current_revision="$(run_as_owner git -C "${PROJECT_DIR}" rev-parse HEAD)" || rollback_failed=1
+        if [[ "${current_revision}" != "${TARGET_REVISION}" && \
+            "${current_revision}" != "${PREVIOUS_REVISION}" ]]; then
+            printf 'The checkout revision changed unexpectedly after the update began; refusing to rewrite it.\n' >&2
+            rollback_failed=1
+        elif [[ -z "$(run_as_owner git -C "${PROJECT_DIR}" status --porcelain --untracked-files=all)" ]]; then
+            run_as_owner git -C "${PROJECT_DIR}" reset --hard "${PREVIOUS_REVISION}" || rollback_failed=1
+        else
+            printf 'The checkout changed unexpectedly after the update began; refusing to discard those changes.\n' >&2
+            rollback_failed=1
+        fi
     fi
     if [[ -n "${UNIT_BACKUP}" && -f "${UNIT_BACKUP}" && -n "${UNIT_PATH}" ]]; then
         install -m 0644 -o root -g root "${UNIT_BACKUP}" "${UNIT_PATH}" || rollback_failed=1
@@ -195,8 +241,11 @@ restore_previous_installation() {
         rm -f -- "${METADATA_PATH}"
     fi
     systemctl daemon-reload || rollback_failed=1
-    [[ -z "${MAINTENANCE_PATH}" ]] || rm -f -- "${MAINTENANCE_PATH}"
-    if [[ "${SERVICE_WAS_STOPPED}" -eq 1 ]]; then
+    if [[ "${MAINTENANCE_CREATED}" -eq 1 && -n "${MAINTENANCE_PATH}" ]]; then
+        rm -f -- "${MAINTENANCE_PATH}"
+        MAINTENANCE_CREATED=0
+    fi
+    if [[ "${SERVICE_WAS_STOPPED}" -eq 1 && "${rollback_failed}" -eq 0 ]]; then
         systemctl start "${SERVICE_NAME}.service" || rollback_failed=1
     fi
     if [[ "${rollback_failed}" -eq 0 ]]; then
@@ -347,11 +396,22 @@ resolve_deployment() {
 
     APP_OWNER="$(stat -c '%U' "${PROJECT_DIR}")"
     id -u "${APP_OWNER}" >/dev/null 2>&1 || fail "Checkout owner does not resolve to a local user."
-    if [[ "${APP_OWNER}" != "$(id -un)" ]]; then
-        command -v runuser >/dev/null 2>&1 || fail "runuser is required to update this checkout."
+    VENV_OWNER="$(stat -c '%U' "${VENV_DIR}")"
+    id -u "${VENV_OWNER}" >/dev/null 2>&1 || fail "Virtualenv owner does not resolve to a local user."
+    for identity in "${APP_OWNER}" "${SERVICE_USER}" "${VENV_OWNER}"; do
+        if [[ "${identity}" != "$(id -un)" ]]; then
+            command -v runuser >/dev/null 2>&1 || fail "runuser is required to use deployment identity ${identity}."
+        fi
+    done
+    if [[ -n "$(find "${VENV_DIR}" -maxdepth 0 -perm /002 -print)" ]]; then
+        fail "Installed virtualenv must not be writable by other users: ${VENV_DIR}"
     fi
     IFS=: read -r _ _ _ _ _ APP_OWNER_HOME _ < <(getent passwd "${APP_OWNER}")
+    IFS=: read -r _ _ _ _ _ SERVICE_USER_HOME _ < <(getent passwd "${SERVICE_USER}")
+    IFS=: read -r _ _ _ _ _ VENV_OWNER_HOME _ < <(getent passwd "${VENV_OWNER}")
     [[ -n "${APP_OWNER_HOME}" ]] || fail "Checkout owner has no configured home directory."
+    [[ -n "${SERVICE_USER_HOME}" ]] || fail "Service user has no configured home directory."
+    [[ -n "${VENV_OWNER_HOME}" ]] || fail "Virtualenv owner has no configured home directory."
 }
 
 validate_clean_checkout() {
@@ -362,7 +422,7 @@ validate_clean_checkout() {
 }
 
 validate_json_configs() {
-    run_as_owner "${VENV_DIR}/bin/python" -c '
+    run_as_service "${VENV_DIR}/bin/python" -c '
 import json
 import pathlib
 import sys
@@ -405,28 +465,75 @@ if not isinstance(value, dict):
 for path in root.rglob("*.py"):
     compile(path.read_text(encoding="utf-8"), str(path), "exec")
 ' "${STAGING_DIR}"
-    rm -rf -- "${STAGING_DIR}"
-    STAGING_DIR=""
+    chmod -R a+rX "${STAGING_DIR}"
+}
+
+prepare_candidate_runtime() {
+    local venv_parent
+    venv_parent="$(dirname "${VENV_DIR}")"
+    CANDIDATE_VENV_DIR="$(run_as_venv_owner mktemp -d \
+        "${venv_parent}/.${SERVICE_NAME}-venv.XXXXXX")"
+    if ! run_as_venv_owner "${VENV_DIR}/bin/python" -m venv "${CANDIDATE_VENV_DIR}"; then
+        fail "Could not create the candidate virtualenv. Install Python venv support for the deployment interpreter and retry."
+    fi
+    chmod 0755 "${CANDIDATE_VENV_DIR}"
+    printf 'Installing candidate dependencies into %s...\n' "${CANDIDATE_VENV_DIR}"
+    run_as_venv_owner_in_dir "${STAGING_DIR}" \
+        "${CANDIDATE_VENV_DIR}/bin/python" -m pip install \
+        --disable-pip-version-check -r requirements.txt
+    run_as_venv_owner "${CANDIDATE_VENV_DIR}/bin/python" -m pip check
+    run_as_venv_owner "${CANDIDATE_VENV_DIR}/bin/python" -m compileall -q "${STAGING_DIR}"
+    if [[ "${RUN_TESTS}" -eq 1 ]]; then
+        printf 'Running the complete GhostMerge regression suite against the candidate...\n'
+        run_as_venv_owner_in_dir "${STAGING_DIR}" env PYTHONPATH="${STAGING_DIR}" \
+            "${CANDIDATE_VENV_DIR}/bin/python" -m pytest -q "${STAGING_DIR}/tests"
+    fi
 }
 
 active_operation_preflight() {
-    run_as_owner "${VENV_DIR}/bin/python" -c '
+    run_as_service "${VENV_DIR}/bin/python" -c '
 import json
+import os
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
 active = []
+if not root.is_dir() or not os.access(root, os.R_OK | os.X_OK):
+    raise SystemExit(f"GhostMerge operation state is not readable: {root}")
+
+def directory_entries(path):
+    try:
+        return list(path.iterdir())
+    except OSError as exc:
+        raise SystemExit(f"GhostMerge operation state is not readable: {path}: {exc}") from exc
+
 for folder in ("api_imports", "api_source_checks"):
-    for path in (root / folder).glob("*.json") if (root / folder).exists() else ():
+    folder_path = root / folder
+    if not folder_path.exists():
+        continue
+    if not folder_path.is_dir() or not os.access(folder_path, os.R_OK | os.X_OK):
+        raise SystemExit(f"GhostMerge operation state is not readable: {folder_path}")
+    for path in (item for item in directory_entries(folder_path) if item.suffix == ".json"):
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             active.append(f"unreadable operation state {path}")
             continue
-        if state.get("status") in {"running", "cancelling"}:
-            active.append(f"{folder}/{path.stem} ({state.get('status')})")
-for job_path in root.glob("*/job.json") if root.exists() else ():
+        operation_status = state.get("status")
+        if operation_status in {"running", "cancelling"}:
+            active.append(f"{folder}/{path.stem} ({operation_status})")
+for job_dir in (item for item in directory_entries(root) if item.is_dir()):
+    if job_dir.name in {"api_imports", "api_source_checks"}:
+        continue
+    if not os.access(job_dir, os.R_OK | os.X_OK):
+        raise SystemExit(f"GhostMerge operation state is not readable: {job_dir}")
+    job_entries = directory_entries(job_dir)
+    job_path = job_dir / "job.json"
+    if not job_path.exists():
+        if any(item.name.startswith("sync-") and item.suffix == ".lock" for item in job_entries):
+            active.append(f"sync lock in job directory without readable job state {job_dir}")
+        continue
     try:
         job = json.loads(job_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -437,8 +544,10 @@ for job_path in root.glob("*/job.json") if root.exists() else ():
     for side, state in (job.get("sync_results") or {}).items():
         if isinstance(state, dict) and state.get("status") in {"queued", "running", "cancelling"}:
             active.append(f"job {job_path.parent.name} {side} sync")
-for lock_path in root.glob("*/sync-*.lock") if root.exists() else ():
-    active.append(f"sync lock {lock_path}")
+    for lock_path in (
+        item for item in job_entries if item.name.startswith("sync-") and item.suffix == ".lock"
+    ):
+        active.append(f"sync lock {lock_path}")
 if active:
     print("Active GhostMerge operations prevent a safe update:", file=sys.stderr)
     for item in active:
@@ -466,11 +575,12 @@ resolve_target_revision() {
         fail "The upstream update is not a fast-forward from the installed revision."
 }
 
-wait_for_service_socket() {
-    run_as_owner "${VENV_DIR}/bin/python" -c '
-import socket
+wait_for_ghostmerge_http() {
+    run_as_service "${CANDIDATE_VENV_DIR}/bin/python" -c '
 import sys
 import time
+import urllib.error
+import urllib.request
 
 host = sys.argv[1]
 port = int(sys.argv[2])
@@ -481,14 +591,24 @@ elif host in {"::", "[::]"}:
     host = "::1"
 host = host.strip("[]")
 last_error = None
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 while time.monotonic() < deadline:
     try:
-        with socket.create_connection((host, port), timeout=1):
+        url_host = f"[{host}]" if ":" in host else host
+        request = urllib.request.Request(f"http://{url_host}:{port}/", method="GET")
+        try:
+            response = opener.open(request, timeout=1)
+        except urllib.error.HTTPError as exc:
+            response = exc
+        with response:
+            body = response.read(262144)
+        if b"<title>GhostMerge</title>" in body:
             raise SystemExit(0)
-    except OSError as exc:
+        last_error = RuntimeError("the listener did not identify itself as GhostMerge")
+    except (OSError, RuntimeError) as exc:
         last_error = exc
         time.sleep(0.5)
-raise SystemExit(f"service socket did not become ready: {last_error}")
+raise SystemExit(f"GhostMerge HTTP readiness check failed: {last_error}")
 ' "${HOST}" "${PORT}" "${HEALTH_TIMEOUT_SECONDS}"
 }
 
@@ -504,9 +624,13 @@ perform_update() {
     validate_json_configs
     resolve_target_revision
     candidate_preflight "${TARGET_REVISION}"
+    prepare_candidate_runtime
 
     MAINTENANCE_PATH="${PROJECT_DIR}/ghostmerge_web_jobs/.deployment-maintenance"
+    [[ ! -e "${MAINTENANCE_PATH}" ]] || \
+        fail "GhostMerge is already in deployment maintenance mode; inspect the existing gate before updating."
     install -m 0640 -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" /dev/null "${MAINTENANCE_PATH}"
+    MAINTENANCE_CREATED=1
     active_operation_preflight
 
     UNIT_BACKUP="$(mktemp /tmp/${SERVICE_NAME}-unit.XXXXXX)"
@@ -535,17 +659,9 @@ perform_update() {
         printf 'Repairing the current GhostMerge revision %s.\n' "${PREVIOUS_REVISION}"
     fi
 
-    printf 'Synchronising the project virtual environment from requirements.txt...\n'
-    DEPENDENCIES_TOUCHED=1
-    run_as_owner "${VENV_DIR}/bin/python" -m pip install \
-        --disable-pip-version-check -r "${PROJECT_DIR}/requirements.txt"
+    validate_clean_checkout
     validate_json_configs
-    run_as_owner "${VENV_DIR}/bin/python" -m pip check
-    run_as_owner "${VENV_DIR}/bin/python" -m compileall -q \
-        "${PROJECT_DIR}/ghostmerge.py" "${PROJECT_DIR}/ghostwriter_api.py" \
-        "${PROJECT_DIR}/matching.py" "${PROJECT_DIR}/web_app.py" \
-        "${PROJECT_DIR}/web_service.py" "${PROJECT_DIR}/tests"
-    run_as_owner env PYTHONPATH="${PROJECT_DIR}" "${VENV_DIR}/bin/python" -c '
+    run_as_service env PYTHONPATH="${PROJECT_DIR}" "${CANDIDATE_VENV_DIR}/bin/python" -c '
 import sys
 from pathlib import Path
 from web_app import create_app
@@ -555,14 +671,10 @@ create_app({
     "GHOSTMERGE_JOBS_DIR": Path(sys.argv[1]),
 })
 ' "${PROJECT_DIR}/ghostmerge_web_jobs"
-    if [[ "${RUN_TESTS}" -eq 1 ]]; then
-        printf 'Running the complete GhostMerge regression suite...\n'
-        run_as_owner "${VENV_DIR}/bin/python" -m pytest -q "${PROJECT_DIR}/tests"
-    fi
 
     "${PROJECT_DIR}/install-systemd-service.sh" \
         --project-dir "${PROJECT_DIR}" \
-        --venv-dir "${VENV_DIR}" \
+        --venv-dir "${CANDIDATE_VENV_DIR}" \
         --service-name "${SERVICE_NAME}" \
         --user "${SERVICE_USER}" \
         --group "${SERVICE_GROUP}" \
@@ -575,11 +687,14 @@ create_app({
         --no-start
 
     rm -f -- "${MAINTENANCE_PATH}"
+    MAINTENANCE_CREATED=0
     printf 'Starting %s.service...\n' "${SERVICE_NAME}"
     systemctl start "${SERVICE_NAME}.service"
     systemctl is-active --quiet "${SERVICE_NAME}.service"
-    wait_for_service_socket
+    wait_for_ghostmerge_http
+    systemctl is-active --quiet "${SERVICE_NAME}.service"
     SERVICE_WAS_STOPPED=0
+    CANDIDATE_VENV_KEEP=1
     UPDATE_COMPLETED=1
     printf 'GhostMerge update completed successfully at revision %s.\n' \
         "$(run_as_owner git -C "${PROJECT_DIR}" rev-parse --short HEAD)"
@@ -603,7 +718,13 @@ main() {
     validate_json_configs
 
     if [[ "${DRY_RUN}" -eq 1 ]]; then
-        printf 'GhostMerge update preflight passed.\n'
+        systemctl is-active --quiet "${SERVICE_NAME}.service" || \
+            fail "${SERVICE_NAME}.service is not active."
+        active_operation_preflight
+        run_as_venv_owner "${VENV_DIR}/bin/python" -m pip check
+        PREVIOUS_REVISION="$(run_as_owner git -C "${PROJECT_DIR}" rev-parse HEAD)"
+        candidate_preflight "${PREVIOUS_REVISION}"
+        printf 'GhostMerge installation preflight passed. Network fetch and mutating update steps were not run.\n'
         printf 'Project: %s\nVirtualenv: %s\nService: %s.service\nBind: %s:%s\n' \
             "${PROJECT_DIR}" "${VENV_DIR}" "${SERVICE_NAME}" "${HOST}" "${PORT}"
         return
@@ -611,4 +732,6 @@ main() {
     perform_update
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
