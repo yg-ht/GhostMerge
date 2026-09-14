@@ -490,8 +490,14 @@ prepare_candidate_runtime() {
         "${CANDIDATE_VENV_DIR}/bin/python" -m compileall -q "${STAGING_DIR}"
     if [[ "${RUN_TESTS}" -eq 1 ]]; then
         printf 'Running the complete GhostMerge regression suite against the candidate...\n'
-        run_as_venv_owner_in_dir "${STAGING_DIR}" env PYTHONPATH="${STAGING_DIR}" \
-            "${CANDIDATE_VENV_DIR}/bin/python" -m pytest -q "${STAGING_DIR}/tests"
+        run_as_venv_owner_in_dir "${STAGING_DIR}" env \
+            -u GHOSTMERGE_UPDATE_PROJECT_DIR \
+            -u GHOSTMERGE_UPDATE_SNAPSHOT \
+            -u GHOSTMERGE_UPDATE_SNAPSHOT_PATH \
+            PYTHONPATH="${STAGING_DIR}" \
+            PYTHONPYCACHEPREFIX="${CANDIDATE_VENV_DIR}/.ghostmerge-pycache" \
+            "${CANDIDATE_VENV_DIR}/bin/python" -m pytest -q \
+            -p no:cacheprovider "${STAGING_DIR}/tests"
     fi
 }
 
