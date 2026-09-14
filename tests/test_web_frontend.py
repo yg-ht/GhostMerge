@@ -3495,9 +3495,18 @@ class FlaskRouteTests(unittest.TestCase):
             config["ghostwriter_api"]["servers"][side].update(
                 {"enabled": True, "base_url": f"https://{side}.example", "bearer_token": f"{side}-token"}
             )
+        confirmation_page = self.client.get("/")
+        self.assertIn(
+            b"GhostMerge automatically creates and verifies a backup of each destination before changing it.",
+            confirmation_page.data,
+        )
+        self.assertIn(
+            b"after automatic backups are verified, GhostMerge will delete and recreate all Finding and Observation templates",
+            confirmation_page.data,
+        )
         unconfirmed = self.client.post("/jobs/unattended", data=self.with_csrf())
         self.assertEqual(unconfirmed.status_code, 400)
-        self.assertIn(b"Confirm the backed-up full replacement", unconfirmed.data)
+        self.assertIn(b"automatically back up, then fully replace both API destinations", unconfirmed.data)
 
         with patch("web_app._start_import_thread", return_value="import123") as start:
             confirmed = self.client.post(

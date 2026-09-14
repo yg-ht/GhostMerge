@@ -41,11 +41,12 @@
 <section class="panel">
   <h2>Unattended API merge</h2>
   <p>Automatically reconcile safe items, retain unresolved items for later review, and replace both API template libraries from backed-up hybrid outputs.</p>
+  <p>GhostMerge automatically creates and verifies a backup of each destination before changing it. If a backup fails, that destination is not replaced.</p>
   <form action="{{ url_for('create_unattended_job_route') }}" method="post" data-busy-message="Starting unattended API merge…">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <label>
       <input type="checkbox" name="confirm_unattended_sync" value="yes" required>
-      I confirm full backed-up replacement of {{ api_servers.left.name }} and {{ api_servers.right.name }}.
+      I understand that, after automatic backups are verified, GhostMerge will delete and recreate all Finding and Observation templates on {{ api_servers.left.name }} and {{ api_servers.right.name }}.
     </label>
     <p><button type="submit">Run unattended API merge</button></p>
   </form>
