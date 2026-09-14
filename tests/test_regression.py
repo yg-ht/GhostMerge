@@ -16,12 +16,15 @@ from globals import get_config
 from matching import fuzzy_match_findings, fuzzy_match_records, score_finding_similarity
 from merge import (
     ResolvedWinner,
+    apply_automatic_resolution,
     append_unmatched_records,
     build_manual_match,
     get_compliance_reference_placeholder_choice,
     get_auto_suggest_values,
+    get_newer_ghostpiper_side,
     get_single_sided_content_choice,
     merge_main,
+    prepare_merge_pair,
     reject_matched_record,
     renumber_findings,
     reprocess_orphan_matches,
@@ -968,6 +971,105 @@ class MergeRegressionTests(unittest.TestCase):
         self.assertEqual(suggested.extra_fields, {"owner": "right team"})
         self.assertEqual(winners["extra_fields"], {"owner": ResolvedWinner.RIGHT})
 
+    def test_newer_ghostpiper_timestamp_selects_every_field_from_left(self):
+        left_sync_timestamp = "2026-07-20T10:00:00Z"
+        right_sync_timestamp = "2026-07-21T10:00:00Z"
+        left = finding(
+            title="Newer left",
+            description="Short",
+            tags=["left"],
+            extra_fields={
+                "ghostpiper_mapping": {"updated_at": "2026-09-14T12:00:00+01:00", "owner": "left"},
+                "ghostmerge_last_synced_at": left_sync_timestamp,
+            },
+        )
+        right = finding(
+            id=2,
+            title="Older right",
+            description="A much longer value that the normal suggestion would prefer",
+            tags=["right"],
+            extra_fields={
+                "ghostpiper_mapping": {"updated_at": "2026-09-14T10:30:00Z", "owner": "right"},
+                "ghostmerge_last_synced_at": right_sync_timestamp,
+            },
+        )
+
+        match = prepare_merge_pair({"left": left, "right": right, "score": 95.0})
+
+        self.assertEqual(match["automatic_resolution"]["side"], "left")
+        self.assertEqual(match["right"].title, "Older right")
+        self.assertTrue(apply_automatic_resolution(match))
+        self.assertEqual(match["left"].title, "Newer left")
+        self.assertEqual(match["right"].title, "Newer left")
+        self.assertEqual(match["right"].description, "Short")
+        self.assertEqual(match["right"].tags, ["left"])
+        self.assertEqual(match["auto_side"]["description"], ResolvedWinner.LEFT)
+        self.assertEqual(
+            match["left"].extra_fields["ghostmerge_last_synced_at"],
+            left_sync_timestamp,
+        )
+        self.assertEqual(
+            match["right"].extra_fields["ghostmerge_last_synced_at"],
+            right_sync_timestamp,
+        )
+        self.assertNotIn("ghostmerge_last_synced_at", match["auto_value"].extra_fields)
+
+    def test_newer_ghostpiper_timestamp_selects_every_field_from_right(self):
+        left = finding(
+            title="Older left",
+            tags=["left"],
+            extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}},
+        )
+        right = finding(
+            id=2,
+            title="Newer right",
+            tags=["right"],
+            extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:01Z"}},
+        )
+
+        merged_left, merged_right = merge_main({"left": left, "right": right, "score": 95.0})
+
+        self.assertEqual(merged_left.title, "Newer right")
+        self.assertEqual(merged_right.title, "Newer right")
+        self.assertEqual(merged_left.tags, ["right"])
+
+    def test_newer_ghostpiper_timestamp_supports_observations_with_mapping_metadata(self):
+        left = Observation(
+            id=1,
+            title="Older observation",
+            description="Older",
+            tags=["left"],
+            extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}},
+        )
+        right = Observation(
+            id=2,
+            title="Newer observation",
+            description="Newer",
+            tags=["right"],
+            extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00Z"}},
+        )
+
+        match = prepare_merge_pair({"left": left, "right": right, "score": 95.0})
+        self.assertTrue(apply_automatic_resolution(match))
+
+        self.assertEqual(match["left"].title, "Newer observation")
+        self.assertEqual(match["right"].tags, ["right"])
+
+    def test_unusable_ghostpiper_timestamps_retain_normal_merge_behaviour(self):
+        valid = finding(extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}})
+        missing = finding(id=2)
+        malformed = finding(id=3, extra_fields={"ghostpiper_mapping": {"updated_at": "later"}})
+        naive = finding(id=4, extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00"}})
+        equal = finding(id=5, extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00+01:00"}})
+
+        self.assertIsNone(get_newer_ghostpiper_side(valid, missing))
+        self.assertIsNone(get_newer_ghostpiper_side(valid, malformed))
+        self.assertIsNone(get_newer_ghostpiper_side(valid, naive))
+        self.assertIsNone(get_newer_ghostpiper_side(valid, equal))
+
+        match = prepare_merge_pair({"left": valid, "right": missing, "score": 95.0})
+        self.assertNotIn("automatic_resolution", match)
+
     def test_non_interactive_merge_preserves_side_specific_last_synced_values(self):
         left_timestamp = "2026-07-20T10:00:00Z"
         right_timestamp = "2026-07-21T10:00:00Z"
@@ -1449,6 +1551,24 @@ class CliRegressionTests(unittest.TestCase):
         self.assertEqual(observation_match["origin"], "manual")
         self.assertIsInstance(observation_match["score"], float)
 
+    def test_manual_match_prepares_newer_ghostpiper_timestamp_decision(self):
+        match = build_manual_match(
+            finding(
+                title="Older left",
+                extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T09:00:00Z"}},
+            ),
+            finding(
+                id=2,
+                title="Newer right",
+                extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}},
+            ),
+            set(),
+        )
+
+        self.assertEqual(match["automatic_resolution"]["side"], "right")
+        self.assertEqual(match["auto_value"].title, "Newer right")
+        self.assertEqual(match["left"].title, "Older left")
+
     def test_manual_match_rejects_mixed_types_and_previously_rejected_pair(self):
         left_record = finding(title="Rejected left")
         right_record = finding(id=2, title="Rejected right")
@@ -1520,6 +1640,27 @@ class CliRegressionTests(unittest.TestCase):
         self.assertEqual(matches[0]["right"], right_record)
         self.assertEqual(unmatched_left, [])
         self.assertEqual(unmatched_right, [])
+
+    def test_orphan_reprocessing_prepares_newer_ghostpiper_timestamp_decision(self):
+        left_record = finding(
+            title="SQL injection",
+            extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T10:00:00Z"}},
+        )
+        right_record = finding(
+            id=2,
+            title="SQL injection in login",
+            extra_fields={"ghostpiper_mapping": {"updated_at": "2026-09-14T11:00:00Z"}},
+        )
+
+        matches, _, _ = reprocess_orphan_matches(
+            [left_record],
+            [right_record],
+            [70],
+            set(),
+        )
+
+        self.assertEqual(matches[0]["automatic_resolution"]["side"], "right")
+        self.assertEqual(matches[0]["auto_value"].title, "SQL injection in login")
 
     def test_orphan_reprocessing_does_not_recreate_rejected_pairs(self):
         left_record = finding(title="SQL injection")

@@ -1,5 +1,6 @@
 # external module imports
 from copy import deepcopy
+from datetime import datetime
 
 from imports import (Any, auto, Dict, Enum, fields, key, List, md5, Tuple)
 # get global state objects (CONFIG and TUI)
@@ -19,6 +20,9 @@ from model import Finding, Observation, is_optional_field, get_type_as_str
 from matching import score_record_similarity
 
 MergeRecord = Finding | Observation
+GHOSTPIPER_MAPPING_FIELD = "ghostpiper_mapping"
+GHOSTPIPER_UPDATED_AT_FIELD = "updated_at"
+GHOSTPIPER_TIMESTAMP_RESOLUTION_REASON = "newer_ghostpiper_mapping_updated_at"
 
 class ResolvedWinner(Enum):
     NONE = auto()
@@ -43,6 +47,146 @@ def set_record_pair_field_values(
 
     left_record.set(field_name, left_value)
     right_record.set(field_name, right_value)
+
+
+def _ghostpiper_updated_at(record: MergeRecord) -> tuple[str, datetime] | None:
+    """Return a valid, timezone-aware GhostPiper mapping timestamp."""
+    extra_fields = record.extra_fields
+    if not isinstance(extra_fields, dict):
+        return None
+    mapping = extra_fields.get(GHOSTPIPER_MAPPING_FIELD)
+    if not isinstance(mapping, dict):
+        return None
+    raw_timestamp = mapping.get(GHOSTPIPER_UPDATED_AT_FIELD)
+    if not isinstance(raw_timestamp, str) or not raw_timestamp.strip():
+        return None
+
+    timestamp_text = raw_timestamp.strip()
+    if timestamp_text.endswith("Z"):
+        timestamp_text = f"{timestamp_text[:-1]}+00:00"
+    try:
+        parsed_timestamp = datetime.fromisoformat(timestamp_text)
+    except (ValueError, OverflowError):
+        return None
+    if parsed_timestamp.tzinfo is None or parsed_timestamp.utcoffset() is None:
+        return None
+    return raw_timestamp, parsed_timestamp
+
+
+def get_newer_ghostpiper_side(
+    left_record: MergeRecord,
+    right_record: MergeRecord,
+) -> tuple[ResolvedWinner, str, str] | None:
+    """Return the side with the newer authoritative GhostPiper timestamp.
+
+    Missing, malformed, timezone-naive and equal timestamps deliberately fall
+    back to the normal field-level merge process.
+    """
+    left_timestamp = _ghostpiper_updated_at(left_record)
+    right_timestamp = _ghostpiper_updated_at(right_record)
+    if left_timestamp is None or right_timestamp is None:
+        return None
+
+    left_raw, left_parsed = left_timestamp
+    right_raw, right_parsed = right_timestamp
+    if left_parsed == right_parsed:
+        return None
+    winner = ResolvedWinner.LEFT if left_parsed > right_parsed else ResolvedWinner.RIGHT
+    return winner, left_raw, right_raw
+
+
+def apply_automatic_resolution(
+    record_pair: Dict[str, Any],
+) -> bool:
+    """Apply a previously prepared authoritative timestamp decision."""
+    resolution = record_pair.get("automatic_resolution")
+    left_record = record_pair.get("left")
+    right_record = record_pair.get("right")
+    source_record = record_pair.get("auto_value")
+    if (
+        not isinstance(resolution, dict)
+        or resolution.get("reason") != GHOSTPIPER_TIMESTAMP_RESOLUTION_REASON
+        or resolution.get("side") not in {"left", "right"}
+        or not isinstance(left_record, (Finding, Observation))
+        or not isinstance(right_record, type(left_record))
+        or not isinstance(source_record, type(left_record))
+    ):
+        return False
+    if resolution.get("applied") is True:
+        return True
+
+    for field_def in fields(type(source_record)):
+        if field_def.name == "id":
+            continue
+        source_value = getattr(source_record, field_def.name)
+        set_record_pair_field_values(
+            left_record,
+            right_record,
+            field_def.name,
+            deepcopy(source_value),
+            deepcopy(source_value),
+        )
+    resolution["applied"] = True
+    return True
+
+
+def prepare_merge_pair(
+    record_pair: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Normalise a pair and prepare any authoritative timestamp decision."""
+    normalise_merge_pair(record_pair)
+    left_record = record_pair.get("left")
+    right_record = record_pair.get("right")
+    if not isinstance(left_record, (Finding, Observation)) or not isinstance(
+        right_record,
+        (Finding, Observation),
+    ):
+        raise ValueError("Cannot prepare a match without left and right records.")
+    if type(left_record) is not type(right_record):
+        raise ValueError("Cannot prepare a match containing different record types.")
+
+    existing_resolution = record_pair.get("automatic_resolution")
+    if (
+        isinstance(existing_resolution, dict)
+        and existing_resolution.get("reason") == GHOSTPIPER_TIMESTAMP_RESOLUTION_REASON
+        and isinstance(record_pair.get("auto_value"), (Finding, Observation))
+        and isinstance(record_pair.get("auto_side"), dict)
+    ):
+        return record_pair
+
+    timestamp_resolution = get_newer_ghostpiper_side(left_record, right_record)
+    if timestamp_resolution is not None:
+        winner, left_updated_at, right_updated_at = timestamp_resolution
+        source_record = left_record if winner is ResolvedWinner.LEFT else right_record
+        auto_value = deepcopy(source_record)
+        auto_value.extra_fields = extra_fields_for_comparison(auto_value.extra_fields)
+        auto_side = {
+            field_def.name: winner
+            for field_def in fields(type(source_record))
+            if field_def.name != "id"
+        }
+        record_pair["automatic_resolution"] = {
+            "reason": GHOSTPIPER_TIMESTAMP_RESOLUTION_REASON,
+            "side": winner.name.lower(),
+            "left_updated_at": left_updated_at,
+            "right_updated_at": right_updated_at,
+            "applied": False,
+        }
+        log(
+            "INFO",
+            f"Auto-selected every field from {winner.name.lower()} using newer "
+            f"{GHOSTPIPER_MAPPING_FIELD}.{GHOSTPIPER_UPDATED_AT_FIELD} "
+            f"(left={left_updated_at}, right={right_updated_at})",
+            prefix="MERGE",
+        )
+    else:
+        auto_value, auto_side = get_auto_suggest_values(left_record, right_record)
+        record_pair.pop("automatic_resolution", None)
+
+    record_pair["auto_value"] = auto_value
+    record_pair["auto_side"] = auto_side
+    normalise_merge_pair(record_pair)
+    return record_pair
 
 # ── Conflict Resolution ─────────────────────────────────────────────
 def resolve_conflict(value_from_left, value_from_right) -> Tuple[ResolvedWinner, str | None]:
@@ -299,12 +443,7 @@ def build_manual_match(
         "score": score_record_similarity(selected_left, selected_right),
         "origin": "manual",
     }
-    normalise_merge_pair(match)
-    auto_value, auto_side = get_auto_suggest_values(selected_left, selected_right)
-    match["auto_value"] = auto_value
-    match["auto_side"] = auto_side
-    normalise_merge_pair(match)
-    return match
+    return prepare_merge_pair(match)
 
 
 def reprocess_orphan_matches(
@@ -325,6 +464,8 @@ def reprocess_orphan_matches(
             threshold,
             rejected_match_keys,
         )
+        for match in threshold_matches:
+            prepare_merge_pair(match)
         matches.extend(threshold_matches)
 
     return matches, remaining_left, remaining_right
@@ -408,15 +549,8 @@ def merge_main(finding_pair: Dict[str, Finding | float | Dict[str, ResolvedWinne
     """
     log("INFO", f"Starting merge_main for: {finding_pair['left'].id} ↔ {finding_pair['right'].id}", prefix="MERGE")
 
-    normalise_merge_pair(finding_pair)
-
-    # Generate the auto-offered suggestions
-    auto_suggest_values, auto_suggest_winner = get_auto_suggest_values(finding_pair['left'], finding_pair['right'])
-    # Update the finding pair to make it a trio
-    finding_pair.update({'auto_value': auto_suggest_values})
-    finding_pair.update({'auto_side': auto_suggest_winner})
-
-    normalise_merge_pair(finding_pair)
+    prepare_merge_pair(finding_pair)
+    apply_automatic_resolution(finding_pair)
 
     different_fields = ' | '
     # Iterate deterministically over field names to identify differences

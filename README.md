@@ -53,7 +53,10 @@ the same inputs, configuration, and analyst decisions:
 4. When enabled, apply explicit pre-match sensitive-term replacements while deferring flag-only
    terms for analyst review.
 5. Run the configured fuzzy-match thresholds in order.
-6. Let the analyst accept or reject each proposed record match and resolve its differing fields.
+6. For an accepted matched pair with valid, unequal, timezone-aware
+   `extraFields.ghostpiper_mapping.updated_at` values, copy every mergeable field from the newer
+   side to both outputs while allowing explicit analyst overrides. Otherwise, let the analyst
+   resolve the proposed match's differing fields normally.
 7. Optionally reprocess remaining unmatched records without recreating a rejected pair.
 8. Copy records still unmatched on either side into both output sets.
 9. Review configured sensitive terms across both merged output sets.
@@ -70,6 +73,11 @@ values are preserved without passing through conflict suggestions, including equ
 strings. Invalid input and interaction have explicit surface-specific behaviour: the interactive CLI
 may correct type mismatches or intentionally skip a record, while the non-interactive CLI and Web UI
 fail closed. The Web UI reports the numbered invalid record and never opens a terminal prompt.
+
+The GhostPiper timestamp is treated as authoritative for the complete matched record. If either
+timestamp is missing, malformed, lacks timezone information, or represents the same instant, the
+normal field-review rules remain in effect. Record IDs are still managed by GhostMerge, and each
+side retains its own `ghostmerge_last_synced_at` transport metadata.
 
 ## Installation
 

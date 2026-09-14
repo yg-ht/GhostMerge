@@ -15,6 +15,7 @@ from merge import (
     append_unmatched_records,
     build_manual_match,
     merge_main,
+    prepare_merge_pair,
     reject_matched_record,
     renumber_findings,
     reprocess_orphan_matches,
@@ -153,6 +154,8 @@ def ghostmerge(
     for fuzzy_threshold in CONFIG['fuzzy_match_threshold']:
         log('INFO', f'Performing fuzzy matching at {fuzzy_threshold}% match threshold','CLI')
         new_matches, unmatched_left, unmatched_right = fuzzy_match_findings(unmatched_left, unmatched_right, fuzzy_threshold)
+        for match in new_matches:
+            prepare_merge_pair(match)
         log('DEBUG', f'Updating matches dictionary with any new matches', 'CLI')
         matches.extend(new_matches)
         log('DEBUG', f'Matches dictionary now contains {len(matches)}', 'CLI')
