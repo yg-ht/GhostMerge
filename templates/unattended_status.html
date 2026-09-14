@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Unattended API merge status</h1>
+<section class="panel">
+  <dl>
+    <dt>Status</dt><dd>{{ state.status|default("queued")|replace("_", " ")|title }}</dd>
+    <dt>Stage</dt><dd>{{ state.stage|default("queued")|replace("_", " ")|title }}</dd>
+    <dt>Message</dt><dd>{{ state.message|default("Queued") }}</dd>
+    <dt>Automatically reconciled Findings</dt><dd>{{ state.automatic_findings|default(0) }}</dd>
+    <dt>Automatically reconciled Observations</dt><dd>{{ state.automatic_observations|default(0) }}</dd>
+    <dt>Findings awaiting review</dt><dd>{{ state.pending_findings|default(0) }}</dd>
+    <dt>Observations awaiting review</dt><dd>{{ state.pending_observations|default(0) }}</dd>
+    <dt>Unmatched templates copied to both sides</dt><dd>{{ state.orphans_copied|default(0) }}</dd>
+    {% for side in ("left", "right") %}
+    {% set sync = job.sync_results.get(side, {}) %}
+    <dt>{{ source_labels[side] }} sync</dt><dd>{{ sync.status|default("not started")|replace("_", " ")|title }}{% if sync.stage %} — {{ sync.stage|replace("_", " ") }}{% endif %}</dd>
+    {% endfor %}
+    {% if state.webhook %}<dt>Webhook</dt><dd>{{ state.webhook.status|replace("_", " ")|title }}</dd>{% endif %}
+  </dl>
+  <div class="actions">
+    {% for side in ("left", "right") %}
+    {% if job.sync_results.get(side, {}).get("status") == "error" %}
+    <form action="{{ url_for('retry_unattended_sync', job_id=job.job_id, side=side) }}" method="post">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button type="submit">Retry {{ source_labels[side] }} sync</button>
+    </form>
+    {% endif %}
+    {% endfor %}
+    {% if state.status not in ("queued", "running") and (state.pending_findings|default(0) or state.pending_observations|default(0)) %}<a class="button" href="{{ url_for('summary', job_id=job.job_id) }}">Resume manual review</a>{% endif %}
+    <a class="button secondary" href="{{ url_for('summary', job_id=job.job_id) }}">Open merge job</a>
+  </div>
+  {% if state.status in ("queued", "running") %}<meta http-equiv="refresh" content="1">{% endif %}
+</section>
+{% endblock %}

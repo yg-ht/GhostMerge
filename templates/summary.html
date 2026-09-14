@@ -13,7 +13,15 @@
     <dt>Reviewed matches</dt><dd>{{ summary.completed_matches }}</dd>
     <dt>Sensitivity status</dt><dd>{{ summary.sensitivity_review_status|replace("_", " ")|title }}</dd>
     <dt>Sensitivity outcome</dt><dd>{{ summary.sensitivity_review_outcome|replace("_", " ")|title }}</dd>
+    {% if summary.unattended.enabled %}
+    <dt>Unattended status</dt><dd>{{ summary.unattended.status|default("queued")|replace("_", " ")|title }}</dd>
+    <dt>Findings awaiting review</dt><dd>{{ summary.unattended.pending_findings|default(0) }}</dd>
+    <dt>Observations awaiting review</dt><dd>{{ summary.unattended.pending_observations|default(0) }}</dd>
+    {% endif %}
   </dl>
+  {% if summary.unattended.enabled %}
+  <p><a class="button secondary" href="{{ url_for('unattended_status', job_id=summary.job_id) }}">View unattended run status</a></p>
+  {% endif %}
   <div class="actions">
     {% if summary.output_phase_complete %}
     <a class="button" href="{{ url_for('complete', job_id=summary.job_id) }}">View merged output</a>
