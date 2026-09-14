@@ -482,7 +482,12 @@ prepare_candidate_runtime() {
         "${CANDIDATE_VENV_DIR}/bin/python" -m pip install \
         --disable-pip-version-check -r requirements.txt
     run_as_venv_owner "${CANDIDATE_VENV_DIR}/bin/python" -m pip check
-    run_as_venv_owner "${CANDIDATE_VENV_DIR}/bin/python" -m compileall -q "${STAGING_DIR}"
+    # The archived candidate is intentionally not writable by the virtualenv
+    # owner. Keep bytecode in the candidate runtime instead of attempting to
+    # create __pycache__ directories within the immutable source tree.
+    run_as_venv_owner env \
+        PYTHONPYCACHEPREFIX="${CANDIDATE_VENV_DIR}/.ghostmerge-pycache" \
+        "${CANDIDATE_VENV_DIR}/bin/python" -m compileall -q "${STAGING_DIR}"
     if [[ "${RUN_TESTS}" -eq 1 ]]; then
         printf 'Running the complete GhostMerge regression suite against the candidate...\n'
         run_as_venv_owner_in_dir "${STAGING_DIR}" env PYTHONPATH="${STAGING_DIR}" \
